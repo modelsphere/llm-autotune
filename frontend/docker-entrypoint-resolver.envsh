@@ -1,0 +1,15 @@
+#!/bin/sh
+# Publish the container's own DNS server as $NGINX_RESOLVER so nginx.conf can
+# name it. nginx cannot read /etc/resolv.conf itself, and the right answer
+# differs per substrate — 127.0.0.11 under Docker, the cluster DNS service on
+# Kubernetes — so it is read here instead of hardcoded.
+#
+# Named .envsh, not .sh, on purpose: the nginx entrypoint SOURCES .envsh files
+# and merely executes .sh ones, and an export from a child process would not
+# reach the template step (20-envsubst-on-templates.sh) that needs it.
+if [ -z "${NGINX_RESOLVER:-}" ]; then
+    NGINX_RESOLVER="$(awk '/^nameserver/ { print $2; exit }' /etc/resolv.conf)"
+    NGINX_RESOLVER="${NGINX_RESOLVER:-127.0.0.11}"
+    export NGINX_RESOLVER
+fi
+echo "nginx: resolving upstreams via ${NGINX_RESOLVER}"

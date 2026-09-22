@@ -1,0 +1,87 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1180 600" font-family="Helvetica, Arial, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif">
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#4a4f5a"/>
+    </marker>
+  </defs>
+  <style>
+    .seam { fill:#f7f8fc; stroke:#9aa3b5; stroke-width:1.2; }
+    .core { fill:#e9ebfa; stroke:#8f96d8; stroke-width:1.6; }
+    .chip { fill:#ffffff; stroke:#8f96d8; stroke-width:1.2; }
+    .chipplan { fill:#ffffff; stroke:#9aa3b5; stroke-width:1.2; stroke-dasharray:4 3; }
+    .stitle { font-size:13px; font-weight:bold; fill:#1f2430; text-anchor:middle; }
+    .ssub { font-size:11px; fill:#5c6270; text-anchor:middle; font-style:italic; }
+    .chiptext { font-size:11px; fill:#1f2430; text-anchor:middle; }
+    .ctitle { font-size:13px; font-weight:bold; fill:#1f2430; text-anchor:middle; }
+    .csub { font-size:11px; fill:#3a4050; text-anchor:middle; }
+    .edge { stroke:#4a4f5a; stroke-width:1.6; fill:none; }
+    .lab  { font-size:10.5px; fill:#333; text-anchor:middle; paint-order:stroke; stroke:#ffffff; stroke-width:3.5; }
+  </style>
+  <rect x="0" y="0" width="1180" height="600" fill="#ffffff"/>
+
+  <!-- ===== 核心 ===== -->
+  <rect class="core" x="466" y="248" width="248" height="108" rx="8"/>
+  <text class="ctitle" x="590" y="282">supervisor 与核心</text>
+  <text class="csub" x="590" y="304">推进数据库行；每个接缝</text>
+  <text class="csub" x="590" y="320">只经过一个窄接口</text>
+
+  <!-- ===== 左上：Planner ===== -->
+  <rect class="seam" x="40" y="44" width="384" height="150" rx="8"/>
+  <text class="stitle" x="232" y="74">Planner — propose(space, history, objective)</text>
+  <text class="ssub" x="232" y="94">纯函数、无状态：相同输入 → 相同配置</text>
+  <rect class="chip" x="62" y="118" width="86" height="52" rx="6"/>
+  <text class="chiptext" x="105" y="141">Grid</text>
+  <text class="chiptext" x="105" y="157">✓ 已上线</text>
+  <rect class="chip" x="160" y="118" width="96" height="52" rx="6"/>
+  <text class="chiptext" x="208" y="141">Random</text>
+  <text class="chiptext" x="208" y="157">✓ 已上线</text>
+  <rect class="chipplan" x="268" y="118" width="138" height="52" rx="6"/>
+  <text class="chiptext" x="337" y="141">BO · LLM agent</text>
+  <text class="chiptext" x="337" y="157">规划中</text>
+
+  <!-- ===== 右上：Launch driver ===== -->
+  <rect class="seam" x="756" y="44" width="384" height="150" rx="8"/>
+  <text class="stitle" x="948" y="74">Launch driver — launch · state · teardown · attach</text>
+  <text class="ssub" x="948" y="94">把 LaunchSpec 渲染到承载方式；可重新接管</text>
+  <rect class="chip" x="778" y="118" width="150" height="52" rx="6"/>
+  <text class="chiptext" x="853" y="141">ssh + docker</text>
+  <text class="chiptext" x="853" y="157">✓ 已上线</text>
+  <rect class="chip" x="940" y="118" width="180" height="52" rx="6"/>
+  <text class="chiptext" x="1030" y="141">k8s — TuningRun /</text>
+  <text class="chiptext" x="1030" y="157">Deployment ✓ 已上线</text>
+
+  <!-- ===== 左下：Evaluator ===== -->
+  <rect class="seam" x="40" y="406" width="384" height="150" rx="8"/>
+  <text class="stitle" x="232" y="436">Evaluator — start · poll</text>
+  <text class="ssub" x="232" y="456">先做便宜的健康检查，再压测</text>
+  <rect class="chip" x="56" y="480" width="118" height="52" rx="6"/>
+  <text class="chiptext" x="115" y="503">健康检查</text>
+  <text class="chiptext" x="115" y="519">✓ 已上线</text>
+  <rect class="chip" x="186" y="480" width="112" height="52" rx="6"/>
+  <text class="chiptext" x="242" y="503">LLMBench</text>
+  <text class="chiptext" x="242" y="519">✓ 已上线</text>
+  <rect class="chipplan" x="310" y="480" width="98" height="52" rx="6"/>
+  <text class="chiptext" x="359" y="503">内部</text>
+  <text class="chiptext" x="359" y="519">replay</text>
+
+  <!-- ===== 右下：Promotion ===== -->
+  <rect class="seam" x="756" y="406" width="384" height="150" rx="8"/>
+  <text class="stitle" x="948" y="436">Promotion target — open_rollout · status</text>
+  <text class="ssub" x="948" y="456">把优胜配置原样交给 CICD</text>
+  <rect class="chip" x="778" y="480" width="150" height="52" rx="6"/>
+  <text class="chiptext" x="853" y="503">手动导出</text>
+  <text class="chiptext" x="853" y="519">✓ 已上线</text>
+  <rect class="chipplan" x="940" y="480" width="180" height="52" rx="6"/>
+  <text class="chiptext" x="1030" y="503">GitLab MR</text>
+  <text class="chiptext" x="1030" y="519">dry-run</text>
+
+  <!-- 放射连接线 -->
+  <path class="edge" d="M470,268 L426,196" marker-end="url(#arr)"/>
+  <text class="lab" x="428" y="238">提议</text>
+  <path class="edge" d="M710,268 L754,196" marker-end="url(#arr)"/>
+  <text class="lab" x="752" y="238">启动</text>
+  <path class="edge" d="M470,336 L426,404" marker-end="url(#arr)"/>
+  <text class="lab" x="428" y="368">评估</text>
+  <path class="edge" d="M710,336 L754,404" marker-end="url(#arr)"/>
+  <text class="lab" x="752" y="368">晋级</text>
+</svg>

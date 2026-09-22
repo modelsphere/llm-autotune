@@ -1,0 +1,92 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1180 470" font-family="Helvetica, Arial, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif">
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#4a4f5a"/>
+    </marker>
+  </defs>
+  <style>
+    .node { fill:#e9ebfa; stroke:#8f96d8; stroke-width:1.2; }
+    .ok   { fill:#e6f4ea; stroke:#57a06a; stroke-width:1.4; }
+    .bad  { fill:#fbeaea; stroke:#c96b6b; stroke-width:1.4; }
+    .warn { fill:#fdf3e0; stroke:#d0a85a; stroke-width:1.4; }
+    .ntitle { font-size:12.5px; font-weight:bold; fill:#1f2430; text-anchor:middle; }
+    .oktitle { font-size:12.5px; font-weight:bold; fill:#1e7a3a; text-anchor:middle; }
+    .badtitle { font-size:12.5px; font-weight:bold; fill:#a23b3b; text-anchor:middle; }
+    .warntitle { font-size:12.5px; font-weight:bold; fill:#8a6a1e; text-anchor:middle; }
+    .nsub { font-size:10.5px; fill:#3a4050; text-anchor:middle; }
+    .edge { stroke:#4a4f5a; stroke-width:1.6; fill:none; }
+    .off  { stroke:#b08a5a; stroke-width:1.3; fill:none; stroke-dasharray:5 4; }
+    .lab  { font-size:10.5px; fill:#333; text-anchor:middle; paint-order:stroke; stroke:#ffffff; stroke-width:3.5; }
+  </style>
+  <rect x="0" y="0" width="1180" height="470" fill="#ffffff"/>
+
+  <!-- 主线（正常路径） -->
+  <rect class="node" x="24"  y="96" width="150" height="76" rx="6"/>
+  <text class="ntitle" x="99" y="130">PENDING</text>
+  <text class="nsub" x="99" y="150">排队等待启动</text>
+
+  <rect class="node" x="222" y="96" width="150" height="76" rx="6"/>
+  <text class="ntitle" x="297" y="130">LAUNCHING</text>
+  <text class="nsub" x="297" y="150">容器 / pod 启动中</text>
+
+  <rect class="node" x="420" y="96" width="164" height="76" rx="6"/>
+  <text class="ntitle" x="502" y="130">WAITING_READY</text>
+  <text class="nsub" x="502" y="150">轮询直到 endpoint 就绪</text>
+
+  <rect class="node" x="632" y="96" width="164" height="76" rx="6"/>
+  <text class="ntitle" x="714" y="130">HEALTH_CHECK</text>
+  <text class="nsub" x="714" y="150">回答正确吗？</text>
+
+  <rect class="node" x="844" y="96" width="150" height="76" rx="6"/>
+  <text class="ntitle" x="919" y="130">BENCHING</text>
+  <text class="nsub" x="919" y="150">压测进行中</text>
+
+  <rect class="ok" x="1042" y="96" width="114" height="76" rx="6"/>
+  <text class="oktitle" x="1099" y="130">SUCCEEDED</text>
+  <text class="nsub" x="1099" y="150">结果已记录</text>
+
+  <!-- 正常路径箭头 -->
+  <path class="edge" d="M174,134 H218" marker-end="url(#arr)"/>
+  <text class="lab" x="196" y="126">启动</text>
+  <path class="edge" d="M372,134 H416" marker-end="url(#arr)"/>
+  <text class="lab" x="394" y="126">启动中</text>
+  <path class="edge" d="M584,134 H628" marker-end="url(#arr)"/>
+  <text class="lab" x="606" y="126">就绪</text>
+  <path class="edge" d="M796,134 H840" marker-end="url(#arr)"/>
+  <text class="lab" x="818" y="126">提交</text>
+  <path class="edge" d="M994,134 H1038" marker-end="url(#arr)"/>
+  <text class="lab" x="1016" y="126">通过</text>
+
+  <!-- 跳过弧线：首次轮询即就绪 -->
+  <path class="edge" d="M297,96 C297,40 714,40 714,92" marker-end="url(#arr)"/>
+  <text class="lab" x="505" y="42">首次轮询即就绪 → 跳过等待</text>
+
+  <!-- 下车轨道 -->
+  <path class="off" d="M99,172  V300"/>
+  <path class="off" d="M297,172 V300"/>
+  <path class="off" d="M502,172 V300"/>
+  <path class="off" d="M714,172 V300"/>
+  <path class="off" d="M919,172 V300"/>
+  <path class="off" d="M99,300 H919"/>
+  <text class="lab" x="1000" y="304">任意进行中的状态都可下车</text>
+
+  <path class="edge" d="M360,300 V336" marker-end="url(#arr)"/>
+  <path class="edge" d="M700,300 V336" marker-end="url(#arr)"/>
+
+  <!-- 终止状态 -->
+  <rect class="bad" x="250" y="338" width="220" height="72" rx="6"/>
+  <text class="badtitle" x="360" y="366">FAILED</text>
+  <text class="nsub" x="360" y="386">已分类原因：oom · crash ·</text>
+  <text class="nsub" x="360" y="402">mount_failed · benchmark_not_passed</text>
+
+  <rect class="warn" x="590" y="338" width="220" height="72" rx="6"/>
+  <text class="warntitle" x="700" y="366">KILLED</text>
+  <text class="nsub" x="700" y="386">窗口截止 · 用户停止 ·</text>
+  <text class="nsub" x="700" y="402">租约归还</text>
+
+  <!-- 说明 -->
+  <text class="nsub" x="1000" y="360" style="text-anchor:middle">基础设施类失败</text>
+  <text class="nsub" x="1000" y="376" style="text-anchor:middle">（挂载、镜像、ssh）</text>
+  <text class="nsub" x="1000" y="392" style="text-anchor:middle">最多重试 3 次；</text>
+  <text class="nsub" x="1000" y="408" style="text-anchor:middle">坏配置不重试。</text>
+</svg>

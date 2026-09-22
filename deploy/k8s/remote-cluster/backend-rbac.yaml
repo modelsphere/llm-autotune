@@ -1,0 +1,131 @@
+# Scoped RBAC for the autotune BACKEND — the client that submits TuningRuns.
+#
+# This is NOT the operator's RBAC (that ships with autotune_operator and is much
+# broader). In custom mode the backend only creates/reads/deletes TuningRuns,
+# reads pod logs, and reads nodes (read-only, for GPU capacity/type probing and
+# NodePort endpoint resolution); the OPERATOR does everything else (Deployments,
+# Services, pod scheduling). So the backend's grant is deliberately tiny — one
+# namespace plus read-only nodes — and a leaked token from it cannot touch
+# production.
+#
+# Apply once with an admin kubeconfig, ON THE GPU CLUSTER (that is where the
+# TuningRuns and the operator live — the backend usually runs elsewhere and
+# reaches this cluster remotely):
+#   kubectl apply -f deploy/k8s/backend-rbac.yaml
+# then mint a scoped kubeconfig for it (its server = this cluster's API):
+#   deploy/k8s/make-scoped-kubeconfig.sh
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: autotune
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: autotune-backend
+  namespace: autotune
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: autotune-backend
+  namespace: autotune
+rules:
+  # Submit and poll experiments.
+  - apiGroups: ["tuning.llm-autotune.io"]
+    resources: ["tuningruns"]
+    verbs: ["create", "get", "list", "watch", "delete"]
+  # Read the pods the operator creates (node/provenance, exit info).
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+  # Fetch pod logs for failure classification.
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+  # Read pod Warning events (FailedMount, etc.) so a run that never started
+  # carries the real reason instead of a generic timeout.
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["get", "list"]
+  # Policy containers. A policy is a CONTROLLER — it dials the platform API,
+  # asks for engine launches and reads results back — so on the cluster it is a
+  # run-to-completion Job, not a TuningRun (which describes something that
+  # SERVES: port, readiness, NodePort Service, weights) and not a Deployment
+  # (which would resurrect a policy that finished its night cleanly).
+  #
+  # Narrower than a Deployment grant on purpose: a Job cannot become a
+  # long-lived service. No "update"/"patch" either — a policy container is
+  # replaced, never edited, exactly as a TuningRun is.
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["create", "get", "list", "delete"]
+  # The operator-free workload mode (AUTOTUNE_K8S_WORKLOAD_KIND=deployment):
+  # the driver manages the engine's Deployment and its NodePort Service itself
+  # instead of handing a TuningRun to the operator. Needed on a pool whose
+  # nodes are TAINTED — the TuningRun CRD has no tolerations field, so in
+  # custom mode the pod is pruned of them and never schedules.
+  #
+  # `apply` is create-or-replace, so both verbs are needed; "patch" is what the
+  # client uses for a strategic-merge update of an object that already exists.
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["create", "get", "list", "watch", "update", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["create", "get", "list", "watch", "update", "patch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: autotune-backend
+  namespace: autotune
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: autotune-backend
+subjects:
+  - kind: ServiceAccount
+    name: autotune-backend
+    namespace: autotune
+---
+# Nodes are cluster-scoped, so their read needs a ClusterRole (not the namespaced
+# Role above). READ-ONLY: the backend reads allocatable `nvidia.com/gpu` and the
+# `nvidia.com/gpu.product` label to fill a k8s machine's GPU count and card type
+# from the cluster instead of by hand, and reads InternalIP for NodePort
+# endpoints. It never writes nodes — no cordon, no label, no taint.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: autotune-backend-nodes-read
+rules:
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: autotune-backend-nodes-read
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: autotune-backend-nodes-read
+subjects:
+  - kind: ServiceAccount
+    name: autotune-backend
+    namespace: autotune
+---
+# A long-lived, NON-EXPIRING token for the ServiceAccount. The token controller
+# populates .data.token once this Secret exists; make-scoped-kubeconfig.sh reads
+# it. Trade-off: unlike a bound `kubectl create token`, this one never rotates —
+# acceptable here because the grant is tiny (tuningruns + pods, one namespace)
+# and this is a test cluster. To revoke, delete this Secret (or the SA).
+apiVersion: v1
+kind: Secret
+metadata:
+  name: autotune-backend-token
+  namespace: autotune
+  annotations:
+    kubernetes.io/service-account.name: autotune-backend
+type: kubernetes.io/service-account-token

@@ -1,0 +1,76 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1180 540" font-family="Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#4a4f5a"/>
+    </marker>
+  </defs>
+  <style>
+    .colA  { fill:#fdf9f0; stroke:#d0a85a; stroke-width:1.3; }
+    .colB  { fill:#eef7f0; stroke:#57a06a; stroke-width:1.3; }
+    .stepA { fill:#fdf3e0; stroke:#d0a85a; stroke-width:1.2; }
+    .stepB { fill:#e6f4ea; stroke:#57a06a; stroke-width:1.2; }
+    .band  { fill:#e9ebfa; stroke:#8f96d8; stroke-width:1.2; }
+    .htitle { font-size:15px; font-weight:bold; text-anchor:middle; }
+    .htag { font-size:11.5px; text-anchor:middle; font-style:italic; }
+    .stitle { font-size:12px; font-weight:bold; fill:#1f2430; text-anchor:start; }
+    .ssub  { font-size:11px; fill:#3a4050; text-anchor:start; }
+    .edge  { stroke:#4a4f5a; stroke-width:1.6; fill:none; }
+    .bandt { font-size:12.5px; fill:#1f2430; text-anchor:middle; }
+  </style>
+  <rect x="0" y="0" width="1180" height="540" fill="#ffffff"/>
+
+  <!-- column frames -->
+  <rect class="colA" x="40"  y="40" width="530" height="404" rx="10"/>
+  <rect class="colB" x="610" y="40" width="530" height="404" rx="10"/>
+
+  <text class="htitle" x="305" y="76" fill="#a9791f">Bare-metal box — ssh + docker</text>
+  <text class="htag"   x="305" y="96" fill="#8a6a1e">shared with production → protect it</text>
+  <text class="htitle" x="875" y="76" fill="#3f7d54">GPU cluster — k8s</text>
+  <text class="htag"   x="875" y="96" fill="#3f7d54">borrows idle GPU quota</text>
+
+  <!-- Column A steps -->
+  <rect class="stepA" x="70" y="118" width="470" height="60" rx="6"/>
+  <text class="stitle" x="90" y="142">1 · ssh in &amp; capture</text>
+  <text class="ssub"   x="90" y="162">record the running production service and how to rebuild it</text>
+
+  <rect class="stepA" x="70" y="196" width="470" height="52" rx="6"/>
+  <text class="stitle" x="90" y="218">2 · clear production</text>
+  <text class="ssub"   x="90" y="238">stop it — the box is now ours to experiment on</text>
+
+  <rect class="stepA" x="70" y="266" width="470" height="52" rx="6"/>
+  <text class="stitle" x="90" y="288">3 · `docker run` the engine</text>
+  <text class="ssub"   x="90" y="308">GPU flags, `--ipc=host`; then benchmark it</text>
+
+  <rect class="stepA" x="70" y="336" width="470" height="60" rx="6"/>
+  <text class="stitle" x="90" y="360">4 · restore &amp; hand back</text>
+  <text class="ssub"   x="90" y="380">teardown → bring production back → verify → release the box</text>
+
+  <path class="edge" d="M305,178 V194" marker-end="url(#arr)"/>
+  <path class="edge" d="M305,248 V264" marker-end="url(#arr)"/>
+  <path class="edge" d="M305,318 V334" marker-end="url(#arr)"/>
+
+  <!-- Column B steps -->
+  <rect class="stepB" x="640" y="118" width="470" height="60" rx="6"/>
+  <text class="stitle" x="660" y="142">1 · submit to the cluster</text>
+  <text class="ssub"   x="660" y="162">a TuningRun custom resource (or a plain Deployment)</text>
+
+  <rect class="stepB" x="640" y="196" width="470" height="52" rx="6"/>
+  <text class="stitle" x="660" y="218">2 · scheduler places the pod</text>
+  <text class="ssub"   x="660" y="238">`node_selector` picks a node that has the model</text>
+
+  <rect class="stepB" x="640" y="266" width="470" height="52" rx="6"/>
+  <text class="stitle" x="660" y="288">3 · operator serves it</text>
+  <text class="ssub"   x="660" y="308">backend polls status; then benchmark it</text>
+
+  <rect class="stepB" x="640" y="336" width="470" height="60" rx="6"/>
+  <text class="stitle" x="660" y="360">4 · delete the objects</text>
+  <text class="ssub"   x="660" y="380">nothing to restore — production was never touched</text>
+
+  <path class="edge" d="M875,178 V194" marker-end="url(#arr)"/>
+  <path class="edge" d="M875,248 V264" marker-end="url(#arr)"/>
+  <path class="edge" d="M875,318 V334" marker-end="url(#arr)"/>
+
+  <!-- shared bottom band -->
+  <rect class="band" x="230" y="472" width="720" height="46" rx="8"/>
+  <text class="bandt" x="590" y="500">Same LaunchSpec, same engine command — only the driver differs, chosen per machine.</text>
+</svg>

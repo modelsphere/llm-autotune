@@ -1,0 +1,6 @@
+[submodule "policies/random-search"]
+	path = policies/random-search
+	url = https://github.com/modelsphere/autotune-policy-random-search.git
+[submodule "policies/chaos"]
+	path = policies/chaos
+	url = https://github.com/modelsphere/autotune-policy-chaos.git

@@ -1,0 +1,171 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1180 700" font-family="Helvetica, Arial, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif">
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#4a4f5a"/>
+    </marker>
+  </defs>
+  <style>
+    .layer { fill:#f7f8fc; stroke:#9aa3b5; stroke-width:1.2; }
+    .dataplane { fill:#fdfbef; stroke:#c8bd8a; stroke-width:1.2; }
+    .evbox { fill:#faf6df; stroke:#c8bd8a; stroke-width:1; }
+    .node { fill:#e9ebfa; stroke:#8f96d8; stroke-width:1.2; }
+    .ssh  { fill:#fdf3e0; stroke:#d0a85a; stroke-width:1.3; }
+    .k8s  { fill:#e6f4ea; stroke:#57a06a; stroke-width:1.3; }
+    .ext  { fill:#ffffff; stroke:#8f96d8; stroke-width:1.2; stroke-dasharray:5 3; }
+    .band { fill:#eef6f0; stroke:#8fbf9f; stroke-width:1.2; }
+    .boxtitle { font-size:13px; font-weight:bold; fill:#5c6270; text-anchor:middle; }
+    .ntitle { font-size:12.5px; font-weight:bold; fill:#1f2430; text-anchor:middle; }
+    .nsub { font-size:11px; fill:#3a4050; text-anchor:middle; }
+    .edge { stroke:#4a4f5a; stroke-width:1.6; fill:none; }
+    .lab { font-size:10.5px; fill:#333; paint-order:stroke; stroke:#ffffff; stroke-width:3.5; }
+    .labm { font-size:10.5px; fill:#333; text-anchor:middle; paint-order:stroke; stroke:#ffffff; stroke-width:3.5; }
+  </style>
+  <rect x="0" y="0" width="1180" height="700" fill="#ffffff"/>
+
+  <!-- ===================== 控制层 ===================== -->
+  <rect class="layer" x="40" y="40" width="650" height="146" rx="8"/>
+  <text class="boxtitle" x="365" y="64">控制层 — campaign 与配置</text>
+
+  <rect class="node" x="58" y="82" width="190" height="88" rx="6"/>
+  <text class="ntitle" x="153" y="112">Campaign Manager</text>
+  <text class="nsub" x="153" y="132">调什么：模型、搜索</text>
+  <text class="nsub" x="153" y="148">空间、目标、排期</text>
+
+  <rect class="node" x="262" y="82" width="178" height="88" rx="6"/>
+  <text class="ntitle" x="351" y="112">Planner</text>
+  <text class="nsub" x="351" y="132">生成候选配置</text>
+  <text class="nsub" x="351" y="148">grid · random · BO/LLM</text>
+
+  <rect class="node" x="454" y="82" width="218" height="88" rx="6"/>
+  <text class="ntitle" x="563" y="110">Orchestrator</text>
+  <text class="nsub" x="563" y="130">supervisor 主控：</text>
+  <text class="nsub" x="563" y="146">调度 · 装箱 · 推进 run</text>
+
+  <path class="edge" d="M248,126 H258" marker-end="url(#arr)"/>
+  <path class="edge" d="M440,126 H450" marker-end="url(#arr)"/>
+
+  <!-- ===================== 执行层 ===================== -->
+  <rect class="layer" x="40" y="214" width="650" height="150" rx="8"/>
+  <text class="boxtitle" x="365" y="238">执行层</text>
+
+  <rect class="node" x="58" y="256" width="184" height="92" rx="6"/>
+  <text class="ntitle" x="150" y="286">Resource Manager</text>
+  <text class="nsub" x="150" y="306">租约 · GPU 台账</text>
+  <text class="nsub" x="150" y="322">装箱 · baseline（仅 ssh）</text>
+
+  <rect class="node" x="260" y="256" width="180" height="92" rx="6"/>
+  <text class="ntitle" x="350" y="286">Launch Layer</text>
+  <text class="nsub" x="350" y="306">渲染 LaunchSpec</text>
+  <text class="nsub" x="350" y="322">每台机器一个 driver</text>
+
+  <rect class="node" x="458" y="256" width="214" height="92" rx="6"/>
+  <text class="ntitle" x="565" y="290">已部署的引擎服务</text>
+  <text class="nsub" x="565" y="312">引擎本体 ——</text>
+  <text class="nsub" x="565" y="328">一个容器或一个 pod</text>
+
+  <path class="edge" d="M440,302 H454" marker-end="url(#arr)"/>
+
+  <!-- 主控通过分发总线驱动执行层 -->
+  <path class="edge" d="M563,170 V196 H150" fill="none"/>
+  <path class="edge" d="M150,196 V252" marker-end="url(#arr)"/>
+  <path class="edge" d="M300,196 V252" marker-end="url(#arr)"/>
+  <text class="labm" x="150" y="209">预留 / 释放</text>
+  <text class="labm" x="300" y="209">校验 · 启动</text>
+
+  <!-- ===================== 硬件：两种承载方式 ===================== -->
+  <rect class="layer" x="40" y="392" width="650" height="196" rx="8"/>
+  <text class="boxtitle" x="365" y="416">硬件 — 两种承载方式</text>
+
+  <rect class="ssh" x="62" y="432" width="290" height="138" rx="8"/>
+  <text class="ntitle" x="207" y="460">裸金属 GPU 机器</text>
+  <text class="nsub" x="207" y="482">引擎以 `docker run` 运行</text>
+  <text class="nsub" x="207" y="502">与生产共用这台机器</text>
+  <text class="nsub" x="207" y="522">→ 需捕获并恢复</text>
+  <text class="nsub" x="207" y="550" style="font-style:italic">ssh + docker 驱动</text>
+
+  <rect class="k8s" x="378" y="432" width="290" height="138" rx="8"/>
+  <text class="ntitle" x="523" y="460">GPU 集群（k8s）</text>
+  <text class="nsub" x="523" y="482">引擎以 pod 运行</text>
+  <text class="nsub" x="523" y="502">调度器放到某个节点分片</text>
+  <text class="nsub" x="523" y="522">借用空闲配额 → 无需恢复</text>
+  <text class="nsub" x="523" y="550" style="font-style:italic">k8s 驱动</text>
+
+  <!-- 已部署服务 -> 两种承载方式之一 -->
+  <path class="edge" d="M520,348 V378 H180 V428" marker-end="url(#arr)"/>
+  <text class="labm" x="330" y="372">以 `docker run`</text>
+  <path class="edge" d="M600,348 V428" marker-end="url(#arr)"/>
+  <text class="labm" x="616" y="372">以 pod</text>
+
+  <!-- Resource Manager -> 仅裸金属 -->
+  <path class="edge" d="M120,348 V378 H140 V428" stroke-dasharray="5 4" marker-end="url(#arr)"/>
+  <text class="labm" x="118" y="372">捕获 / 恢复</text>
+
+  <!-- ===================== 单 worker 说明 ===================== -->
+  <rect class="band" x="40" y="600" width="650" height="86" rx="8"/>
+  <text class="ntitle" x="365" y="628">单个 supervisor worker · 状态机，而非任务队列</text>
+  <text class="nsub" x="365" y="650">每个 tick 把数据库行推进一步合法转移，tick 之间不保存状态。状态全在 Postgres 里，</text>
+  <text class="nsub" x="365" y="668">所以 worker 崩溃后会重新接管在跑的 run，而不是重启它们。</text>
+
+  <!-- ===================== 数据平面 ===================== -->
+  <rect class="dataplane" x="736" y="40" width="404" height="548" rx="8"/>
+  <text class="boxtitle" x="938" y="64">数据平面 — 记录与测量</text>
+
+  <rect class="node" x="756" y="82" width="184" height="96" rx="6"/>
+  <text class="ntitle" x="848" y="114">Experiment Store</text>
+  <text class="nsub" x="848" y="134">Postgres：run · 配置</text>
+  <text class="nsub" x="848" y="150">结果 · 失败 · 事件</text>
+
+  <rect class="node" x="956" y="82" width="166" height="96" rx="6"/>
+  <text class="ntitle" x="1039" y="122">报告</text>
+  <text class="nsub" x="1039" y="142">晨报</text>
+
+  <path class="edge" d="M940,130 H954" marker-end="url(#arr)"/>
+
+  <rect class="evbox" x="756" y="210" width="366" height="150" rx="6"/>
+  <text class="boxtitle" x="939" y="232">评估 — 先便宜后昂贵</text>
+
+  <rect class="node" x="772" y="248" width="168" height="48" rx="6"/>
+  <text class="ntitle" x="856" y="277">健康检查</text>
+
+  <rect class="node" x="954" y="248" width="152" height="48" rx="6"/>
+  <text class="ntitle" x="1030" y="271">LLMBench</text>
+  <text class="nsub" x="1030" y="288">提交 / 轮询</text>
+
+  <text class="nsub" x="939" y="328">正确性检查 → 筛选 → 回放验证</text>
+
+  <rect class="node" x="756" y="390" width="178" height="72" rx="6"/>
+  <text class="ntitle" x="845" y="418">数据集</text>
+  <text class="nsub" x="845" y="438">滚动更新的 replay 流量，</text>
+  <text class="nsub" x="845" y="454">按 campaign 固定</text>
+
+  <rect class="ext" x="988" y="390" width="134" height="72" rx="6"/>
+  <text class="ntitle" x="1055" y="418">LLMBench</text>
+  <text class="nsub" x="1055" y="438">平台</text>
+  <text class="nsub" x="1055" y="454">（外部）</text>
+
+  <!-- 平台驱动滚动 -->
+  <path class="edge" d="M934,420 H984" marker-end="url(#arr)"/>
+  <text class="labm" x="959" y="410">触发</text>
+
+  <!-- 线上流量被采样进每次重建 -->
+  <rect class="ext" x="756" y="500" width="366" height="64" rx="6"/>
+  <text class="ntitle" x="939" y="528">线上真实流量</text>
+  <text class="nsub" x="939" y="548">（外部）· 真实的请求流</text>
+  <path class="edge" d="M845,500 V464" marker-end="url(#arr)"/>
+  <text class="lab" x="853" y="482">从生产采样 →</text>
+  <text class="lab" x="853" y="496">每晚重建</text>
+
+  <path class="edge" d="M820,210 V180" marker-end="url(#arr)"/>
+  <text class="lab" x="828" y="200">结果</text>
+  <path class="edge" d="M845,390 V364" marker-end="url(#arr)"/>
+  <text class="lab" x="853" y="382">流量</text>
+  <path class="edge" d="M1030,390 V298" marker-start="url(#arr)" marker-end="url(#arr)"/>
+  <text class="labm" x="1030" y="350">提交 /</text>
+  <text class="labm" x="1030" y="364">轮询</text>
+
+  <!-- 跨平面数据流 -->
+  <path class="edge" d="M756,136 H674" marker-end="url(#arr)"/>
+  <text class="labm" x="714" y="122">历史</text>
+  <path class="edge" d="M772,298 L676,318" marker-end="url(#arr)"/>
+  <text class="labm" x="712" y="300">探测 endpoint</text>
+</svg>

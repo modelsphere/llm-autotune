@@ -1,0 +1,75 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1180 430" font-family="Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#4a4f5a"/>
+    </marker>
+  </defs>
+  <style>
+    .prod { fill:#fdf3e0; stroke:#d0a85a; stroke-width:1.3; }
+    .data { fill:#faf6df; stroke:#c8bd8a; stroke-width:1.3; }
+    .plat { fill:#e6f4ea; stroke:#57a06a; stroke-width:1.3; }
+    .win  { fill:#e6f4ea; stroke:#57a06a; stroke-width:1.4; }
+    .pinbox  { fill:#eef0fb; stroke:#8f96d8; stroke-width:1.2; }
+    .rollbox { fill:#fdf3e0; stroke:#d0a85a; stroke-width:1.2; }
+    .ntitle { font-size:13px; font-weight:bold; fill:#1f2430; text-anchor:middle; }
+    .wtitle { font-size:13px; font-weight:bold; fill:#1e7a3a; text-anchor:middle; }
+    .nsub { font-size:11px; fill:#3a4050; text-anchor:middle; }
+    .edge { stroke:#4a4f5a; stroke-width:1.8; fill:none; }
+    .trig { stroke:#3f7d54; stroke-width:1.8; fill:none; }
+    .labm { font-size:11px; fill:#333; text-anchor:middle; paint-order:stroke; stroke:#ffffff; stroke-width:3.5; }
+    .lab  { font-size:11px; fill:#333; paint-order:stroke; stroke:#ffffff; stroke-width:3.5; }
+    .cap  { font-size:12px; font-weight:bold; fill:#5c6270; text-anchor:middle; }
+    .ptitle { font-size:12.5px; font-weight:bold; text-anchor:middle; }
+    .pbody  { font-size:11.5px; fill:#3a4050; text-anchor:middle; }
+  </style>
+  <rect x="0" y="0" width="1180" height="430" fill="#ffffff"/>
+
+  <!-- 谁触发滚动 -->
+  <rect class="plat" x="311" y="46" width="300" height="42" rx="8"/>
+  <text class="ntitle" x="461" y="72">每一次重建都由平台触发</text>
+  <path class="trig" d="M461,88 V146" marker-end="url(#arr)"/>
+  <text class="lab" x="474" y="122">每晚 · campaign 开始时</text>
+
+  <!-- 主流程：线上流量 -> 滚动 dataset -> 验证 -> 结论 -->
+  <rect class="prod" x="40" y="150" width="210" height="104" rx="8"/>
+  <text class="ntitle" x="145" y="188">线上真实流量</text>
+  <text class="nsub" x="145" y="209">真实的请求流 ——</text>
+  <text class="nsub" x="145" y="227">分布一直在变</text>
+
+  <rect class="data" x="336" y="150" width="250" height="104" rx="8"/>
+  <text class="ntitle" x="461" y="185">滚动更新的 replay dataset</text>
+  <text class="nsub" x="461" y="206">这些流量的一份新鲜样本，</text>
+  <text class="nsub" x="461" y="224">每个窗口重建一次</text>
+
+  <rect class="plat" x="672" y="150" width="210" height="104" rx="8"/>
+  <text class="ntitle" x="777" y="185">验证阶段</text>
+  <text class="nsub" x="777" y="206">回放该 dataset，</text>
+  <text class="nsub" x="777" y="224">为入围者打分</text>
+
+  <rect class="win" x="968" y="150" width="170" height="104" rx="8"/>
+  <text class="wtitle" x="1053" y="196">推荐配置</text>
+  <text class="nsub" x="1053" y="221">对比生产排名</text>
+
+  <path class="edge" d="M250,202 H332" marker-end="url(#arr)"/>
+  <text class="labm" x="293" y="192">采样</text>
+  <path class="edge" d="M586,202 H668" marker-end="url(#arr)"/>
+  <text class="labm" x="627" y="192">回放</text>
+  <path class="edge" d="M882,202 H964" marker-end="url(#arr)"/>
+  <text class="labm" x="923" y="192">排名</text>
+
+  <!-- 过渡说明 -->
+  <text class="cap" x="590" y="286">campaign 内冻结 · 为下一个 campaign 向前滚动</text>
+
+  <!-- pin vs roll -->
+  <rect class="pinbox" x="120" y="300" width="440" height="106" rx="8"/>
+  <text class="ptitle" x="340" y="326" fill="#5b5fb0">campaign 内固定（pin）</text>
+  <text class="pbody" x="340" y="350">整个 campaign 生命周期用同一份 build ——</text>
+  <text class="pbody" x="340" y="368">每个候选都用同一把尺子测量，</text>
+  <text class="pbody" x="340" y="386">所以排行榜是诚实可比的。</text>
+
+  <rect class="rollbox" x="620" y="300" width="440" height="106" rx="8"/>
+  <text class="ptitle" x="840" y="326" fill="#a9791f">跨 campaign 滚动</text>
+  <text class="pbody" x="840" y="350">每个新 campaign 都拿到一份来自最新</text>
+  <text class="pbody" x="840" y="368">流量的新 build —— 我们调优针对的是</text>
+  <text class="pbody" x="840" y="386">今天的用法，而不是上个月的。</text>
+</svg>

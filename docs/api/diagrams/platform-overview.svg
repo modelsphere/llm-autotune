@@ -1,0 +1,81 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900" viewBox="0 0 1600 900">
+  <defs>
+    <marker id="arrow" markerWidth="11" markerHeight="11" refX="10" refY="3.5" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L11,3.5 L0,7 Z" fill="#334155"/>
+    </marker>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="3" stdDeviation="5" flood-color="#0f172a" flood-opacity="0.14"/>
+    </filter>
+    <style>
+      .title { font: 700 34px -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC",sans-serif; fill:#0f172a; }
+      .subtitle { font: 400 19px -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC",sans-serif; fill:#475569; }
+      .h { font: 700 22px -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC",sans-serif; fill:#0f172a; }
+      .t { font: 400 17px -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC",sans-serif; fill:#334155; }
+      .s { font: 400 16px -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC",sans-serif; fill:#64748b; }
+      .label { font: 600 16px -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC",sans-serif; fill:#334155; }
+    </style>
+  </defs>
+  <rect width="1600" height="900" fill="#f8fafc"/>
+  <text x="70" y="68" class="title">LLM Autotune: search, measure, and compare</text>
+  <text x="70" y="105" class="subtitle">The platform finds better LLM deployment configurations and makes the results comparable.</text>
+
+  <rect x="55" y="155" width="1490" height="285" rx="24" fill="#eef2ff" stroke="#6366f1" stroke-width="3"/>
+  <text x="90" y="202" class="h" fill="#3730a3">One campaign</text>
+  <text x="90" y="232" class="s">A search strategy explores one model on a GPU machine during a fixed time window.</text>
+
+  <rect x="100" y="280" width="245" height="105" rx="14" fill="#fff" stroke="#94a3b8" stroke-width="2" filter="url(#shadow)"/>
+  <text x="222" y="318" text-anchor="middle" class="h">Search space</text>
+  <text x="222" y="348" text-anchor="middle" class="t">model + tunable settings</text>
+  <text x="222" y="373" text-anchor="middle" class="t">objective + deadline</text>
+
+  <rect x="420" y="280" width="245" height="105" rx="14" fill="#fff" stroke="#94a3b8" stroke-width="2" filter="url(#shadow)"/>
+  <text x="542" y="318" text-anchor="middle" class="h">Policy</text>
+  <text x="542" y="348" text-anchor="middle" class="t">proposes next config</text>
+  <text x="542" y="373" text-anchor="middle" class="t">learns from results</text>
+
+  <rect x="740" y="280" width="245" height="105" rx="14" fill="#fff" stroke="#94a3b8" stroke-width="2" filter="url(#shadow)"/>
+  <text x="862" y="318" text-anchor="middle" class="h">Platform execution</text>
+  <text x="862" y="348" text-anchor="middle" class="t">launch + health check</text>
+  <text x="862" y="373" text-anchor="middle" class="t">benchmark on real GPU</text>
+
+  <rect x="1060" y="280" width="360" height="105" rx="14" fill="#ecfdf5" stroke="#10b981" stroke-width="2" filter="url(#shadow)"/>
+  <text x="1240" y="318" text-anchor="middle" class="h">Verified result</text>
+  <text x="1240" y="348" text-anchor="middle" class="t">ranked candidate configs</text>
+  <text x="1240" y="373" text-anchor="middle" class="t">platform-owned final evaluation</text>
+
+  <path d="M345 332 L420 332" stroke="#334155" stroke-width="3" fill="none" marker-end="url(#arrow)"/>
+  <path d="M665 332 L740 332" stroke="#334155" stroke-width="3" fill="none" marker-end="url(#arrow)"/>
+  <path d="M985 332 L1060 332" stroke="#334155" stroke-width="3" fill="none" marker-end="url(#arrow)"/>
+  <path d="M1240 385 C1240 420 542 420 542 385" stroke="#6366f1" stroke-width="3" fill="none" marker-end="url(#arrow)"/>
+  <text x="820" y="430" class="label" fill="#4338ca">measure → update policy → search again</text>
+
+  <rect x="55" y="505" width="1490" height="285" rx="24" fill="#fff7ed" stroke="#f97316" stroke-width="3"/>
+  <text x="90" y="552" class="h" fill="#c2410c">Competition</text>
+  <text x="90" y="582" class="s">Multiple policies run equivalent campaigns under one shared set of conditions.</text>
+
+  <rect x="100" y="630" width="300" height="105" rx="14" fill="#fff" stroke="#fb923c" stroke-width="2" filter="url(#shadow)"/>
+  <text x="250" y="668" text-anchor="middle" class="h">Shared conditions</text>
+  <text x="250" y="698" text-anchor="middle" class="t">same model · dataset</text>
+  <text x="250" y="723" text-anchor="middle" class="t">benchmarks · budgets</text>
+
+  <rect x="500" y="630" width="300" height="105" rx="14" fill="#fff" stroke="#fb923c" stroke-width="2" filter="url(#shadow)"/>
+  <text x="650" y="668" text-anchor="middle" class="h">Entrants</text>
+  <text x="650" y="698" text-anchor="middle" class="t">one policy per entrant</text>
+  <text x="650" y="723" text-anchor="middle" class="t">each runs a campaign</text>
+
+  <rect x="900" y="630" width="300" height="105" rx="14" fill="#fff" stroke="#fb923c" stroke-width="2" filter="url(#shadow)"/>
+  <text x="1050" y="668" text-anchor="middle" class="h">Fair measurement</text>
+  <text x="1050" y="698" text-anchor="middle" class="t">platform validates finalists</text>
+  <text x="1050" y="723" text-anchor="middle" class="t">same ruler for everyone</text>
+
+  <rect x="1300" y="630" width="160" height="105" rx="14" fill="#fef2f2" stroke="#ef4444" stroke-width="2" filter="url(#shadow)"/>
+  <text x="1380" y="668" text-anchor="middle" class="h">Winner</text>
+  <text x="1380" y="698" text-anchor="middle" class="t">clear margin</text>
+  <text x="1380" y="723" text-anchor="middle" class="t">or no winner</text>
+
+  <path d="M400 682 L500 682" stroke="#334155" stroke-width="3" fill="none" marker-end="url(#arrow)"/>
+  <path d="M800 682 L900 682" stroke="#334155" stroke-width="3" fill="none" marker-end="url(#arrow)"/>
+  <path d="M1200 682 L1300 682" stroke="#334155" stroke-width="3" fill="none" marker-end="url(#arrow)"/>
+
+  <text x="70" y="850" class="s">Postgres stores durable state; the supervisor advances work; GPU machines and LLMBench provide execution and measurement.</text>
+</svg>

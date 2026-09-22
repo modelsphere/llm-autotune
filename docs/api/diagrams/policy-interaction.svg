@@ -1,0 +1,68 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 662" font-family="-apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="call" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#2f6f4f"/>
+    </marker>
+    <marker id="reply" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#3f6fbf"/>
+    </marker>
+  </defs>
+  <rect width="860" height="662" fill="#ffffff"/>
+
+  <text x="30" y="38" font-size="22" font-weight="700" fill="#12233a">How a policy talks to the platform</text>
+  <text x="30" y="62" font-size="14" fill="#5b6b7a">The policy always calls; the platform only replies. Every instruction comes back inside a heartbeat reply.</text>
+
+  <!-- phase bands -->
+  <rect x="70" y="150" width="720" height="248" fill="#f4faf6"/>
+  <rect x="70" y="398" width="720" height="98" fill="#fbf6ef"/>
+  <rect x="70" y="496" width="720" height="150" fill="#f3f6fc"/>
+  <text x="84" y="172" font-size="13" font-weight="700" fill="#3a7a56">SEARCH  ↺ repeats until the deadline</text>
+  <text x="84" y="420" font-size="13" font-weight="700" fill="#a5762f">STOP</text>
+  <text x="84" y="518" font-size="13" font-weight="700" fill="#3f6fbf">VERDICT  (platform only)</text>
+
+  <!-- headers + lifelines -->
+  <rect x="140" y="96" width="200" height="44" rx="8" fill="#dff0e6" stroke="#5aa77a"/>
+  <text x="240" y="123" font-size="14" font-weight="700" fill="#12233a" text-anchor="middle">Policy container</text>
+  <rect x="520" y="96" width="200" height="44" rx="8" fill="#e4edfb" stroke="#5a86c9"/>
+  <text x="620" y="123" font-size="14" font-weight="700" fill="#12233a" text-anchor="middle">Platform</text>
+  <line x1="240" y1="140" x2="240" y2="646" stroke="#b6c2d0" stroke-width="1.4" stroke-dasharray="4 4"/>
+  <line x1="620" y1="140" x2="620" y2="646" stroke="#b6c2d0" stroke-width="1.4" stroke-dasharray="4 4"/>
+
+  <!-- SEARCH exchanges -->
+  <text x="246" y="196" font-size="12.5" fill="#2f6f4f">GET /session — read your assignment</text>
+  <line x1="240" y1="200" x2="616" y2="200" stroke="#2f6f4f" stroke-width="1.7" marker-end="url(#call)"/>
+  <text x="614" y="220" font-size="12" fill="#3f6fbf" text-anchor="end">the manifest</text>
+  <line x1="620" y1="224" x2="244" y2="224" stroke="#3f6fbf" stroke-width="1.5" stroke-dasharray="5 3" marker-end="url(#reply)"/>
+
+  <text x="246" y="256" font-size="12.5" fill="#2f6f4f">POST /session/heartbeat — check in</text>
+  <line x1="240" y1="260" x2="616" y2="260" stroke="#2f6f4f" stroke-width="1.7" marker-end="url(#call)"/>
+  <text x="614" y="280" font-size="12" fill="#3f6fbf" text-anchor="end">command: run</text>
+  <line x1="620" y1="284" x2="244" y2="284" stroke="#3f6fbf" stroke-width="1.5" stroke-dasharray="5 3" marker-end="url(#reply)"/>
+
+  <text x="246" y="316" font-size="12.5" fill="#2f6f4f">POST /launches — start an engine for me</text>
+  <line x1="240" y1="320" x2="616" y2="320" stroke="#2f6f4f" stroke-width="1.7" marker-end="url(#call)"/>
+
+  <text x="246" y="348" font-size="12.5" fill="#2f6f4f">POST /launches/{id}/benchmarks — measure it</text>
+  <line x1="240" y1="352" x2="616" y2="352" stroke="#2f6f4f" stroke-width="1.7" marker-end="url(#call)"/>
+
+  <text x="246" y="380" font-size="12.5" fill="#2f6f4f">PUT /contenders — my best settings so far</text>
+  <line x1="240" y1="384" x2="616" y2="384" stroke="#2f6f4f" stroke-width="1.7" marker-end="url(#call)"/>
+
+  <!-- STOP -->
+  <text x="246" y="440" font-size="12.5" fill="#2f6f4f">POST /session/heartbeat</text>
+  <text x="614" y="440" font-size="12" fill="#3f6fbf" text-anchor="end">command: finalize</text>
+  <line x1="240" y1="444" x2="616" y2="444" stroke="#2f6f4f" stroke-width="1.7" marker-end="url(#call)"/>
+  <line x1="620" y1="464" x2="244" y2="464" stroke="#3f6fbf" stroke-width="1.5" stroke-dasharray="5 3" marker-end="url(#reply)"/>
+  <text x="246" y="486" font-size="12.5" fill="#2f6f4f">POST /session/finalized — I have stopped</text>
+  <line x1="240" y1="490" x2="616" y2="490" stroke="#2f6f4f" stroke-width="1.7" marker-end="url(#call)"/>
+
+  <!-- VERDICT -->
+  <rect x="430" y="532" width="360" height="58" rx="8" fill="#d3e3fb" stroke="#3f6fbf" stroke-width="1.6"/>
+  <text x="610" y="556" font-size="13" font-weight="700" fill="#12233a" text-anchor="middle">Platform runs the top contender itself</text>
+  <text x="610" y="575" font-size="12" fill="#42556c" text-anchor="middle">measures it → this is the verdict</text>
+
+  <text x="246" y="620" font-size="12.5" fill="#2f6f4f">POST /session/heartbeat</text>
+  <text x="614" y="620" font-size="12" fill="#3f6fbf" text-anchor="end">command: exit</text>
+  <line x1="240" y1="624" x2="616" y2="624" stroke="#2f6f4f" stroke-width="1.7" marker-end="url(#call)"/>
+  <line x1="620" y1="642" x2="244" y2="642" stroke="#3f6fbf" stroke-width="1.5" stroke-dasharray="5 3" marker-end="url(#reply)"/>
+</svg>

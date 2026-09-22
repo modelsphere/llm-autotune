@@ -1,0 +1,27 @@
+# Build context: ../frontend. The SPA is built once and served by nginx,
+# which also proxies /api to the backend — the same shape an Ingress gives it
+# on k8s, so nothing about the frontend changes between the two.
+
+# Base images are ARGs so an air-gapped box can build against a node / nginx it
+# already has cached; the defaults are the pinned tags. The build is pure JS
+# (npm + vite, no apt), so an alpine node substitutes fine, and any nginx
+# serves the static output.
+ARG NODE_IMAGE=node:22-slim
+ARG NGINX_IMAGE=nginx:1.27-alpine
+
+FROM ${NODE_IMAGE} AS build
+WORKDIR /app
+COPY package.json package-lock.json ./
+# ci, not install: the lockfile is the build, reproducibly.
+RUN npm ci
+COPY . .
+RUN npm run build
+
+FROM ${NGINX_IMAGE}
+COPY --from=build /app/dist /usr/share/nginx/html
+# The nginx image renders /etc/nginx/templates/*.template with envsubst at
+# startup, so where the API lives is configuration rather than a rebuild.
+COPY nginx.conf.template /etc/nginx/templates/default.conf.template
+COPY docker-entrypoint-resolver.envsh /docker-entrypoint.d/10-resolver.envsh
+# Sensible for the compose stack; the chart overrides it with the API service.
+ENV API_UPSTREAM=api:8000

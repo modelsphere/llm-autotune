@@ -1,0 +1,76 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1180 540" font-family="Helvetica, Arial, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif">
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#4a4f5a"/>
+    </marker>
+  </defs>
+  <style>
+    .colA  { fill:#fdf9f0; stroke:#d0a85a; stroke-width:1.3; }
+    .colB  { fill:#eef7f0; stroke:#57a06a; stroke-width:1.3; }
+    .stepA { fill:#fdf3e0; stroke:#d0a85a; stroke-width:1.2; }
+    .stepB { fill:#e6f4ea; stroke:#57a06a; stroke-width:1.2; }
+    .band  { fill:#e9ebfa; stroke:#8f96d8; stroke-width:1.2; }
+    .htitle { font-size:15px; font-weight:bold; text-anchor:middle; }
+    .htag { font-size:11.5px; text-anchor:middle; font-style:italic; }
+    .stitle { font-size:12px; font-weight:bold; fill:#1f2430; text-anchor:start; }
+    .ssub  { font-size:11px; fill:#3a4050; text-anchor:start; }
+    .edge  { stroke:#4a4f5a; stroke-width:1.6; fill:none; }
+    .bandt { font-size:12.5px; fill:#1f2430; text-anchor:middle; }
+  </style>
+  <rect x="0" y="0" width="1180" height="540" fill="#ffffff"/>
+
+  <!-- 两列 -->
+  <rect class="colA" x="40"  y="40" width="530" height="404" rx="10"/>
+  <rect class="colB" x="610" y="40" width="530" height="404" rx="10"/>
+
+  <text class="htitle" x="305" y="76" fill="#a9791f">裸金属机器 — ssh + docker</text>
+  <text class="htag"   x="305" y="96" fill="#8a6a1e">与生产共用 → 需要保护</text>
+  <text class="htitle" x="875" y="76" fill="#3f7d54">GPU 集群 — k8s</text>
+  <text class="htag"   x="875" y="96" fill="#3f7d54">借用空闲 GPU 配额</text>
+
+  <!-- A 列步骤 -->
+  <rect class="stepA" x="70" y="118" width="470" height="60" rx="6"/>
+  <text class="stitle" x="90" y="142">1 · ssh 登录并捕获</text>
+  <text class="ssub"   x="90" y="162">记录正在跑的生产服务，以及如何重建它</text>
+
+  <rect class="stepA" x="70" y="196" width="470" height="52" rx="6"/>
+  <text class="stitle" x="90" y="218">2 · 清空生产</text>
+  <text class="ssub"   x="90" y="238">停掉它 —— 机器现在归我们做实验</text>
+
+  <rect class="stepA" x="70" y="266" width="470" height="52" rx="6"/>
+  <text class="stitle" x="90" y="288">3 · 用 `docker run` 启动引擎</text>
+  <text class="ssub"   x="90" y="308">GPU 参数、`--ipc=host`；然后压测</text>
+
+  <rect class="stepA" x="70" y="336" width="470" height="60" rx="6"/>
+  <text class="stitle" x="90" y="360">4 · 恢复并归还</text>
+  <text class="ssub"   x="90" y="380">清理 → 恢复生产 → 验证 → 释放机器</text>
+
+  <path class="edge" d="M305,178 V194" marker-end="url(#arr)"/>
+  <path class="edge" d="M305,248 V264" marker-end="url(#arr)"/>
+  <path class="edge" d="M305,318 V334" marker-end="url(#arr)"/>
+
+  <!-- B 列步骤 -->
+  <rect class="stepB" x="640" y="118" width="470" height="60" rx="6"/>
+  <text class="stitle" x="660" y="142">1 · 提交到集群</text>
+  <text class="ssub"   x="660" y="162">一个 TuningRun 自定义资源（或普通 Deployment）</text>
+
+  <rect class="stepB" x="640" y="196" width="470" height="52" rx="6"/>
+  <text class="stitle" x="660" y="218">2 · 调度器放置 pod</text>
+  <text class="ssub"   x="660" y="238">`node_selector` 选中有该模型的节点</text>
+
+  <rect class="stepB" x="640" y="266" width="470" height="52" rx="6"/>
+  <text class="stitle" x="660" y="288">3 · operator 拉起服务</text>
+  <text class="ssub"   x="660" y="308">后端轮询状态；然后压测</text>
+
+  <rect class="stepB" x="640" y="336" width="470" height="60" rx="6"/>
+  <text class="stitle" x="660" y="360">4 · 删除这些对象</text>
+  <text class="ssub"   x="660" y="380">无需恢复 —— 从未动过生产</text>
+
+  <path class="edge" d="M875,178 V194" marker-end="url(#arr)"/>
+  <path class="edge" d="M875,248 V264" marker-end="url(#arr)"/>
+  <path class="edge" d="M875,318 V334" marker-end="url(#arr)"/>
+
+  <!-- 共享底部说明 -->
+  <rect class="band" x="230" y="472" width="720" height="46" rx="8"/>
+  <text class="bandt" x="590" y="500">同一个 LaunchSpec、同一条引擎命令 —— 只有 driver 不同，按机器选择。</text>
+</svg>

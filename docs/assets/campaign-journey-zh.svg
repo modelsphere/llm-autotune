@@ -1,0 +1,130 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1180 490" font-family="Helvetica, Arial, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif">
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#4a4f5a"/>
+    </marker>
+    <marker id="arrg" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#8a6d1f"/>
+    </marker>
+  </defs>
+  <style>
+    .you  { fill:#e9ebfa; stroke:#8f96d8; stroke-width:1.3; }
+    .plat { fill:#e6f4ea; stroke:#57a06a; stroke-width:1.3; }
+    .fleet{ fill:#fdf3e0; stroke:#d0a85a; stroke-width:1.3; }
+    .data { fill:#faf6df; stroke:#c8bd8a; stroke-width:1.4; }
+    .prodx{ fill:#fdf3e0; stroke:#c99a4a; stroke-width:1.4; stroke-dasharray:6 4; }
+    .ext  { fill:#f7f8fc; stroke:#9aa3b5; stroke-width:1.4; stroke-dasharray:6 4; }
+    .ntitle { font-size:13px; font-weight:bold; fill:#1f2430; text-anchor:middle; }
+    .nsub { font-size:11px; fill:#3a4050; text-anchor:middle; }
+    .tag { font-size:10.5px; font-weight:bold; text-anchor:middle; }
+    .edge { stroke:#4a4f5a; stroke-width:2; fill:none; }
+    .flow { stroke:#8a6d1f; stroke-width:2; fill:none; }
+    .leg { font-size:11.5px; fill:#3a4050; }
+    .lab { font-size:10.5px; fill:#333; text-anchor:middle; paint-order:stroke; stroke:#ffffff; stroke-width:3.5; }
+    .glab{ font-size:11px; font-weight:bold; fill:#8a6d1f; text-anchor:middle; paint-order:stroke; stroke:#ffffff; stroke-width:3.5; }
+    .cap { font-size:11.5px; fill:#5c6270; text-anchor:middle; font-style:italic; }
+  </style>
+  <rect x="0" y="0" width="1180" height="490" fill="#ffffff"/>
+
+  <!-- 图例 -->
+  <rect class="you"   x="230" y="24" width="18" height="14" rx="3"/>
+  <text class="leg" x="254" y="36">用户</text>
+  <rect class="plat"  x="322" y="24" width="18" height="14" rx="3"/>
+  <text class="leg" x="346" y="36">平台</text>
+  <rect class="fleet" x="430" y="24" width="18" height="14" rx="3"/>
+  <text class="leg" x="454" y="36">机房 / 运维</text>
+  <rect class="data"  x="574" y="24" width="18" height="14" rx="3"/>
+  <text class="leg" x="598" y="36">Dataset</text>
+  <rect class="ext"   x="688" y="24" width="18" height="14" rx="3"/>
+  <text class="leg" x="712" y="36">非我方系统</text>
+
+  <!-- 步骤 1 -->
+  <rect class="you" x="42" y="70" width="195" height="180" rx="8"/>
+  <text class="tag" x="139" y="94" fill="#5b5fb0">用户</text>
+  <text class="ntitle" x="139" y="120">1 · 定义 campaign</text>
+  <text class="nsub" x="139" y="146">模型 + 引擎</text>
+  <text class="nsub" x="139" y="166">要借用的机器</text>
+  <text class="nsub" x="139" y="186">搜索空间（要调的旋钮）</text>
+  <text class="nsub" x="139" y="206">目标 + 红线</text>
+  <text class="nsub" x="139" y="226">夜间排期</text>
+
+  <!-- 步骤 2 -->
+  <rect class="fleet" x="267" y="70" width="195" height="180" rx="8"/>
+  <text class="tag" x="364" y="94" fill="#a9791f">机房</text>
+  <text class="ntitle" x="364" y="120">2 · 借用机器</text>
+  <text class="nsub" x="364" y="150">夜里机器</text>
+  <text class="nsub" x="364" y="170">从生产退役</text>
+  <text class="nsub" x="364" y="198">捕获生产</text>
+  <text class="nsub" x="364" y="218">以便之后恢复</text>
+
+  <!-- 步骤 3 -->
+  <rect class="plat" x="492" y="70" width="195" height="180" rx="8"/>
+  <text class="tag" x="589" y="94" fill="#3f7d54">平台</text>
+  <text class="ntitle" x="589" y="122">3 · 逐夜调优</text>
+  <text class="nsub" x="589" y="154">启动配置、压测、</text>
+  <text class="nsub" x="589" y="174">按目标排名</text>
+  <text class="nsub" x="589" y="194">便宜的检查在前</text>
+  <text class="nsub" x="589" y="214">每晚继续</text>
+
+  <!-- 步骤 4 -->
+  <rect class="you" x="717" y="70" width="195" height="180" rx="8"/>
+  <text class="tag" x="814" y="94" fill="#5b5fb0">用户</text>
+  <text class="ntitle" x="814" y="120">4 · 看报告</text>
+  <text class="nsub" x="814" y="152">有没有配置</text>
+  <text class="nsub" x="814" y="172">打败生产？</text>
+  <text class="nsub" x="814" y="200">排行榜、失败原因、</text>
+  <text class="nsub" x="814" y="220">下一步做什么</text>
+
+  <!-- 步骤 5 -->
+  <rect class="you" x="942" y="70" width="195" height="180" rx="8"/>
+  <text class="tag" x="1039" y="94" fill="#5b5fb0">用户 → CICD</text>
+  <text class="ntitle" x="1039" y="122">5 · 晋级优胜配置</text>
+  <text class="nsub" x="1039" y="158">把优胜配置原样</text>
+  <text class="nsub" x="1039" y="178">交给 CICD</text>
+  <text class="nsub" x="1039" y="198">上线</text>
+
+  <!-- 步骤箭头 1..5 -->
+  <path class="edge" d="M237,160 H263" marker-end="url(#arr)"/>
+  <path class="edge" d="M462,160 H488" marker-end="url(#arr)"/>
+  <path class="edge" d="M687,160 H713" marker-end="url(#arr)"/>
+  <path class="edge" d="M912,160 H938" marker-end="url(#arr)"/>
+
+  <!-- ============ 让 dataset 保持新鲜的循环 ============ -->
+
+  <!-- 5 -> 6：优胜上线 -->
+  <path class="edge" d="M1039,250 V330" marker-end="url(#arr)"/>
+  <text class="lab" x="1039" y="292">上线</text>
+
+  <!-- 步骤 6 · 线上生产（非我方）-->
+  <rect class="prodx" x="942" y="330" width="195" height="104" rx="8"/>
+  <text class="tag" x="1039" y="352" fill="#a9791f">非我方</text>
+  <text class="ntitle" x="1039" y="376">6 · 线上生产</text>
+  <text class="nsub" x="1039" y="400">优胜配置在此</text>
+  <text class="nsub" x="1039" y="420">全天服务真实流量</text>
+
+  <!-- 采集器与生产并行 -->
+  <rect class="ext" x="650" y="330" width="200" height="104" rx="8"/>
+  <text class="tag" x="750" y="352" fill="#6b7280">常驻运行</text>
+  <text class="ntitle" x="750" y="376">Dataset 采集器</text>
+  <text class="nsub" x="750" y="400">与生产并行，</text>
+  <text class="nsub" x="750" y="420">静默采样真实流量</text>
+
+  <!-- 它产出的滚动 dataset（归我们 pin、用来测量）-->
+  <rect class="data" x="350" y="330" width="220" height="104" rx="8"/>
+  <text class="ntitle" x="460" y="368">滚动 replay dataset</text>
+  <text class="nsub" x="460" y="392">用最新流量重建，</text>
+  <text class="nsub" x="460" y="412">为夜里准备好</text>
+
+  <!-- 6 -> 采集器 -> dataset（从右到左）-->
+  <path class="flow" d="M942,382 H852" marker-end="url(#arrg)"/>
+  <text class="glab" x="897" y="372">真实流量</text>
+  <path class="flow" d="M650,382 H572" marker-end="url(#arrg)"/>
+  <text class="glab" x="611" y="372">构建</text>
+
+  <!-- dataset -> 喂进步骤 2 与 3 之间 -->
+  <path class="flow" d="M477,330 V174" marker-end="url(#arrg)"/>
+  <text class="glab" x="477" y="300">今晚用的新鲜 dataset</text>
+
+  <!-- 框住循环的说明 -->
+  <text class="cap" x="590" y="466">在两次 campaign 之间，模型只是在服务——它的真实流量悄悄变成了下一晚的 dataset。</text>
+</svg>

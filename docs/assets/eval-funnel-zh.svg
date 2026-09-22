@@ -1,0 +1,82 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1010 770" font-family="Helvetica, Arial, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif">
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#4a4f5a"/>
+    </marker>
+  </defs>
+  <style>
+    .node { fill:#e9ebfa; stroke:#8f96d8; stroke-width:1.2; }
+    .hex  { fill:#eef0fb; stroke:#8f96d8; stroke-width:1.2; }
+    .out  { fill:#f7f8fc; stroke:#9aa3b5; stroke-width:1.2; }
+    .win  { fill:#e6f4ea; stroke:#57a06a; stroke-width:1.4; }
+    .ntitle { font-size:13px; font-weight:bold; fill:#1f2430; text-anchor:middle; }
+    .wtitle { font-size:13px; font-weight:bold; fill:#1e7a3a; text-anchor:middle; }
+    .nsub { font-size:11.5px; fill:#3a4050; text-anchor:middle; }
+    .edge { stroke:#4a4f5a; stroke-width:1.6; fill:none; }
+    .lab  { font-size:11px; fill:#333; paint-order:stroke; stroke:#ffffff; stroke-width:3.5; }
+    .labm { font-size:11px; fill:#333; text-anchor:middle; paint-order:stroke; stroke:#ffffff; stroke-width:3.5; }
+  </style>
+  <rect x="0" y="0" width="1010" height="770" fill="#ffffff"/>
+
+  <!-- 主干 -->
+  <rect class="node" x="180" y="40" width="240" height="44" rx="6"/>
+  <text class="ntitle" x="300" y="67">planner 提出的一个配置</text>
+
+  <polygon class="hex" points="150,148 174,120 426,120 450,148 426,176 174,176"/>
+  <text class="ntitle" x="300" y="144">1 · 纸面检查</text>
+  <text class="nsub" x="300" y="162">约束 · 显存放得下 · 零成本</text>
+
+  <polygon class="hex" points="150,258 174,230 426,230 450,258 426,286 174,286"/>
+  <text class="ntitle" x="300" y="254">2 · 启动与健康</text>
+  <text class="nsub" x="300" y="272">能跑起来并回答正确吗？</text>
+
+  <polygon class="hex" points="150,372 174,340 426,340 450,372 426,404 174,404"/>
+  <text class="ntitle" x="300" y="368">3 · 筛选压测</text>
+  <text class="nsub" x="300" y="386">便宜 · ~10–15 分钟 · 给所有人打分</text>
+
+  <polygon class="hex" points="150,483 174,455 426,455 450,483 426,511 174,511"/>
+  <text class="ntitle" x="300" y="479">4 · 复核最优</text>
+  <text class="nsub" x="300" y="497">重跑前几名 · 排除运气</text>
+
+  <polygon class="hex" points="150,597 174,565 426,565 450,597 426,629 174,629"/>
+  <text class="ntitle" x="300" y="593">5 · 真实流量验证</text>
+  <text class="nsub" x="300" y="611">回放滚动 dataset · 仅入围者 · ~1 小时</text>
+
+  <rect class="win" x="176" y="675" width="248" height="52" rx="6"/>
+  <text class="wtitle" x="300" y="700">推荐配置</text>
+  <text class="nsub" x="300" y="718">与生产对比排名</text>
+
+  <!-- 主干箭头 -->
+  <path class="edge" d="M300,84 V116" marker-end="url(#arr)"/>
+  <path class="edge" d="M300,176 V226" marker-end="url(#arr)"/>
+  <text class="lab" x="312" y="205">有效</text>
+  <path class="edge" d="M300,286 V336" marker-end="url(#arr)"/>
+  <text class="lab" x="312" y="315">健康</text>
+  <path class="edge" d="M300,404 V451" marker-end="url(#arr)"/>
+  <text class="lab" x="312" y="431">有潜力</text>
+  <path class="edge" d="M300,511 V561" marker-end="url(#arr)"/>
+  <text class="lab" x="312" y="540">领先站得住</text>
+  <path class="edge" d="M300,629 V671" marker-end="url(#arr)"/>
+  <text class="lab" x="312" y="655">满足 SLO</text>
+
+  <!-- 淘汰（虚线，右列） -->
+  <rect class="out" x="560" y="128" width="180" height="40" rx="6"/>
+  <text class="ntitle" x="650" y="152">淘汰 — 零成本</text>
+  <path class="edge" d="M450,148 L556,148" stroke-dasharray="5 3" marker-end="url(#arr)"/>
+  <text class="labm" x="505" y="140">无效</text>
+
+  <rect class="out" x="560" y="240" width="260" height="56" rx="6"/>
+  <text class="ntitle" x="690" y="262">失败并说明原因</text>
+  <text class="nsub" x="690" y="281">crash · OOM · 输出异常</text>
+  <path class="edge" d="M450,258 L556,264" stroke-dasharray="5 3" marker-end="url(#arr)"/>
+  <text class="labm" x="505" y="250">挂了</text>
+
+  <rect class="out" x="560" y="352" width="200" height="40" rx="6"/>
+  <text class="ntitle" x="660" y="376">剔除 — 明显更差</text>
+  <path class="edge" d="M450,372 L556,372" stroke-dasharray="5 3" marker-end="url(#arr)"/>
+  <text class="labm" x="505" y="364">落后</text>
+
+  <!-- 反馈回路：失败 -> planner -->
+  <path class="edge" d="M820,268 V62 H424" marker-end="url(#arr)"/>
+  <text class="labm" x="640" y="50">失败与死路指导后续搜索</text>
+</svg>

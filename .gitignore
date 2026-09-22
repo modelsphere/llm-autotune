@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+
+# Node
+node_modules/
+frontend/dist/
+
+# Go
+operator/bin/
+operator/hack/dev-operator.env
+
+# Env / secrets — never commit a credential or a kubeconfig
+.env
+.env.*
+!.env.example
+*.kubeconfig
+*.pem
+id_rsa
+id_ed25519
+
+# Runtime artifacts
+runs/
+*.log
+
+# Helm
+deploy/helm/**/charts/
+deploy/helm/**/*.tgz
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/

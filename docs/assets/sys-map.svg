@@ -1,0 +1,171 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1180 700" font-family="Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#4a4f5a"/>
+    </marker>
+  </defs>
+  <style>
+    .layer { fill:#f7f8fc; stroke:#9aa3b5; stroke-width:1.2; }
+    .dataplane { fill:#fdfbef; stroke:#c8bd8a; stroke-width:1.2; }
+    .evbox { fill:#faf6df; stroke:#c8bd8a; stroke-width:1; }
+    .node { fill:#e9ebfa; stroke:#8f96d8; stroke-width:1.2; }
+    .ssh  { fill:#fdf3e0; stroke:#d0a85a; stroke-width:1.3; }
+    .k8s  { fill:#e6f4ea; stroke:#57a06a; stroke-width:1.3; }
+    .ext  { fill:#ffffff; stroke:#8f96d8; stroke-width:1.2; stroke-dasharray:5 3; }
+    .band { fill:#eef6f0; stroke:#8fbf9f; stroke-width:1.2; }
+    .boxtitle { font-size:13px; font-weight:bold; fill:#5c6270; text-anchor:middle; }
+    .ntitle { font-size:12.5px; font-weight:bold; fill:#1f2430; text-anchor:middle; }
+    .nsub { font-size:11px; fill:#3a4050; text-anchor:middle; }
+    .edge { stroke:#4a4f5a; stroke-width:1.6; fill:none; }
+    .lab { font-size:10.5px; fill:#333; paint-order:stroke; stroke:#ffffff; stroke-width:3.5; }
+    .labm { font-size:10.5px; fill:#333; text-anchor:middle; paint-order:stroke; stroke:#ffffff; stroke-width:3.5; }
+  </style>
+  <rect x="0" y="0" width="1180" height="700" fill="#ffffff"/>
+
+  <!-- ===================== CONTROL LAYER ===================== -->
+  <rect class="layer" x="40" y="40" width="650" height="146" rx="8"/>
+  <text class="boxtitle" x="365" y="64">Control layer — campaigns &amp; configs</text>
+
+  <rect class="node" x="58" y="82" width="190" height="88" rx="6"/>
+  <text class="ntitle" x="153" y="112">Campaign Manager</text>
+  <text class="nsub" x="153" y="132">what to tune: model,</text>
+  <text class="nsub" x="153" y="148">space, objective, schedule</text>
+
+  <rect class="node" x="262" y="82" width="178" height="88" rx="6"/>
+  <text class="ntitle" x="351" y="112">Planner</text>
+  <text class="nsub" x="351" y="132">proposes configs</text>
+  <text class="nsub" x="351" y="148">grid · random · BO/LLM</text>
+
+  <rect class="node" x="454" y="82" width="218" height="88" rx="6"/>
+  <text class="ntitle" x="563" y="110">Orchestrator</text>
+  <text class="nsub" x="563" y="130">the supervisor:</text>
+  <text class="nsub" x="563" y="146">schedules · packs · advances</text>
+
+  <path class="edge" d="M248,126 H258" marker-end="url(#arr)"/>
+  <path class="edge" d="M440,126 H450" marker-end="url(#arr)"/>
+
+  <!-- ===================== EXECUTION LAYER ===================== -->
+  <rect class="layer" x="40" y="214" width="650" height="150" rx="8"/>
+  <text class="boxtitle" x="365" y="238">Execution layer</text>
+
+  <rect class="node" x="58" y="256" width="184" height="92" rx="6"/>
+  <text class="ntitle" x="150" y="286">Resource Manager</text>
+  <text class="nsub" x="150" y="306">leases · GPU inventory</text>
+  <text class="nsub" x="150" y="322">packing · baseline (ssh)</text>
+
+  <rect class="node" x="260" y="256" width="180" height="92" rx="6"/>
+  <text class="ntitle" x="350" y="286">Launch Layer</text>
+  <text class="nsub" x="350" y="306">renders a LaunchSpec</text>
+  <text class="nsub" x="350" y="322">one driver per machine</text>
+
+  <rect class="node" x="458" y="256" width="214" height="92" rx="6"/>
+  <text class="ntitle" x="565" y="290">Deployed engine service</text>
+  <text class="nsub" x="565" y="312">the engine —</text>
+  <text class="nsub" x="565" y="328">a container or a pod</text>
+
+  <path class="edge" d="M440,302 H454" marker-end="url(#arr)"/>
+
+  <!-- orchestrator drives the execution layer via a clean distribution bus -->
+  <path class="edge" d="M563,170 V196 H150" fill="none"/>
+  <path class="edge" d="M150,196 V252" marker-end="url(#arr)"/>
+  <path class="edge" d="M300,196 V252" marker-end="url(#arr)"/>
+  <text class="labm" x="150" y="209">reserve / release</text>
+  <text class="labm" x="300" y="209">validate · launch</text>
+
+  <!-- ===================== HARDWARE: TWO SUBSTRATES ===================== -->
+  <rect class="layer" x="40" y="392" width="650" height="196" rx="8"/>
+  <text class="boxtitle" x="365" y="416">Hardware — two substrates</text>
+
+  <rect class="ssh" x="62" y="432" width="290" height="138" rx="8"/>
+  <text class="ntitle" x="207" y="460">Bare-metal GPU box</text>
+  <text class="nsub" x="207" y="482">engine runs as `docker run`</text>
+  <text class="nsub" x="207" y="502">production shares the box</text>
+  <text class="nsub" x="207" y="522">→ capture &amp; restore it</text>
+  <text class="nsub" x="207" y="550" style="font-style:italic">ssh + docker driver</text>
+
+  <rect class="k8s" x="378" y="432" width="290" height="138" rx="8"/>
+  <text class="ntitle" x="523" y="460">GPU cluster (k8s)</text>
+  <text class="nsub" x="523" y="482">engine runs as a pod</text>
+  <text class="nsub" x="523" y="502">scheduler places it on a node-slice</text>
+  <text class="nsub" x="523" y="522">borrows idle quota → nothing to restore</text>
+  <text class="nsub" x="523" y="550" style="font-style:italic">k8s driver</text>
+
+  <!-- deployed service -> one of the two substrates (fork in the gap, clear of the title) -->
+  <path class="edge" d="M520,348 V378 H180 V428" marker-end="url(#arr)"/>
+  <text class="labm" x="330" y="372">as `docker run`</text>
+  <path class="edge" d="M600,348 V428" marker-end="url(#arr)"/>
+  <text class="labm" x="616" y="372">as a pod</text>
+
+  <!-- resource manager -> bare-metal ONLY -->
+  <path class="edge" d="M120,348 V378 H140 V428" stroke-dasharray="5 4" marker-end="url(#arr)"/>
+  <text class="labm" x="118" y="372">capture / restore</text>
+
+  <!-- ===================== single-worker banner ===================== -->
+  <rect class="band" x="40" y="600" width="650" height="86" rx="8"/>
+  <text class="ntitle" x="365" y="628">One supervisor worker · a state machine, not a task queue</text>
+  <text class="nsub" x="365" y="650">Advances DB rows one legal step per tick; holds no state between ticks. Everything lives in</text>
+  <text class="nsub" x="365" y="668">Postgres, so a crashed worker re-attaches to live runs instead of relaunching them.</text>
+
+  <!-- ===================== DATA PLANE ===================== -->
+  <rect class="dataplane" x="736" y="40" width="404" height="548" rx="8"/>
+  <text class="boxtitle" x="938" y="64">Data plane — the record &amp; the measurements</text>
+
+  <rect class="node" x="756" y="82" width="184" height="96" rx="6"/>
+  <text class="ntitle" x="848" y="114">Experiment Store</text>
+  <text class="nsub" x="848" y="134">Postgres: runs · configs</text>
+  <text class="nsub" x="848" y="150">results · failures · events</text>
+
+  <rect class="node" x="956" y="82" width="166" height="96" rx="6"/>
+  <text class="ntitle" x="1039" y="122">Reporting</text>
+  <text class="nsub" x="1039" y="142">morning report</text>
+
+  <path class="edge" d="M940,130 H954" marker-end="url(#arr)"/>
+
+  <rect class="evbox" x="756" y="210" width="366" height="150" rx="6"/>
+  <text class="boxtitle" x="939" y="232">Evaluation — cheap first, expensive last</text>
+
+  <rect class="node" x="772" y="248" width="168" height="48" rx="6"/>
+  <text class="ntitle" x="856" y="277">Health gate</text>
+
+  <rect class="node" x="954" y="248" width="152" height="48" rx="6"/>
+  <text class="ntitle" x="1030" y="271">LLMBench</text>
+  <text class="nsub" x="1030" y="288">submit / poll</text>
+
+  <text class="nsub" x="939" y="328">correctness gate → screening → replay verification</text>
+
+  <rect class="node" x="756" y="390" width="178" height="72" rx="6"/>
+  <text class="ntitle" x="845" y="418">Datasets</text>
+  <text class="nsub" x="845" y="438">rolling replay traffic,</text>
+  <text class="nsub" x="845" y="454">pinned per campaign</text>
+
+  <rect class="ext" x="988" y="390" width="134" height="72" rx="6"/>
+  <text class="ntitle" x="1055" y="418">LLMBench</text>
+  <text class="nsub" x="1055" y="438">platform</text>
+  <text class="nsub" x="1055" y="454">(external)</text>
+
+  <!-- the platform drives the roll -->
+  <path class="edge" d="M934,420 H984" marker-end="url(#arr)"/>
+  <text class="labm" x="959" y="410">trigger</text>
+
+  <!-- live prod traffic is sampled into the rolling build -->
+  <rect class="ext" x="756" y="500" width="366" height="64" rx="6"/>
+  <text class="ntitle" x="939" y="528">Live production traffic</text>
+  <text class="nsub" x="939" y="548">(external) · the real request stream</text>
+  <path class="edge" d="M845,500 V464" marker-end="url(#arr)"/>
+  <text class="lab" x="853" y="482">sampled from prod →</text>
+  <text class="lab" x="853" y="496">rebuilt nightly</text>
+
+  <path class="edge" d="M820,210 V180" marker-end="url(#arr)"/>
+  <text class="lab" x="828" y="200">results</text>
+  <path class="edge" d="M845,390 V364" marker-end="url(#arr)"/>
+  <text class="lab" x="853" y="382">traffic</text>
+  <path class="edge" d="M1030,390 V298" marker-start="url(#arr)" marker-end="url(#arr)"/>
+  <text class="labm" x="1030" y="350">submit /</text>
+  <text class="labm" x="1030" y="364">poll</text>
+
+  <!-- cross-plane flows -->
+  <path class="edge" d="M756,136 H674" marker-end="url(#arr)"/>
+  <text class="labm" x="714" y="122">history</text>
+  <path class="edge" d="M772,298 L676,318" marker-end="url(#arr)"/>
+  <text class="labm" x="712" y="300">probe endpoint</text>
+</svg>

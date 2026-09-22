@@ -1,0 +1,30 @@
+{{ include "llm-autotune.fullname" . }} is installed.
+
+{{ if .Values.ingress.enabled -}}
+The UI is at http{{ if .Values.ingress.tls }}s{{ end }}://{{ .Values.ingress.host }}
+{{- else -}}
+No ingress. To reach the UI:
+
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "llm-autotune.fullname" . }}-frontend 8080:80
+
+then open http://localhost:8080
+{{- end }}
+
+{{ if .Values.adminPassword -}}
+Sign in as {{ .Values.adminUsername }} with the password you set.
+{{- else -}}
+No admin account was created: set adminPassword and upgrade, or create the
+first user yourself. Nothing can be done in the UI until one exists.
+{{- end }}
+
+{{ if not .Values.publicApiUrl -}}
+NOTE: publicApiUrl is empty. Policy campaigns need it — it is how a policy
+container on a GPU machine calls the platform back. Set it to an address that
+machine can reach and upgrade.
+{{- end }}
+
+{{ if and (not .Values.llmbench.url) (not .Values.mock.enabled) -}}
+NOTE: no benchmark platform configured (llmbench.url). Runs will launch and
+then have nothing to measure them. Point it at your LLMBench, or try the
+GPU-free path first with -f values-mock.yaml.
+{{- end }}

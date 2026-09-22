@@ -1,0 +1,50 @@
+# One image, three roles: the same build runs as the API (uvicorn), the
+# worker (python -m app.worker) and the migrator (alembic upgrade head) —
+# only the command differs. That is also the k8s shape: three workloads, one
+# image, so a version bump can never split the API from its worker.
+#
+# Build context: ../backend  (see docker-compose.yml / deploy/k8s/platform).
+
+# Base images are ARGs so an air-gapped box can build against whatever it
+# already has cached (an air-gapped build can pin them). Defaults are the
+# pinned tags every other deploy uses. BASE_IMAGE must stay a Debian-family
+# python (the apt step below needs it); UV_IMAGE only supplies the uv binary,
+# pulled in as a named stage so `--from` needs no ARG interpolation.
+ARG BASE_IMAGE=python:3.12-slim
+ARG UV_IMAGE=ghcr.io/astral-sh/uv:latest
+FROM ${UV_IMAGE} AS uv
+FROM ${BASE_IMAGE} AS runtime
+
+# ssh: the worker's ssh_docker driver shells out to `ssh` to reach GPU boxes.
+# curl: container healthchecks (slim ships neither).
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        openssh-client curl \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=uv /uv /usr/local/bin/uv
+
+WORKDIR /app
+
+# Dependencies first, code second: the lockfile layer is the expensive one and
+# survives every code-only rebuild. --frozen = the lock IS the resolution; a
+# build must never quietly resolve different versions than the dev box tested.
+COPY pyproject.toml uv.lock ./
+RUN uv sync --frozen --no-dev --compile-bytecode
+
+COPY alembic.ini ./
+COPY alembic ./alembic
+COPY app ./app
+
+# The venv on PATH: runtime commands are plain `uvicorn`/`python`/`alembic`,
+# no uv indirection — uv is a build tool here, not a process supervisor.
+ENV PATH="/app/.venv/bin:$PATH" \
+    PYTHONUNBUFFERED=1
+
+# Where the worker writes engine-log captures and the API reads them back
+# (Run.log_path). Both containers mount the same volume here.
+RUN mkdir -p /app/runs
+ENV AUTOTUNE_RUN_LOG_DIR=/app/runs
+
+EXPOSE 8000
+# Default role: the API. The worker and migrator override the command.
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

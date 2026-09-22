@@ -1,0 +1,76 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1180 430" font-family="Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#4a4f5a"/>
+    </marker>
+  </defs>
+  <style>
+    .prod { fill:#fdf3e0; stroke:#d0a85a; stroke-width:1.3; }
+    .data { fill:#faf6df; stroke:#c8bd8a; stroke-width:1.3; }
+    .plat { fill:#e6f4ea; stroke:#57a06a; stroke-width:1.3; }
+    .win  { fill:#e6f4ea; stroke:#57a06a; stroke-width:1.4; }
+    .pinbox  { fill:#eef0fb; stroke:#8f96d8; stroke-width:1.2; }
+    .rollbox { fill:#fdf3e0; stroke:#d0a85a; stroke-width:1.2; }
+    .ntitle { font-size:13px; font-weight:bold; fill:#1f2430; text-anchor:middle; }
+    .wtitle { font-size:13px; font-weight:bold; fill:#1e7a3a; text-anchor:middle; }
+    .nsub { font-size:11px; fill:#3a4050; text-anchor:middle; }
+    .edge { stroke:#4a4f5a; stroke-width:1.8; fill:none; }
+    .trig { stroke:#3f7d54; stroke-width:1.8; fill:none; }
+    .labm { font-size:11px; fill:#333; text-anchor:middle; paint-order:stroke; stroke:#ffffff; stroke-width:3.5; }
+    .lab  { font-size:11px; fill:#333; paint-order:stroke; stroke:#ffffff; stroke-width:3.5; }
+    .cap  { font-size:12px; font-weight:bold; fill:#5c6270; text-anchor:middle; }
+    .ptitle { font-size:12.5px; font-weight:bold; text-anchor:middle; }
+    .pbody  { font-size:11.5px; fill:#3a4050; text-anchor:middle; }
+  </style>
+  <rect x="0" y="0" width="1180" height="430" fill="#ffffff"/>
+
+  <!-- who triggers the roll -->
+  <rect class="plat" x="311" y="46" width="300" height="42" rx="8"/>
+  <text class="ntitle" x="461" y="72">The platform triggers each rebuild</text>
+  <path class="trig" d="M461,88 V146" marker-end="url(#arr)"/>
+  <text class="lab" x="474" y="122">nightly · at campaign start</text>
+
+  <!-- the flow: prod traffic -> rolling dataset -> verification -> verdict -->
+  <rect class="prod" x="40" y="150" width="210" height="104" rx="8"/>
+  <text class="ntitle" x="145" y="188">Live production traffic</text>
+  <text class="nsub" x="145" y="209">the real request stream —</text>
+  <text class="nsub" x="145" y="227">its mix keeps shifting</text>
+
+  <rect class="data" x="336" y="150" width="250" height="104" rx="8"/>
+  <text class="ntitle" x="461" y="185">Rolling replay dataset</text>
+  <text class="nsub" x="461" y="206">a fresh sample of that</text>
+  <text class="nsub" x="461" y="224">traffic, rebuilt each window</text>
+
+  <rect class="plat" x="672" y="150" width="210" height="104" rx="8"/>
+  <text class="ntitle" x="777" y="185">Verification stage</text>
+  <text class="nsub" x="777" y="206">replays the dataset,</text>
+  <text class="nsub" x="777" y="224">scores the finalists</text>
+
+  <rect class="win" x="968" y="150" width="170" height="104" rx="8"/>
+  <text class="wtitle" x="1053" y="192">Recommended</text>
+  <text class="wtitle" x="1053" y="210">config</text>
+  <text class="nsub" x="1053" y="231">ranked vs production</text>
+
+  <path class="edge" d="M250,202 H332" marker-end="url(#arr)"/>
+  <text class="labm" x="293" y="192">sampled</text>
+  <path class="edge" d="M586,202 H668" marker-end="url(#arr)"/>
+  <text class="labm" x="627" y="192">replayed</text>
+  <path class="edge" d="M882,202 H964" marker-end="url(#arr)"/>
+  <text class="labm" x="923" y="192">ranked</text>
+
+  <!-- bridging caption -->
+  <text class="cap" x="590" y="286">Frozen within a campaign · rolled forward for the next</text>
+
+  <!-- pin vs roll -->
+  <rect class="pinbox" x="120" y="300" width="440" height="106" rx="8"/>
+  <text class="ptitle" x="340" y="326" fill="#5b5fb0">Pinned within a campaign</text>
+  <text class="pbody" x="340" y="350">One build for the campaign's whole life —</text>
+  <text class="pbody" x="340" y="368">every candidate measured with the same</text>
+  <text class="pbody" x="340" y="386">ruler, so the leaderboard is honest.</text>
+
+  <rect class="rollbox" x="620" y="300" width="440" height="106" rx="8"/>
+  <text class="ptitle" x="840" y="326" fill="#a9791f">Rolled across campaigns</text>
+  <text class="pbody" x="840" y="350">Each new campaign gets a fresh build from</text>
+  <text class="pbody" x="840" y="368">the latest traffic — so we tune for today's</text>
+  <text class="pbody" x="840" y="386">usage, not last month's.</text>
+</svg>

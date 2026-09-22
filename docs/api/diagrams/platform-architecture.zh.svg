@@ -1,0 +1,90 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 940 560" font-family="PingFang SC, Hiragino Sans GB, Microsoft YaHei, Noto Sans CJK SC, Source Han Sans SC, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#5b6b7a"/>
+    </marker>
+    <marker id="arrb" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#2f6f4f"/>
+    </marker>
+  </defs>
+
+  <rect width="940" height="560" fill="#ffffff"/>
+  <text x="30" y="40" font-size="22" font-weight="700" fill="#12233a">平台架构</text>
+  <text x="30" y="64" font-size="14" fill="#5b6b7a">一个控制循环在数据库之上驱动一切。policy 从 GPU 机器主动拨出；平台负责启动和测量。</text>
+
+  <!-- Browser -->
+  <rect x="30" y="150" width="150" height="60" rx="8" fill="#eef2f7" stroke="#9fb0c3"/>
+  <text x="105" y="176" font-size="14" font-weight="600" fill="#12233a" text-anchor="middle">Browser (UI)</text>
+  <text x="105" y="196" font-size="12" fill="#5b6b7a" text-anchor="middle">运维</text>
+
+  <!-- Platform host container -->
+  <rect x="230" y="95" width="360" height="410" rx="12" fill="#f7fafc" stroke="#c4d2e0" stroke-dasharray="5 4"/>
+  <text x="248" y="120" font-size="13" font-weight="700" fill="#3d5169">平台主机</text>
+
+  <!-- API -->
+  <rect x="258" y="140" width="304" height="70" rx="8" fill="#e4edfb" stroke="#5a86c9"/>
+  <text x="410" y="167" font-size="15" font-weight="600" fill="#12233a" text-anchor="middle">API  (FastAPI)</text>
+  <text x="410" y="188" font-size="12" fill="#42556c" text-anchor="middle">面向人的 REST + policy 契约</text>
+  <text x="410" y="203" font-size="11.5" fill="#5b6b7a" text-anchor="middle">/api/policy/v1</text>
+
+  <!-- Supervisor -->
+  <rect x="258" y="248" width="304" height="78" rx="8" fill="#e4edfb" stroke="#5a86c9"/>
+  <text x="410" y="275" font-size="15" font-weight="600" fill="#12233a" text-anchor="middle">Supervisor（控制循环）</text>
+  <text x="410" y="296" font-size="12" fill="#42556c" text-anchor="middle">约每 10 秒醒来一次，把每个 run</text>
+  <text x="410" y="311" font-size="12" fill="#42556c" text-anchor="middle">推进一步，然后提交</text>
+
+  <!-- Postgres + Redis -->
+  <rect x="258" y="364" width="196" height="66" rx="8" fill="#eae6f6" stroke="#8a76c0"/>
+  <text x="356" y="392" font-size="14" font-weight="600" fill="#12233a" text-anchor="middle">Postgres</text>
+  <text x="356" y="411" font-size="12" fill="#42556c" text-anchor="middle">全部状态都在这里</text>
+  <rect x="466" y="364" width="96" height="66" rx="8" fill="#eae6f6" stroke="#8a76c0"/>
+  <text x="514" y="392" font-size="14" font-weight="600" fill="#12233a" text-anchor="middle">Redis</text>
+  <text x="514" y="411" font-size="11.5" fill="#42556c" text-anchor="middle">队列</text>
+
+  <!-- GPU machine container -->
+  <rect x="662" y="95" width="248" height="300" rx="12" fill="#f2f8f4" stroke="#a9cbb6" stroke-dasharray="5 4"/>
+  <text x="680" y="120" font-size="13" font-weight="700" fill="#2f6f4f">GPU 机器（租借）</text>
+
+  <!-- Policy container -->
+  <rect x="686" y="140" width="200" height="70" rx="8" fill="#dff0e6" stroke="#5aa77a"/>
+  <text x="786" y="167" font-size="14" font-weight="600" fill="#12233a" text-anchor="middle">Policy 容器</text>
+  <text x="786" y="187" font-size="12" fill="#42556c" text-anchor="middle">你的 search</text>
+  <text x="786" y="202" font-size="12" fill="#42556c" text-anchor="middle">算法</text>
+
+  <!-- Engines -->
+  <rect x="686" y="238" width="200" height="52" rx="8" fill="#dff0e6" stroke="#5aa77a"/>
+  <text x="786" y="269" font-size="13.5" font-weight="600" fill="#12233a" text-anchor="middle">Engine (sglang)</text>
+  <rect x="686" y="300" width="200" height="52" rx="8" fill="#dff0e6" stroke="#5aa77a"/>
+  <text x="786" y="331" font-size="13.5" font-weight="600" fill="#12233a" text-anchor="middle">Engine (sglang)</text>
+
+  <!-- LLMBench -->
+  <rect x="662" y="430" width="248" height="66" rx="8" fill="#fdf0e3" stroke="#d3a05a"/>
+  <text x="786" y="458" font-size="14" font-weight="600" fill="#12233a" text-anchor="middle">LLMBench</text>
+  <text x="786" y="477" font-size="12" fill="#42556c" text-anchor="middle">benchmark 平台（外部）</text>
+
+  <!-- Arrows -->
+  <!-- Browser -> API -->
+  <line x1="180" y1="178" x2="256" y2="178" stroke="#5b6b7a" stroke-width="1.6" marker-end="url(#arr)"/>
+  <text x="218" y="170" font-size="11" fill="#5b6b7a" text-anchor="middle">REST</text>
+
+  <!-- Supervisor <-> Postgres -->
+  <line x1="356" y1="364" x2="356" y2="326" stroke="#5b6b7a" stroke-width="1.6" marker-end="url(#arr)" marker-start="url(#arr)"/>
+  <text x="356" y="352" font-size="11" fill="#5b6b7a" text-anchor="middle">读 / 写</text>
+
+  <!-- Policy -> API (dials out) -->
+  <line x1="686" y1="168" x2="564" y2="168" stroke="#2f6f4f" stroke-width="1.8" marker-end="url(#arrb)"/>
+  <text x="625" y="160" font-size="11" fill="#2f6f4f" text-anchor="middle">主动拨出</text>
+
+  <!-- Supervisor -> GPU machine (start containers) -->
+  <path d="M562 262 C 610 262, 632 230, 662 210" fill="none" stroke="#5b6b7a" stroke-width="1.8" marker-end="url(#arr)"/>
+  <text x="628" y="248" font-size="11" fill="#5b6b7a" text-anchor="middle">启动容器</text>
+  <text x="628" y="262" font-size="10.5" fill="#8090a0" text-anchor="middle">ssh+docker / k8s</text>
+
+  <!-- Supervisor -> LLMBench (submit) -->
+  <path d="M520 326 C 560 420, 600 458, 660 466" fill="none" stroke="#5b6b7a" stroke-width="1.6" marker-end="url(#arr)"/>
+  <text x="600" y="452" font-size="11" fill="#5b6b7a" text-anchor="middle">提交并轮询 benchmark</text>
+
+  <!-- LLMBench -> Engine (load) -->
+  <line x1="786" y1="430" x2="786" y2="354" stroke="#d3893a" stroke-width="1.8" marker-end="url(#arr)"/>
+  <text x="852" y="396" font-size="11" fill="#c07f2f" text-anchor="middle">施加负载</text>
+</svg>

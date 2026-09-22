@@ -1,0 +1,55 @@
+# Local development: the datastores in containers, the code on your machine.
+#
+#   docker compose -f deploy/docker/docker-compose.dev.yml up -d
+#   cd backend && uv sync && uv run alembic upgrade head
+#   uv run uvicorn app.main:app --reload --port 28100   # the API
+#   uv run python -m app.worker                         # the orchestrator
+#   cd ../frontend && npm install && npm run dev        # the UI, on :5173
+#
+# Deliberately NOT how the platform is deployed — that is the Helm chart in
+# ../helm/llm-autotune, and it is the only supported install. This file exists
+# so a contributor can run the tests and the app without a cluster.
+#
+# Ports are loopback-only and unusual on purpose: a dev box is often shared,
+# and 30000-32767 belongs to kube-proxy on a Kubernetes node.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: autotune
+      POSTGRES_PASSWORD: autotune
+      POSTGRES_DB: autotune
+    ports:
+      - "127.0.0.1:28432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U autotune"]
+      interval: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "127.0.0.1:28379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      retries: 10
+
+  # A fake benchmark platform, so the loop can be exercised without LLMBench.
+  # Opt in: `docker compose ... --profile mock up -d`, then point the backend
+  # at it with AUTOTUNE_LLMBENCH_BASE_URL=http://127.0.0.1:28101
+  llmbench-mock:
+    profiles: ["mock"]
+    build:
+      context: ../../backend
+      dockerfile: ../deploy/docker/Dockerfile.backend
+    command:
+      ["uvicorn", "app.mocks.llmbench_mock:app", "--host", "0.0.0.0", "--port", "8000"]
+    ports:
+      - "127.0.0.1:28101:8000"
+
+volumes:
+  pgdata:

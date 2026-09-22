@@ -1,0 +1,82 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1010 770" font-family="Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#4a4f5a"/>
+    </marker>
+  </defs>
+  <style>
+    .node { fill:#e9ebfa; stroke:#8f96d8; stroke-width:1.2; }
+    .hex  { fill:#eef0fb; stroke:#8f96d8; stroke-width:1.2; }
+    .out  { fill:#f7f8fc; stroke:#9aa3b5; stroke-width:1.2; }
+    .win  { fill:#e6f4ea; stroke:#57a06a; stroke-width:1.4; }
+    .ntitle { font-size:13px; font-weight:bold; fill:#1f2430; text-anchor:middle; }
+    .wtitle { font-size:13px; font-weight:bold; fill:#1e7a3a; text-anchor:middle; }
+    .nsub { font-size:11.5px; fill:#3a4050; text-anchor:middle; }
+    .edge { stroke:#4a4f5a; stroke-width:1.6; fill:none; }
+    .lab  { font-size:11px; fill:#333; paint-order:stroke; stroke:#ffffff; stroke-width:3.5; }
+    .labm { font-size:11px; fill:#333; text-anchor:middle; paint-order:stroke; stroke:#ffffff; stroke-width:3.5; }
+  </style>
+  <rect x="0" y="0" width="1010" height="770" fill="#ffffff"/>
+
+  <!-- main spine -->
+  <rect class="node" x="180" y="40" width="240" height="44" rx="6"/>
+  <text class="ntitle" x="300" y="67">a config the planner proposed</text>
+
+  <polygon class="hex" points="150,148 174,120 426,120 450,148 426,176 174,176"/>
+  <text class="ntitle" x="300" y="144">1 · Paper check</text>
+  <text class="nsub" x="300" y="162">constraints · fits in VRAM · free</text>
+
+  <polygon class="hex" points="150,258 174,230 426,230 450,258 426,286 174,286"/>
+  <text class="ntitle" x="300" y="254">2 · Launch &amp; health</text>
+  <text class="nsub" x="300" y="272">does it run &amp; answer correctly?</text>
+
+  <polygon class="hex" points="150,372 174,340 426,340 450,372 426,404 174,404"/>
+  <text class="ntitle" x="300" y="368">3 · Screening benchmark</text>
+  <text class="nsub" x="300" y="386">cheap · ~10–15 min · scores everyone</text>
+
+  <polygon class="hex" points="150,483 174,455 426,455 450,483 426,511 174,511"/>
+  <text class="ntitle" x="300" y="479">4 · Confirm the best</text>
+  <text class="nsub" x="300" y="497">repeat the top few · rule out luck</text>
+
+  <polygon class="hex" points="150,597 174,565 426,565 450,597 426,629 174,629"/>
+  <text class="ntitle" x="300" y="593">5 · Verify on real traffic</text>
+  <text class="nsub" x="300" y="611">replay the rolling dataset · finalists · ~1 h</text>
+
+  <rect class="win" x="176" y="675" width="248" height="52" rx="6"/>
+  <text class="wtitle" x="300" y="700">Recommended config(s)</text>
+  <text class="nsub" x="300" y="718">ranked against production</text>
+
+  <!-- spine arrows -->
+  <path class="edge" d="M300,84 V116" marker-end="url(#arr)"/>
+  <path class="edge" d="M300,176 V226" marker-end="url(#arr)"/>
+  <text class="lab" x="312" y="205">valid</text>
+  <path class="edge" d="M300,286 V336" marker-end="url(#arr)"/>
+  <text class="lab" x="312" y="315">healthy</text>
+  <path class="edge" d="M300,404 V451" marker-end="url(#arr)"/>
+  <text class="lab" x="312" y="431">promising</text>
+  <path class="edge" d="M300,511 V561" marker-end="url(#arr)"/>
+  <text class="lab" x="312" y="540">lead holds up</text>
+  <path class="edge" d="M300,629 V671" marker-end="url(#arr)"/>
+  <text class="lab" x="312" y="655">meets the SLOs</text>
+
+  <!-- rejects (dashed, right column) -->
+  <rect class="out" x="560" y="128" width="180" height="40" rx="6"/>
+  <text class="ntitle" x="650" y="152">rejected — free</text>
+  <path class="edge" d="M450,148 L556,148" stroke-dasharray="5 3" marker-end="url(#arr)"/>
+  <text class="labm" x="505" y="140">invalid</text>
+
+  <rect class="out" x="560" y="240" width="260" height="56" rx="6"/>
+  <text class="ntitle" x="690" y="262">failure, explained</text>
+  <text class="nsub" x="690" y="281">crash · OOM · garbage output</text>
+  <path class="edge" d="M450,258 L556,264" stroke-dasharray="5 3" marker-end="url(#arr)"/>
+  <text class="labm" x="505" y="250">broken</text>
+
+  <rect class="out" x="560" y="352" width="200" height="40" rx="6"/>
+  <text class="ntitle" x="660" y="376">culled — clearly worse</text>
+  <path class="edge" d="M450,372 L556,372" stroke-dasharray="5 3" marker-end="url(#arr)"/>
+  <text class="labm" x="505" y="364">loses</text>
+
+  <!-- feedback loop: failures -> planner proposals -->
+  <path class="edge" d="M820,268 V62 H424" marker-end="url(#arr)"/>
+  <text class="labm" x="640" y="50">failures &amp; dead-ends teach the search</text>
+</svg>

@@ -1,0 +1,45 @@
+# A realistic TuningRun, modeled on how the cluster already serves `qwen`
+# (sglang, hostPath weights, A100). The autotune platform generates one of these
+# per candidate config it wants to benchmark, then deletes it when done.
+apiVersion: tuning.llm-autotune.io/v1alpha1
+kind: TuningRun
+metadata:
+  name: autotune-run-sample
+  labels:
+    app.kubernetes.io/name: autotune-operator
+    app.kubernetes.io/managed-by: kustomize
+spec:
+  image: registry.example.com/sglang:v0.5.10.post1-gm-fix-v0.1
+  command: ["python3", "-m", "sglang.launch_server"]
+  # The full engine argv is built by the platform's engine adapter and passed
+  # through untouched — this is the one candidate config being measured.
+  args:
+    - "--model-path=/models/Qwen3.5-4B"
+    - "--served-model-name=qwen"
+    - "--host=0.0.0.0"
+    - "--port=8000"
+    - "--mem-fraction-static=0.9"   # <- a tuned knob
+    - "--trust-remote-code"
+    - "--enable-metrics"
+  port: 8000
+  gpuCount: 1
+  # Pin the card type so a card-specific result is attributed correctly.
+  nodeSelector:
+    nvidia.com/gpu.product: NVIDIA-A100-SXM4-80GB
+  # GPU nodes are commonly tainted so that pods with no use for cards keep off
+  # them. A pod that REQUESTS cards is what the node is being kept for, so it
+  # must say so — without this it sits Pending on an idle pool, reporting only
+  # "untolerated taint".
+  tolerations:
+    - key: nvidia.com/gpu
+      operator: Exists
+      effect: NoSchedule
+  # Weights come off the node, exactly like the live qwen deployment. A shared
+  # claim is the alternative — `modelPVC` plus `modelSubPath: Qwen3.5-4B` —
+  # which frees the run from the nodes someone pre-staged the weights on.
+  modelHostPath: /mnt/disk0/models
+  modelMountPath: /models
+  serviceType: NodePort
+  # Safety net: if the platform crashes and never deletes this run, free the GPU
+  # after an hour.
+  ttlSeconds: 3600

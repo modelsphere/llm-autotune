@@ -1,0 +1,35 @@
+# A GPU-free trial: `helm install autotune deploy/helm/llm-autotune \
+#   -f deploy/helm/llm-autotune/values-mock.yaml --set jwtSecret=... \
+#   --set adminPassword=...`
+#
+# Two fakes make the whole loop run for real — real scheduling, real launch,
+# real HTTP, real results — without GPUs or a benchmark platform:
+#   * a mock engine image that answers the same OpenAI endpoints sglang does,
+#     with configurable startup delay and crashes
+#   * a mock LLMBench that probes the deployed endpoint, then reports
+#     deterministic numbers
+#
+# It proves the platform, not a model. Nothing measured this way means anything
+# about performance.
+mock:
+  enabled: true
+
+gpuCluster:
+  inCluster: true
+  workloadKind: deployment
+  # No device plugin and no GPU nodes on a kind cluster, so ask for neither.
+  gpuResource: ""
+  runtimeClass: ""
+  tolerateGpuTaint: false
+  autoRegister: true
+
+# kind has no RWX storage class; engine logs are the only thing lost.
+runLogs:
+  enabled: false
+
+postgresql:
+  storage:
+    size: 1Gi
+
+llmbench:
+  benchmarkSlug: mock-suite-v1

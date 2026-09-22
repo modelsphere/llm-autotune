@@ -1,0 +1,7 @@
+#!/usr/bin/env python3
+"""Shim so `vllm serve <model> <flags>` runs the mock engine."""
+
+from mock_engine import main
+
+if __name__ == "__main__":
+    main(mode="vllm")

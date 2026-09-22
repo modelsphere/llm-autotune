@@ -1,0 +1,74 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 600" font-family="Helvetica, Arial, sans-serif">
+  <style>
+    .card { fill:#ffffff; stroke:#c3c9d6; stroke-width:1.4; }
+    .h1 { font-size:20px; font-weight:bold; fill:#1f2430; }
+    .h2 { font-size:12.5px; fill:#5c6270; }
+    .sec { font-size:13px; font-weight:bold; fill:#1f2430; }
+    .col { font-size:11.5px; font-weight:bold; fill:#5c6270; }
+    .val { font-size:12.5px; fill:#1f2430; }
+    .valb { font-size:12.5px; font-weight:bold; fill:#1f2430; }
+    .verd { fill:#e6f4ea; stroke:#57a06a; stroke-width:1.4; }
+    .verdt { font-size:14px; font-weight:bold; fill:#1e7a3a; }
+    .win { fill:#eef7f0; }
+    .amber { fill:#fdf3e0; stroke:#d0a85a; stroke-width:1.2; }
+    .ambert { font-size:12px; fill:#8a6a1e; }
+    .red { fill:#fbeaea; stroke:#c96b6b; stroke-width:1.2; }
+    .redt { font-size:12px; fill:#a23b3b; }
+    .foot { font-size:11px; fill:#7a808c; }
+    .rule { stroke:#e2e5ec; stroke-width:1; }
+    .pos { fill:#1e7a3a; font-weight:bold; }
+    .neg { fill:#a23b3b; }
+  </style>
+  <rect x="0" y="0" width="1000" height="600" fill="#ffffff"/>
+  <rect class="card" x="40" y="24" width="920" height="556" rx="12"/>
+
+  <!-- header -->
+  <text class="h1" x="68" y="66">Morning report</text>
+  <text class="h2" x="68" y="88">Qwen3.5-4B · sglang · objective: maximize throughput per GPU</text>
+  <line class="rule" x1="60" y1="102" x2="940" y2="102"/>
+
+  <!-- verdict banner -->
+  <rect class="verd" x="68" y="118" width="864" height="46" rx="8"/>
+  <text class="verdt" x="88" y="146">✓ tp=2 · mem 0.90 beats production by +12%  —  68,587 vs 61,240 tok/min/GPU</text>
+
+  <!-- leaderboard -->
+  <text class="sec" x="68" y="200">Leaderboard vs production</text>
+  <text class="col" x="88" y="224">Configuration</text>
+  <text class="col" x="690" y="224" text-anchor="end">tok/min/GPU</text>
+  <text class="col" x="912" y="224" text-anchor="end">vs production</text>
+  <line class="rule" x1="68" y1="232" x2="932" y2="232"/>
+
+  <text class="val" x="88" y="256">production (as handed over)</text>
+  <text class="val" x="690" y="256" text-anchor="end">61,240</text>
+  <text class="val" x="912" y="256" text-anchor="end">—</text>
+
+  <rect class="win" x="68" y="268" width="864" height="28" rx="4"/>
+  <text class="valb" x="88" y="288">tp=2 · mem 0.90   ★ winner</text>
+  <text class="valb" x="690" y="288" text-anchor="end">68,587</text>
+  <text class="valb pos" x="912" y="288" text-anchor="end">+12%</text>
+
+  <text class="val" x="88" y="320">tp=2 · mem 0.85</text>
+  <text class="val" x="690" y="320" text-anchor="end">68,406</text>
+  <text class="val pos" x="912" y="320" text-anchor="end">+12%</text>
+
+  <text class="val" x="88" y="352">tp=4 · mem 0.85</text>
+  <text class="val" x="690" y="352" text-anchor="end">43,607</text>
+  <text class="val neg" x="912" y="352" text-anchor="end">−29%</text>
+  <line class="rule" x1="68" y1="366" x2="932" y2="366"/>
+
+  <!-- disqualified -->
+  <rect class="amber" x="68" y="384" width="864" height="34" rx="6"/>
+  <text class="ambert" x="88" y="405">⚠ Ran, but disqualified — crossed a redline:  tp=4 · mem 0.90  (99p latency over limit)</text>
+
+  <!-- failed -->
+  <rect class="red" x="68" y="428" width="864" height="34" rx="6"/>
+  <text class="redt" x="88" y="449">✗ Failed:  tp=1  — out of memory</text>
+
+  <!-- next step -->
+  <text class="sec" x="68" y="498">→ Suggested next step</text>
+  <text class="val" x="68" y="520">Validate the winner on live traffic before promoting it.</text>
+
+  <!-- footer -->
+  <line class="rule" x1="60" y1="540" x2="940" y2="540"/>
+  <text class="foot" x="68" y="562">Replayed sample qwen-2026-08 · machine node-24 · illustrative example</text>
+</svg>

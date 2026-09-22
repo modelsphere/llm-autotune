@@ -1,0 +1,120 @@
+/* A report's look, shared by the platform page and the HTML export.
+   Everything is scoped under .ar so it can sit inside any site. */
+
+.ar {
+  --ar-text: #1f2328;
+  --ar-muted: #6b7280;
+  --ar-border: #e5e7eb;
+  --ar-soft: #f6f8fa;
+  --ar-accent: #ee7b30;
+  --ar-good: #1a7f4b;
+  --ar-good-bg: #e6f4ec;
+  --ar-bad: #b42318;
+  --ar-bad-bg: #fdecea;
+  color: var(--ar-text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC",
+    "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans CJK SC", Helvetica, Arial, sans-serif;
+  font-size: 15.5px;
+  line-height: 1.7;
+  max-width: 960px;
+  margin: 0 auto;
+  word-wrap: break-word;
+}
+.ar h1 { font-size: 2em; line-height: 1.25; margin: 0.4em 0 0.6em; font-weight: 700; letter-spacing: -0.01em; }
+.ar h2 {
+  font-size: 1.45em; margin: 1.8em 0 0.6em; padding-bottom: 0.3em;
+  border-bottom: 1px solid var(--ar-border); font-weight: 650;
+}
+.ar h3 { font-size: 1.18em; margin: 1.5em 0 0.5em; font-weight: 650; }
+.ar h4 { font-size: 1em; margin: 1.2em 0 0.4em; font-weight: 650; }
+.ar p { margin: 0.7em 0; }
+.ar ul, .ar ol { padding-left: 1.5em; margin: 0.6em 0; }
+.ar li { margin: 0.25em 0; }
+.ar a { color: #2563eb; text-decoration: none; }
+.ar a:hover { text-decoration: underline; }
+.ar hr { border: 0; border-top: 1px solid var(--ar-border); margin: 2em 0; }
+.ar blockquote {
+  margin: 1em 0; padding: 0.4em 1em; border-left: 3px solid var(--ar-accent);
+  background: var(--ar-soft); color: var(--ar-muted); border-radius: 0 6px 6px 0;
+}
+.ar img { max-width: 100%; display: block; margin: 1em auto; border-radius: 8px; border: 1px solid var(--ar-border); }
+.ar code {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.88em;
+}
+.ar :not(pre) > code { background: var(--ar-soft); border: 1px solid var(--ar-border); padding: 0.1em 0.35em; border-radius: 5px; }
+
+/* code blocks: light, to sit on the page (GitHub light palette) */
+.ar .ar-code { margin: 1em 0; border-radius: 10px; overflow: hidden; background: var(--ar-soft); border: 1px solid var(--ar-border); }
+.ar .ar-code-bar {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 5px 10px 5px 14px; border-bottom: 1px solid var(--ar-border); color: var(--ar-muted); font-size: 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.ar .ar-copy {
+  background: #fff; color: var(--ar-text); border: 1px solid #d0d7de; border-radius: 6px;
+  padding: 2px 10px; font-size: 12px; cursor: pointer; font-family: inherit;
+}
+.ar .ar-copy:hover { background: #f3f4f6; border-color: #afb8c1; }
+.ar .ar-code pre { margin: 0; padding: 14px 16px; overflow-x: auto; color: #1f2328; line-height: 1.6; }
+.ar .ar-code pre code { font-size: 13px; background: none; border: 0; padding: 0; }
+.ar .hljs-built_in { color: #8250df; font-weight: 600; }
+.ar .hljs-keyword { color: #cf222e; }
+.ar .hljs-attr { color: #0550ae; }
+.ar .hljs-string { color: #0a3069; }
+.ar .hljs-number, .ar .hljs-literal { color: #953800; }
+.ar .hljs-variable, .ar .hljs-template-variable { color: #116329; }
+.ar .hljs-comment { color: #6e7781; font-style: italic; }
+.ar .hljs-meta { color: #6e7781; }
+.ar .hljs-title, .ar .hljs-section { color: #8250df; }
+.ar .hljs-punctuation { color: #57606a; }
+
+/* tables */
+.ar .ar-note {
+  margin: -0.4em 0 1.4em; padding: 8px 12px; font-size: 13.5px; line-height: 1.65;
+  color: var(--ar-text); background: var(--ar-soft); border-left: 3px solid var(--ar-accent);
+  border-radius: 0 6px 6px 0;
+}
+.ar .ar-table-wrap { overflow-x: auto; margin: 1em 0; border: 1px solid var(--ar-border); border-radius: 10px; }
+.ar table { border-collapse: collapse; width: 100%; font-size: 14px; }
+.ar th, .ar td { padding: 9px 14px; border-bottom: 1px solid var(--ar-border); text-align: left; vertical-align: top; }
+.ar thead th {
+  background: var(--ar-soft); font-weight: 600; font-size: 12.5px; color: var(--ar-muted);
+  text-transform: none; white-space: nowrap;
+}
+.ar tbody tr:last-child td { border-bottom: 0; }
+.ar tbody tr:hover td { background: #fafbfc; }
+.ar .ar-num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.ar .ar-sub { font-size: 12px; color: var(--ar-muted); margin-top: 2px; }
+.ar .ar-muted { color: var(--ar-muted); }
+.ar .ar-pct { display: inline-block; padding: 0 6px; border-radius: 999px; font-size: 12px; font-weight: 600; margin-left: 2px; }
+.ar .ar-good { color: var(--ar-good); background: var(--ar-good-bg); }
+.ar .ar-bad { color: var(--ar-bad); background: var(--ar-bad-bg); }
+.ar .ar-flat { color: var(--ar-muted); background: var(--ar-soft); }
+/* markdown tables the agent wrote itself */
+.ar > table { border: 1px solid var(--ar-border); border-radius: 10px; display: block; overflow-x: auto; }
+
+/* charts */
+.ar .ar-chart { position: relative; }
+.ar .ar-switch {
+  position: absolute; top: 34px; left: 50%; transform: translateX(-50%); z-index: 1;
+  display: inline-flex; border: 1px solid var(--ar-border); border-radius: 7px; overflow: hidden; background: #fff;
+}
+.ar .ar-switch button {
+  border: 0; background: none; padding: 2px 12px; font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--ar-muted); cursor: pointer;
+}
+.ar .ar-switch button + button { border-left: 1px solid var(--ar-border); }
+.ar .ar-switch button:hover { background: var(--ar-soft); }
+.ar .ar-switch button[aria-pressed="true"] { background: var(--ar-text); color: #fff; }
+.ar .ar-chart { width: 100%; margin: 1.2em 0; border: 1px solid var(--ar-border); border-radius: 10px; padding: 8px 4px; box-sizing: border-box; }
+.ar .ar-error { margin: 1em 0; padding: 10px 14px; border-radius: 8px; background: var(--ar-bad-bg); color: var(--ar-bad); font-size: 13px; }
+
+/* the standalone page around it */
+.ar-page { padding: 32px 20px 64px; background: #fff; }
+.ar-langs { max-width: 960px; margin: 0 auto 8px; display: flex; justify-content: flex-end; gap: 6px; }
+.ar-langs button {
+  border: 1px solid var(--ar-border, #e5e7eb); background: #fff; border-radius: 999px; padding: 3px 12px;
+  font-size: 13px; cursor: pointer; color: #374151;
+}
+.ar-langs button.active { background: #1f2328; color: #fff; border-color: #1f2328; }

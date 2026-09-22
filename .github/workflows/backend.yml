@@ -1,0 +1,51 @@
+name: backend
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv sync --extra dev
+      - run: uv run ruff check .
+      - run: uv run pytest -q
+
+  schema:
+    # The suite runs on SQLite; the schema has to be right on the database the
+    # platform actually deploys against.
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: autotune
+          POSTGRES_PASSWORD: autotune
+          POSTGRES_DB: autotune
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U autotune"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      AUTOTUNE_SYNC_DATABASE_URL: postgresql+psycopg2://autotune:autotune@localhost:5432/autotune
+      AUTOTUNE_DATABASE_URL: postgresql+asyncpg://autotune:autotune@localhost:5432/autotune
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync --extra dev
+      - name: Migrate a fresh database
+        run: uv run alembic upgrade head
+      - name: The models and the migrations agree
+        run: uv run alembic check

@@ -1,0 +1,364 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.21.0
+  name: tuningruns.tuning.llm-autotune.io
+spec:
+  group: tuning.llm-autotune.io
+  names:
+    kind: TuningRun
+    listKind: TuningRunList
+    plural: tuningruns
+    shortNames:
+    - tr
+    singular: tuningrun
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .spec.gpuCount
+      name: GPUs
+      type: integer
+    - jsonPath: .status.endpoint
+      name: Endpoint
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          TuningRun is one serving workload the autotune platform runs to benchmark a
+          single candidate config. It is the contract between the platform (writes spec)
+          and this operator (writes status).
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: spec defines the desired workload.
+            properties:
+              args:
+                description: |-
+                  Args is the full engine argument vector — model path, served-model-name,
+                  host, port, and the tuned knobs. The operator passes it through untouched.
+                items:
+                  type: string
+                type: array
+              command:
+                description: |-
+                  Command overrides the image entrypoint. Usually left empty so the image's
+                  own entrypoint runs; set it when the platform wants an explicit argv[0].
+                items:
+                  type: string
+                type: array
+              env:
+                additionalProperties:
+                  type: string
+                description: Env are extra environment variables for the engine container.
+                type: object
+              gpuCount:
+                description: |-
+                  GPUCount is the number of GPUs to request as an extended resource. Devices
+                  are chosen by the scheduler — we never pin indices. 0 runs CPU-only (used
+                  by tests and the occasional CPU workload).
+                format: int32
+                minimum: 0
+                type: integer
+              gpuResourceName:
+                default: nvidia.com/gpu
+                description: |-
+                  GPUResourceName is the extended resource requested per GPU. Defaults to
+                  nvidia.com/gpu.
+                type: string
+              image:
+                description: |-
+                  Image is the serving container image, ideally digest-pinned (e.g.
+                  registry.example.com/...@sha256:...) so a rollout is reproducible.
+                minLength: 1
+                type: string
+              imagePullPolicy:
+                default: IfNotPresent
+                description: |-
+                  ImagePullPolicy for the engine container. Defaults to IfNotPresent, since
+                  large engine images should not be re-pulled inside the run's clock.
+                enum:
+                - Always
+                - IfNotPresent
+                - Never
+                type: string
+              imagePullSecrets:
+                description: |-
+                  ImagePullSecrets are names of secrets in the run's namespace used to pull
+                  Image (e.g. a registry credential).
+                items:
+                  type: string
+                type: array
+              modelHostPath:
+                description: |-
+                  ModelHostPath, when set, is mounted at ModelMountPath from the node's
+                  filesystem — matching how the cluster serves weights today (a hostPath such
+                  as /mnt/disk0/models). Leave empty if the image already carries the weights.
+                type: string
+              modelMountPath:
+                default: /models
+                description: ModelMountPath is where the model volume is mounted.
+                  Defaults to /models.
+                type: string
+              modelPVC:
+                description: |-
+                  ModelPVC, when set (and ModelHostPath is empty), mounts a
+                  PersistentVolumeClaim of this name at ModelMountPath instead of a hostPath.
+                type: string
+              modelSubPath:
+                description: |-
+                  ModelSubPath is the path WITHIN the model volume to expose at
+                  ModelMountPath. It is how one shared weights PVC serves many models: the
+                  claim is mounted once and each run names its own directory
+                  ("modelforge/release_260817"). Ignored for a hostPath, which already names
+                  the directory it mounts.
+                type: string
+              nodeSelector:
+                additionalProperties:
+                  type: string
+                description: |-
+                  NodeSelector constrains which nodes the workload lands on — e.g. pick a card
+                  type with nvidia.com/gpu.product: NVIDIA-A100-SXM4-80GB, which matters when
+                  a result is specific to a GPU model.
+                type: object
+              port:
+                description: |-
+                  Port is the TCP port the engine serves HTTP on. It drives the container
+                  port, the readiness probe, and the Service target port.
+                format: int32
+                maximum: 65535
+                minimum: 1
+                type: integer
+              readinessPath:
+                default: /v1/models
+                description: |-
+                  ReadinessPath is the HTTP path polled for readiness. Defaults to
+                  /v1/models — the OpenAI-style endpoint sglang/vLLM expose only once weights
+                  are loaded, which is exactly the "ready to serve" signal we want.
+                type: string
+              runtimeClassName:
+                description: |-
+                  RuntimeClassName for the pod. When nil it defaults to "nvidia" if GPUCount
+                  > 0 and empty otherwise. Set it explicitly (including to "") to override.
+                type: string
+              serviceType:
+                default: NodePort
+                description: |-
+                  ServiceType controls how the engine endpoint is exposed. NodePort (default)
+                  publishes it on the node network for a benchmarker outside the cluster;
+                  ClusterIP keeps it in-cluster.
+                enum:
+                - NodePort
+                - ClusterIP
+                type: string
+              sharedMemoryMB:
+                description: |-
+                  SharedMemoryMB, when > 0, mounts an in-memory emptyDir of this size at
+                  /dev/shm — tensor-parallel engines need far more than the 64Mi default.
+                format: int32
+                minimum: 0
+                type: integer
+              tolerations:
+                description: |-
+                  Tolerations the pod carries. A GPU node is commonly tainted so that pods
+                  with no use for cards keep off it (nvidia.com/gpu=...:NoSchedule on our
+                  clusters), and a pod that REQUESTS cards is exactly what such a node is
+                  being kept for — so it must tolerate that taint or it sits Pending on an
+                  idle pool, reporting only "untolerated taint". The platform decides which
+                  taints a run may ignore; the operator passes them through untouched.
+                items:
+                  description: |-
+                    The pod this Toleration is attached to tolerates any taint that matches
+                    the triple <key,value,effect> using the matching operator <operator>.
+                  properties:
+                    effect:
+                      description: |-
+                        Effect indicates the taint effect to match. Empty means match all taint effects.
+                        When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
+                      type: string
+                    key:
+                      description: |-
+                        Key is the taint key that the toleration applies to. Empty means match all taint keys.
+                        If the key is empty, operator must be Exists; this combination means to match all values and all keys.
+                      type: string
+                    operator:
+                      description: |-
+                        Operator represents a key's relationship to the value.
+                        Valid operators are Exists, Equal, Lt, and Gt. Defaults to Equal.
+                        Exists is equivalent to wildcard for value, so that a pod can
+                        tolerate all taints of a particular category.
+                        Lt and Gt perform numeric comparisons (requires feature gate TaintTolerationComparisonOperators).
+                      type: string
+                    tolerationSeconds:
+                      description: |-
+                        TolerationSeconds represents the period of time the toleration (which must be
+                        of effect NoExecute, otherwise this field is ignored) tolerates the taint. By default,
+                        it is not set, which means tolerate the taint forever (do not evict). Zero and
+                        negative values will be treated as 0 (evict immediately) by the system.
+                      format: int64
+                      type: integer
+                    value:
+                      description: |-
+                        Value is the taint value the toleration matches to.
+                        If the operator is Exists, the value should be empty, otherwise just a regular string.
+                      type: string
+                  type: object
+                type: array
+              ttlSeconds:
+                description: |-
+                  TTLSeconds is a safety net. If > 0 and the run has existed this long, the
+                  operator tears the workload down and marks it Expired, so a platform crash
+                  cannot leak GPUs indefinitely. 0 disables it (the platform deletes the run).
+                format: int32
+                minimum: 0
+                type: integer
+            required:
+            - gpuCount
+            - image
+            - port
+            type: object
+          status:
+            description: status is the observed state.
+            properties:
+              conditions:
+                description: Conditions carry the standard Ready condition (and Failed
+                  detail).
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+              endpoint:
+                description: |-
+                  Endpoint is the base URL where the served model answers, reachable per
+                  ServiceType (e.g. http://<nodeIP>:<nodePort>). Set once Ready.
+                type: string
+              message:
+                description: Message is a human-readable detail.
+                type: string
+              nodeName:
+                type: string
+              nodePort:
+                description: NodePort is the allocated node port when ServiceType
+                  is NodePort.
+                format: int32
+                type: integer
+              observedGeneration:
+                description: ObservedGeneration is the spec generation the operator
+                  last acted on.
+                format: int64
+                type: integer
+              phase:
+                description: Phase is the coarse state; see TuningRunPhase.
+                enum:
+                - Pending
+                - Starting
+                - Ready
+                - Failed
+                - Expired
+                type: string
+              podName:
+                description: |-
+                  PodName and NodeName record where the workload landed, for logs and
+                  debugging.
+                type: string
+              readyTime:
+                format: date-time
+                type: string
+              reason:
+                description: |-
+                  Reason is a short machine-readable cause, most useful on Failed (e.g.
+                  OOMKilled, ImagePullBackOff, CrashLoopBackOff, Unschedulable), so the
+                  platform can classify a failure rather than seeing only "failed".
+                type: string
+              startTime:
+                description: |-
+                  StartTime is when the workload was first created; ReadyTime when it first
+                  became Ready.
+                format: date-time
+                type: string
+            type: object
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

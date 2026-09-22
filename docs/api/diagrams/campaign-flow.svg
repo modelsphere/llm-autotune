@@ -1,0 +1,73 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 820 790" font-family="-apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#5b6b7a"/>
+    </marker>
+  </defs>
+  <rect width="820" height="790" fill="#ffffff"/>
+
+  <text x="30" y="40" font-size="22" font-weight="700" fill="#12233a">Campaign flow</text>
+  <text x="30" y="64" font-size="14" fill="#5b6b7a">One policy tunes one model on one machine over a time window. The policy searches; the platform delivers the verdict.</text>
+
+  <!-- legend -->
+  <rect x="648" y="12" width="14" height="14" rx="3" fill="#dff0e6" stroke="#5aa77a"/>
+  <text x="668" y="24" font-size="12" fill="#42556c">the policy acts</text>
+  <rect x="648" y="32" width="14" height="14" rx="3" fill="#e4edfb" stroke="#5a86c9"/>
+  <text x="668" y="44" font-size="12" fill="#42556c">the platform acts</text>
+
+  <!-- Setup -->
+  <rect x="210" y="92" width="400" height="54" rx="8" fill="#eef2f7" stroke="#9fb0c3"/>
+  <text x="410" y="115" font-size="14" font-weight="600" fill="#12233a" text-anchor="middle">1 · Create the campaign</text>
+  <text x="410" y="133" font-size="12" fill="#42556c" text-anchor="middle">model, search space, benchmark + objective, window, policy</text>
+
+  <line x1="410" y1="146" x2="410" y2="170" stroke="#5b6b7a" stroke-width="1.6" marker-end="url(#a)"/>
+  <rect x="210" y="170" width="400" height="46" rx="8" fill="#e4edfb" stroke="#5a86c9"/>
+  <text x="410" y="198" font-size="13.5" font-weight="600" fill="#12233a" text-anchor="middle">Reserve a GPU machine and clear it</text>
+
+  <line x1="410" y1="216" x2="410" y2="240" stroke="#5b6b7a" stroke-width="1.6" marker-end="url(#a)"/>
+  <rect x="210" y="240" width="400" height="46" rx="8" fill="#e4edfb" stroke="#5a86c9"/>
+  <text x="410" y="268" font-size="13.5" font-weight="600" fill="#12233a" text-anchor="middle">Start the policy container on the machine</text>
+
+  <line x1="410" y1="286" x2="410" y2="316" stroke="#5b6b7a" stroke-width="1.6" marker-end="url(#a)"/>
+
+  <!-- Search loop container -->
+  <rect x="95" y="316" width="630" height="250" rx="12" fill="#fbfcfd" stroke="#c4d2e0" stroke-dasharray="5 4"/>
+  <text x="120" y="342" font-size="14" font-weight="700" fill="#3d5169">2 · The policy searches — repeats until the deadline</text>
+
+  <!-- cycle boxes -->
+  <rect x="130" y="366" width="250" height="60" rx="8" fill="#dff0e6" stroke="#5aa77a"/>
+  <text x="255" y="392" font-size="13.5" font-weight="600" fill="#12233a" text-anchor="middle">Propose settings to try</text>
+  <text x="255" y="411" font-size="12" fill="#42556c" text-anchor="middle">from its search space</text>
+
+  <rect x="440" y="366" width="250" height="60" rx="8" fill="#e4edfb" stroke="#5a86c9"/>
+  <text x="565" y="392" font-size="13.5" font-weight="600" fill="#12233a" text-anchor="middle">Platform launches an engine</text>
+  <text x="565" y="411" font-size="12" fill="#42556c" text-anchor="middle">boots it, waits until healthy</text>
+
+  <rect x="440" y="470" width="250" height="60" rx="8" fill="#e4edfb" stroke="#5a86c9"/>
+  <text x="565" y="496" font-size="13.5" font-weight="600" fill="#12233a" text-anchor="middle">Platform runs the benchmark</text>
+  <text x="565" y="515" font-size="12" fill="#42556c" text-anchor="middle">short replay → one score</text>
+
+  <rect x="130" y="470" width="250" height="60" rx="8" fill="#dff0e6" stroke="#5aa77a"/>
+  <text x="255" y="496" font-size="13.5" font-weight="600" fill="#12233a" text-anchor="middle">Update its best contenders</text>
+  <text x="255" y="515" font-size="12" fill="#42556c" text-anchor="middle">keeps the list current</text>
+
+  <!-- cycle arrows (clockwise) -->
+  <line x1="380" y1="396" x2="436" y2="396" stroke="#5b6b7a" stroke-width="1.6" marker-end="url(#a)"/>
+  <line x1="565" y1="426" x2="565" y2="466" stroke="#5b6b7a" stroke-width="1.6" marker-end="url(#a)"/>
+  <line x1="440" y1="500" x2="384" y2="500" stroke="#5b6b7a" stroke-width="1.6" marker-end="url(#a)"/>
+  <line x1="255" y1="470" x2="255" y2="430" stroke="#5b6b7a" stroke-width="1.6" marker-end="url(#a)"/>
+
+  <!-- Deadline -> validate -->
+  <line x1="410" y1="566" x2="410" y2="592" stroke="#5b6b7a" stroke-width="1.6" marker-end="url(#a)"/>
+  <rect x="230" y="592" width="360" height="44" rx="8" fill="#dff0e6" stroke="#5aa77a"/>
+  <text x="410" y="619" font-size="13.5" font-weight="600" fill="#12233a" text-anchor="middle">3 · At the deadline, the policy finalizes and stops</text>
+
+  <line x1="410" y1="636" x2="410" y2="660" stroke="#5b6b7a" stroke-width="1.6" marker-end="url(#a)"/>
+  <rect x="180" y="660" width="460" height="56" rx="8" fill="#d3e3fb" stroke="#3f6fbf" stroke-width="1.6"/>
+  <text x="410" y="685" font-size="14" font-weight="700" fill="#12233a" text-anchor="middle">4 · Platform validates the top contender = the verdict</text>
+  <text x="410" y="704" font-size="12" fill="#42556c" text-anchor="middle">launches it itself and measures it — the same way for every campaign</text>
+
+  <line x1="410" y1="716" x2="410" y2="738" stroke="#5b6b7a" stroke-width="1.6" marker-end="url(#a)"/>
+  <rect x="230" y="738" width="360" height="40" rx="8" fill="#eef2f7" stroke="#9fb0c3"/>
+  <text x="410" y="763" font-size="13.5" font-weight="600" fill="#12233a" text-anchor="middle">Done — verdict recorded, machine restored and returned</text>
+</svg>

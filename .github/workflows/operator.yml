@@ -1,0 +1,27 @@
+name: operator
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths: ["operator/**", ".github/workflows/operator.yml"]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: operator
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: operator/go.mod
+          cache-dependency-path: operator/go.sum
+      - run: go vet ./...
+      - run: make test
+      - name: The generated manifests are current
+        run: |
+          make manifests generate
+          git diff --exit-code \
+            || { echo "::error::run 'make manifests generate' and commit the result"; exit 1; }

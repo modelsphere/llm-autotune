@@ -1,0 +1,26 @@
+server {
+    listen 80;
+    root /usr/share/nginx/html;
+    index index.html;
+
+    location /api/ {
+        # Re-resolve the API's address at request time rather than caching it
+        # once at worker start: a redeploy that recreates the API gives it a
+        # new address, and with a static upstream nginx keeps proxying to the
+        # dead one until someone restarts this container by hand. A variable in
+        # proxy_pass is what forces the lookup to happen per request.
+        #
+        # The resolver is the container's own, read from /etc/resolv.conf at
+        # startup (see 10-resolver.sh), so this one file works behind Docker's
+        # embedded DNS and behind a cluster's DNS service alike.
+        resolver ${NGINX_RESOLVER} valid=10s ipv6=off;
+        set $api_upstream ${API_UPSTREAM};
+        proxy_pass http://$api_upstream$request_uri;
+        proxy_set_header Host $host;
+        proxy_read_timeout 300s;
+    }
+
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+}

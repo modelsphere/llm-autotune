@@ -1,0 +1,78 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="820" viewBox="0 0 1400 820">
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L10,3 L0,6 Z" fill="#334155"/>
+    </marker>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="3" stdDeviation="5" flood-color="#0f172a" flood-opacity="0.14"/>
+    </filter>
+    <style>
+      .title { font: 700 32px -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif; fill:#0f172a; }
+      .subtitle { font: 400 18px -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif; fill:#475569; }
+      .box-title { font: 700 20px -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif; fill:#0f172a; }
+      .box-text { font: 400 16px -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif; fill:#334155; }
+      .label { font: 600 16px -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif; fill:#334155; }
+      .small { font: 400 15px -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif; fill:#64748b; }
+    </style>
+  </defs>
+  <rect width="1400" height="820" fill="#f8fafc"/>
+  <text x="70" y="62" class="title">策略（Policy）的典型内部结构</text>
+  <text x="70" y="96" class="subtitle">策略负责决定下一步尝试什么；平台负责启动、测量并返回结果</text>
+
+  <rect x="50" y="135" width="930" height="610" rx="24" fill="#eef2ff" stroke="#6366f1" stroke-width="3" stroke-dasharray="10 8"/>
+  <text x="82" y="178" class="box-title" fill="#3730a3">策略容器</text>
+  <text x="82" y="207" class="small">运行在 GPU 机器上，通过策略 API 主动调用平台</text>
+
+  <rect x="95" y="250" width="245" height="105" rx="14" fill="#ffffff" stroke="#94a3b8" stroke-width="2" filter="url(#shadow)"/>
+  <text x="217" y="288" text-anchor="middle" class="box-title">读取任务与配置</text>
+  <text x="217" y="317" text-anchor="middle" class="box-text">model · search space</text>
+  <text x="217" y="340" text-anchor="middle" class="box-text">deadline · benchmark</text>
+
+  <rect x="395" y="250" width="245" height="105" rx="14" fill="#ffffff" stroke="#94a3b8" stroke-width="2" filter="url(#shadow)"/>
+  <text x="517" y="288" text-anchor="middle" class="box-title">候选生成器</text>
+  <text x="517" y="317" text-anchor="middle" class="box-text">随机 / 规则 / 历史结果</text>
+  <text x="517" y="340" text-anchor="middle" class="box-text">提出下一组 engine 设置</text>
+
+  <rect x="695" y="250" width="245" height="105" rx="14" fill="#ffffff" stroke="#94a3b8" stroke-width="2" filter="url(#shadow)"/>
+  <text x="817" y="288" text-anchor="middle" class="box-title">运行协调器</text>
+  <text x="817" y="317" text-anchor="middle" class="box-text">launch · benchmark</text>
+  <text x="817" y="340" text-anchor="middle" class="box-text">等待状态和结果</text>
+
+  <rect x="695" y="470" width="245" height="105" rx="14" fill="#ecfdf5" stroke="#10b981" stroke-width="2" filter="url(#shadow)"/>
+  <text x="817" y="508" text-anchor="middle" class="box-title">结果记录与排序</text>
+  <text x="817" y="537" text-anchor="middle" class="box-text">保存试验结果</text>
+  <text x="817" y="562" text-anchor="middle" class="box-text">更新候选配置列表</text>
+
+  <polygon points="500,445 630,520 500,595 370,520" fill="#fff7ed" stroke="#f97316" stroke-width="3" filter="url(#shadow)"/>
+  <text x="500" y="510" text-anchor="middle" class="box-title">搜索是否完成？</text>
+  <text x="500" y="536" text-anchor="middle" class="box-text">截止时间 / 停止指令？</text>
+
+  <rect x="350" y="650" width="300" height="60" rx="14" fill="#fef2f2" stroke="#ef4444" stroke-width="2" filter="url(#shadow)"/>
+  <text x="500" y="687" text-anchor="middle" class="box-title">finalize · 清理并退出</text>
+
+  <path d="M340 302 L395 302" stroke="#334155" stroke-width="3" fill="none" marker-end="url(#arrow)"/>
+  <path d="M640 302 L695 302" stroke="#334155" stroke-width="3" fill="none" marker-end="url(#arrow)"/>
+  <path d="M817 355 L817 470" stroke="#334155" stroke-width="3" fill="none" marker-end="url(#arrow)"/>
+  <path d="M695 522 L630 522" stroke="#334155" stroke-width="3" fill="none" marker-end="url(#arrow)"/>
+  <path d="M500 445 L500 400 L517 355" stroke="#334155" stroke-width="3" fill="none" marker-end="url(#arrow)"/>
+  <path d="M500 595 L500 650" stroke="#ef4444" stroke-width="3" fill="none" marker-end="url(#arrow)"/>
+  <text x="525" y="390" class="label">否：继续搜索</text>
+  <text x="520" y="628" class="label" fill="#b91c1c">是：停止</text>
+
+  <rect x="1035" y="190" width="315" height="390" rx="20" fill="#ffffff" stroke="#0ea5e9" stroke-width="3" filter="url(#shadow)"/>
+  <text x="1192" y="235" text-anchor="middle" class="box-title" fill="#0369a1">平台 API</text>
+  <path d="M1035 270 L1350 270" stroke="#bae6fd" stroke-width="2"/>
+  <text x="1070" y="315" class="box-text">• 启动 / 回收 engine</text>
+  <text x="1070" y="355" class="box-text">• 运行 benchmark</text>
+  <text x="1070" y="395" class="box-text">• 返回状态和分数</text>
+  <text x="1070" y="435" class="box-text">• 接收 heartbeat</text>
+  <text x="1070" y="475" class="box-text">• 最终验证候选配置</text>
+  <text x="1070" y="535" class="small">平台不会反向调用策略容器</text>
+
+  <path d="M940 302 L1035 302" stroke="#0ea5e9" stroke-width="3" fill="none" marker-end="url(#arrow)"/>
+  <path d="M1035 390 L940 390" stroke="#0ea5e9" stroke-width="3" fill="none" marker-end="url(#arrow)"/>
+  <text x="950" y="288" class="small">请求</text>
+  <text x="950" y="378" class="small">状态 / 结果</text>
+
+  <text x="70" y="790" class="small">搜索结果用于指导策略的下一轮决策；正式最终评测由平台统一执行。</text>
+</svg>

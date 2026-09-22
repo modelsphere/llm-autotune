@@ -1,0 +1,55 @@
+/* Neutral slate palette with a restrained teal accent — deliberately NOT the
+   indigo/purple look of LLMBench (tech-stack.md). Status colors are reserved
+   for run states. */
+:root {
+  --el-color-primary: #0f766e; /* teal-700 */
+  --el-color-primary-light-3: #14b8a6;
+  --el-color-primary-light-5: #5eead4;
+  --el-color-primary-light-7: #99f6e4;
+  --el-color-primary-light-8: #ccfbf1;
+  --el-color-primary-light-9: #f0fdfa;
+  --el-color-primary-dark-2: #115e59;
+
+  --autotune-bg: #f8fafc;      /* slate-50 */
+  --autotune-text: #1e293b;    /* slate-800 */
+  --autotune-muted: #64748b;   /* slate-500 */
+  --autotune-border: #e2e8f0;  /* slate-200 */
+}
+
+body {
+  margin: 0;
+  background: var(--autotune-bg);
+  color: var(--autotune-text);
+  font-family: 'Helvetica Neue', Helvetica, Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+}
+
+.page {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 24px;
+}
+
+.page-title {
+  font-size: 20px;
+  font-weight: 600;
+  margin: 0 0 16px;
+}
+
+.muted {
+  color: var(--autotune-muted);
+  font-size: 13px;
+}
+
+.mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+}
+
+/* A campaign that was never started. Element Plus has no tag colour between
+   "in progress" and "finished", and grey for both made a draft indistinguish-
+   able from a completed night. */
+.el-tag.tag-draft {
+  --el-tag-bg-color: #eff6ff;
+  --el-tag-border-color: #bfdbfe;
+  --el-tag-text-color: #1d4ed8;
+}
