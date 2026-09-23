@@ -66,6 +66,14 @@ spec:
       {{- with .Values.tolerations }}
       tolerations: {{- toYaml . | nindent 8 }}
       {{- end }}
+      {{- if not .Values.postgresql.storage.enabled }}
+      # No claim: the data lives and dies with the pod. For trials and test
+      # installs, and for clusters whose storage class is too slow for an initdb.
+      volumes:
+        - name: data
+          emptyDir: {}
+      {{- end }}
+  {{- if .Values.postgresql.storage.enabled }}
   volumeClaimTemplates:
     - metadata:
         name: data
@@ -77,4 +85,5 @@ spec:
         resources:
           requests:
             storage: {{ .Values.postgresql.storage.size }}
+  {{- end }}
 {{- end }}

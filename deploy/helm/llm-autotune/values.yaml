@@ -89,6 +89,10 @@ postgresql:
   password: autotune           # change it, or use existingSecret below
   existingSecret: ""           # a Secret with key POSTGRES_PASSWORD
   storage:
+    # false = an emptyDir: the database is lost when the pod restarts. Right
+    # for a trial, and for a cluster whose storage class is too slow for a
+    # Postgres initdb (network filesystems can take half an hour).
+    enabled: true
     size: 20Gi
     storageClass: ""
   resources: {}
