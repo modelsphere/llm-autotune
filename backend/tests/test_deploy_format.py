@@ -448,7 +448,7 @@ def test_compare_sorts_differences_by_owner():
 
 
 def test_presets_and_a_custom_layout_are_data():
-    fmt = get_format({"preset": "llm-serving-deploy"})
+    fmt = get_format({"preset": "helm-release-branch"})
     assert fmt.parse(H100).engine_args["tp"] == "2"
     custom = get_format(
         {
@@ -607,7 +607,7 @@ def test_apply_refuses_a_file_without_extra_args():
 
 def test_the_merge_request_branch_prefix_is_configurable():
     """A project may enforce a branch-name push rule, and a rejected push means
-    no merge request at all — llm-serving-deploy allows only a fixed set of
+    no merge request at all — the deploy repo allows only a fixed set of
     leading words, so `autotune/` is refused there. The prefix is a setting,
     and a marker can be kept inside it."""
     from datetime import UTC, datetime

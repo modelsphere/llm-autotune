@@ -93,7 +93,7 @@ function logout() {
           <el-dropdown-menu>
             <!-- One span, not three siblings: el-dropdown-item lays its content
                  out as a flex row, so the whitespace between a text node and a
-                 <b> is dropped and it read "Signed in assunjichen". Inside a
+                 <b> is dropped and it read "Signed in asalice". Inside a
                  single element it is ordinary inline text again. Styles are
                  inline because the menu is teleported out of this component,
                  where scoped selectors no longer reach it. -->

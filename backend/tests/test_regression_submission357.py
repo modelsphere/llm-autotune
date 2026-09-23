@@ -63,7 +63,7 @@ METRICS: dict = {
 }
 
 MODULE: dict = {
-    "module_name": "replay_prod",
+    "module_name": "replay",
     "status": "done",
     "passed": False,
     "error": None,
@@ -116,7 +116,7 @@ def test_a_satisfied_redline_never_appears():
 
 
 def test_the_module_verdict_names_module_and_reasons():
-    assert _failed_modules(SUBMISSION) == "replay_prod (" + "; ".join(EXPECTED) + ")"
+    assert _failed_modules(SUBMISSION) == "replay (" + "; ".join(EXPECTED) + ")"
 
 
 def test_a_long_breach_list_is_truncated_with_a_count():
@@ -147,7 +147,7 @@ def test_a_submission_without_config_metadata_still_falls_back_to_score():
     """Older/other submissions (e.g. the 152 fixture) carry no
     metric_configs_json. The reason then is the score, exactly as before —
     this change adds detail where it exists and removes none where it does not."""
-    bare = {"module_name": "replay_prod", "passed": False, "score": 42.0}
+    bare = {"module_name": "replay", "passed": False, "score": 42.0}
     assert _describe_module_failure(bare) == "score 42.0"
     assert _redline_breaches(bare) == []
 

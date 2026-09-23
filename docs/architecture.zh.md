@@ -100,7 +100,7 @@ LLMBench 在模块只是跑完时就报 `done`；结论是单独的，所以评�
 - **由我们触发重建，而不是 LLMBench 的时钟。** 一个 profile 被单独设成
   `schedule_interval_hours: 0`，除了我们的 `trigger_build` 调用，没有任何东西会重建它。
   整个耦合就是：我们要一份 build、被告知它的 id，再从每条结果里把这个 id 读回来
-  （`replay_prod.dataset_id` / `_sha256`）。我们从不获取或查看数据——id 背后的一切都由
+  （`replay.dataset_id` / `_sha256`）。我们从不获取或查看数据——id 背后的一切都由
   LLMBench 拥有。
 - **跨 campaign 新鲜。** 每个 campaign 在第一次测量时解析出 profile 的当前 build；在
   `rebuild_at_start` 下，它会从最新流量触发一份新的。这正是让调优对得上*当前*用法的原因

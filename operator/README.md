@@ -27,11 +27,10 @@ k8s-native slice and nothing more:
 - **Out of scope:** benchmarking, scoring, dataset handling, config search — all
   of that stays in the platform. The operator never looks at a result.
 
-This is the counterpart to the cluster's production operator (`autoconfig` /
-`ModelRoute`, which wires *shipped* models into openresty/CART/monitor). A
-`TuningRun` is an ephemeral experiment, not a production route — it deliberately
-does **not** touch that machinery. Promotion of a winner into a `ModelRoute` is a
-separate concern handled by the platform's promotion path.
+A `TuningRun` is an ephemeral experiment, not a production deployment: it
+deliberately does **not** touch whatever serves shipped models on the cluster
+(routes, gateways, monitoring). Promoting a winner into production is a separate
+concern, handled by the platform's promotion path.
 
 ## The `TuningRun` contract
 

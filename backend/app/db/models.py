@@ -360,7 +360,7 @@ class Machine(Base):
         ForeignKey("clusters.id"), nullable=True, index=True
     )
     # k8s only: constrains which cluster nodes this slice's pods may land on, as
-    # comma-separated `label=value` pairs (e.g. "kubernetes.io/hostname=gpu-005"
+    # comma-separated `label=value` pairs (e.g. "kubernetes.io/hostname=gpu-a100-1"
     # or "nvidia.com/gpu.product=NVIDIA-A100-SXM4-80GB"). Empty = the scheduler
     # is free. This is what makes a k8s "machine" a named node-slice rather than
     # the whole cluster; weights served as a per-node hostPath live on only some

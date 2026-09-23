@@ -72,7 +72,7 @@ def _replay_run(base_tps: float, *, concurrency: int = 8) -> dict:
     replays its own pin file of the same build, as LLMBench does."""
     tpm = base_tps * 1000
     return {
-        "module_name": "replay_prod", "status": "done", "passed": True, "score": tpm,
+        "module_name": "replay", "status": "done", "passed": True, "score": tpm,
         "order_index": 1, "weight": 1.0,
         "params_json": {
             **REPLAY_PARAMS, "concurrency": concurrency,
@@ -577,14 +577,14 @@ async def test_a_replay_is_a_scenario_with_metrics_instead_of_levels(stack):
     # derived at harvest, so only in the flat metrics — still part of the scenario
     async with factory() as db:
         res = (await db.execute(select(Result).where(Result.run_id == base))).scalar_one()
-        res.metrics = {**res.metrics, "replay_prod.derived_card_norm": 7.0}
+        res.metrics = {**res.metrics, "replay.derived_card_norm": 7.0}
         await db.commit()
     doc = (await http.get(f"/api/agent/v1/runs/{base}")).json()
     replay = next(x for x in doc["results"]["scenarios"] if x["kind"] == "replay")
     assert replay["metrics"]["derived_card_norm"] == 7.0
     # a throughput scenario, not a quality suite: its floors are not quality floors
     assert [q["key"] for q in doc["results"]["quality"]] == ["opencompass"]
-    module = next(m for m in doc["benchmark"]["modules"] if m["key"] == "replay_prod")
+    module = next(m for m in doc["benchmark"]["modules"] if m["key"] == "replay")
     assert module["is_scenario"] is True and module["label"] == "replay"
 
     r = await http.get("/api/agent/v1/comparison", params={
@@ -592,14 +592,14 @@ async def test_a_replay_is_a_scenario_with_metrics_instead_of_levels(stack):
     assert r.status_code == 200, r.text
     cmp_doc = r.json()
     deltas = next(d for d in cmp_doc["attempts"][0]["deltas"]["scenarios"]
-                  if d["key"] == "replay_prod")
+                  if d["key"] == "replay")
     assert deltas["levels"] == []
     assert deltas["best_level"]["total_tps_per_gpu"]["pct"] == 20.0
     assert deltas["metrics"]["score_card_norm"]["pct"] == 20.0
     assert deltas["metrics"]["score_card_norm"]["improved"] is True
     assert deltas["metrics"]["ttft_16k_32k_count"]["improved"] is None  # a count moves, neutrally
-    assert "replay_prod" not in {s["scenario"] for s in cmp_doc["series"]}
-    table = cmp_doc["rendered"]["replay"]["replay_prod"]
+    assert "replay" not in {s["scenario"] for s in cmp_doc["series"]}
+    table = cmp_doc["rendered"]["replay"]["replay"]
     assert "| score_card_norm |" in table and "+20.0% ✅" in table
     assert "ttft_ge_256k" not in table  # nobody landed in that bucket
 
@@ -609,7 +609,7 @@ async def test_a_replay_is_a_scenario_with_metrics_instead_of_levels(stack):
         "baseline": base, "attempts": str(harder)})
     assert r.status_code == 422
     reasons = r.json()["detail"]["reasons"]
-    assert {(x["module"], x["field"]) for x in reasons} == {("replay_prod", "concurrency")}
+    assert {(x["module"], x["field"]) for x in reasons} == {("replay", "concurrency")}
 
 
 # ------------------------------------------------------------------ reports

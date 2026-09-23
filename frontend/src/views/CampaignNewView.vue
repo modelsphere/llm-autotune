@@ -10,9 +10,10 @@
  */
 import { ElMessage } from 'element-plus'
 import { computed, onMounted, ref, watch, type Ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import {
   api,
+  type Baseline,
   type DatasetProfile,
   type Machine,
   type MachineGroup,
@@ -29,6 +30,7 @@ import { sweptKeysOf } from '../utils/space'
 import { fromYaml, toYaml, YamlError } from '../utils/yaml'
 
 const router = useRouter()
+const route = useRoute()
 const step = ref(0)
 const busy = ref(false)
 
@@ -38,6 +40,15 @@ const groups = ref<MachineGroup[]>([])
 const searchSpaces = ref<SearchSpace[]>([])
 const objectives = ref<Objective[]>([])
 const datasetProfiles = ref<DatasetProfile[]>([])
+/** What LLMBench will run a submission against, for the two benchmark pickers.
+ *  Empty when LLMBench is unreachable — the pickers still take a typed slug. */
+interface BenchmarkChoice {
+  slug: string
+  name: string
+  modules: string[]
+  replays_profile: string
+}
+const benchmarks = ref<BenchmarkChoice[]>([])
 /** Registered policy containers. Picking one in the Strategy select makes this
  *  a policy-as-code campaign: the container searches, the platform judges. */
 const policies = ref<Policy[]>([])
@@ -62,8 +73,9 @@ const form = ref({
   share_machine: true,
   max_run_minutes: 150,
   benchmark_slug: '',
-  // A built-in planner name, or `policy:<id>` for an external policy container.
-  planner: 'grid',
+  // '' = no policy: the campaign tries every configuration in the space, in
+  // order. `policy:<id>` = an external policy container searches it instead.
+  strategy: '',
   // Only sent for a policy campaign — the budget the platform holds it to.
   policy_max_contenders: 1,
   policy_approx_minutes_each: 30,
@@ -296,9 +308,9 @@ function stepStatus(i: number): 'process' | 'success' | 'error' | 'wait' {
   return problems.value[i].length ? 'error' : 'success'
 }
 
-/** The policy picked in the Strategy select, or null for a built-in planner. */
+/** The policy picked in the Strategy select, or null to enumerate the space. */
 const selectedPolicy = computed<Policy | null>(() => {
-  const m = /^policy:(\d+)$/.exec(form.value.planner)
+  const m = /^policy:(\d+)$/.exec(form.value.strategy)
   return m ? policies.value.find((p) => p.id === Number(m[1])) ?? null : null
 })
 
@@ -325,16 +337,40 @@ async function load() {
   } catch {
     datasetProfiles.value = []
   }
+  try {
+    benchmarks.value = (await api.get('/campaigns/benchmarks')).data
+  } catch {
+    benchmarks.value = []
+  }
 }
 
-/** The default campaign runs one benchmark — a replay — so its objective ranks
- *  on the replay score. */
-const REPLAY_SCORE_METRIC = 'replay_prod.score_card_norm'
+/** A verify benchmark that replays a rolling dataset names its profile; pin
+ *  that one unless the author already chose. */
+watch(() => form.value.verify_benchmark_slug, (slug) => {
+  const wired = benchmarks.value.find((b) => b.slug === slug)?.replays_profile
+  if (wired && !form.value.dataset_profile) form.value.dataset_profile = wired
+})
+
+const ensuring = ref(false)
+
+/** Creates AutoTune's own screen benchmark on LLMBench (and locks it) when a
+ *  fresh install has not got it yet. Admin only; idempotent. */
+async function ensureScreenBenchmark() {
+  ensuring.value = true
+  try {
+    const { data } = await api.post('/benchmarks/ensure', {})
+    ElMessage.success(data.created ? `Created ${data.slug} on LLMBench` : `${data.slug} is ready`)
+    benchmarks.value = (await api.get('/campaigns/benchmarks')).data
+  } catch (error: any) {
+    ElMessage.error(error.response?.data?.detail ?? 'Could not create the benchmark')
+  } finally {
+    ensuring.value = false
+  }
+}
 
 /** Preselect an objective rather than leaving it blank: a campaign created
- *  without one ranks on a fallback nobody chose. Prefer the replay score, since
- *  the default single benchmark is a replay; then the platform default; then the
- *  first saved objective. */
+ *  without one ranks on a fallback nobody chose. Prefer the platform default
+ *  (what the default screen benchmark measures), then the first saved one. */
 async function selectDefaultObjective() {
   let preferred = ''
   try {
@@ -343,7 +379,6 @@ async function selectDefaultObjective() {
     /* fall through to the platform default, then the first objective */
   }
   const pick =
-    objectives.value.find((o) => o.target_metric === REPLAY_SCORE_METRIC) ??
     objectives.value.find((o) => o.is_builtin && o.target_metric === preferred) ??
     objectives.value[0]
   if (pick) selectedObjectiveId.value = pick.id
@@ -447,6 +482,18 @@ function applyImport() {
     if (key === 'extra_env' || key === 'extra_volumes') continue
     if (key in form.value) (form.value as Record<string, unknown>)[key] = value
   }
+  // A policy campaign travels as policy_id + policy_settings; the form holds
+  // them as the Strategy select and the three budget inputs.
+  const policyId = parsed.fields.policy_id
+  form.value.strategy = typeof policyId === 'number' ? `policy:${policyId}` : ''
+  const settings = (parsed.fields.policy_settings ?? {}) as Record<string, number>
+  if (settings.max_contenders) form.value.policy_max_contenders = settings.max_contenders
+  if (settings.approx_minutes_each) {
+    form.value.policy_approx_minutes_each = settings.approx_minutes_each
+  }
+  if (settings.model_startup_minutes) {
+    form.value.policy_model_startup_minutes = settings.model_startup_minutes
+  }
   if (parsed.fields.extra_env || parsed.fields.extra_volumes) {
     form.value.extras_text = toYaml({
       env: parsed.fields.extra_env ?? {},
@@ -492,6 +539,70 @@ function applyImport() {
   runPreflight()
 }
 
+// -- draft -------------------------------------------------------------------
+
+/** Where each drafted value came from, shown on the Check step until the
+ *  author starts over. A derived value reviewed as if someone chose it is how a
+ *  wrong image runs all night. */
+const draftNotes = ref<{ provenance: Record<string, string>; warnings: string[] } | null>(null)
+const draftOpen = ref(false)
+const drafting = ref(false)
+const baselines = ref<Baseline[]>([])
+const draftForm = ref({
+  baseline_id: null as number | null,
+  served_model_name: '',
+  node_group: '',
+  verify_benchmark_slug: '',
+})
+
+async function openDraft() {
+  draftOpen.value = true
+  try {
+    baselines.value = (await api.get('/baselines')).data
+  } catch {
+    baselines.value = []
+  }
+}
+
+/** Ask the server for a campaign derived from a baseline, the fleet and
+ *  LLMBench, then take it in exactly as an imported file — same fields, same
+ *  jump to the checks. */
+async function draftFrom(req: Record<string, unknown>) {
+  drafting.value = true
+  try {
+    const { data } = await api.post('/campaigns/draft', req)
+    const campaign = { ...data.campaign }
+    const model = campaign.served_model_name || 'model'
+    campaign.search_space = { name: `drafted: ${model}`, ...campaign.search_space }
+    campaign.objective = { name: `drafted: ${campaign.objective.target_metric}`,
+      ...campaign.objective }
+    if (campaign.verify_objective?.target_metric) {
+      campaign.verify_objective = {
+        name: `drafted: ${campaign.verify_objective.target_metric}`,
+        ...campaign.verify_objective,
+      }
+    }
+    importText.value = toYaml(campaign)
+    draftOpen.value = false
+    applyImport()
+    draftNotes.value = { provenance: data.provenance, warnings: data.warnings }
+  } catch (error: any) {
+    ElMessage.error(error.response?.data?.detail ?? 'Could not draft a campaign')
+  } finally {
+    drafting.value = false
+  }
+}
+
+function submitDraft() {
+  const f = draftForm.value
+  draftFrom({
+    baseline_id: f.baseline_id,
+    served_model_name: f.baseline_id ? '' : f.served_model_name.trim(),
+    node_group: f.node_group,
+    verify_benchmark_slug: f.verify_benchmark_slug.trim(),
+  })
+}
+
 async function create() {
   if (!canCreate.value) {
     const firstBad = problems.value.findIndex((p) => p.length > 0)
@@ -517,9 +628,6 @@ async function create() {
       share_machine: form.value.share_machine,
       max_run_minutes: form.value.max_run_minutes,
       benchmark_slug: form.value.benchmark_slug.trim(),
-      // A policy campaign sends the built-in default as its planner: the API
-      // ignores it once policy_id is set, and refuses an unknown name.
-      planner: selectedPolicy.value ? 'grid' : form.value.planner,
       policy_id: selectedPolicy.value?.id ?? null,
       policy_settings: selectedPolicy.value
         ? {
@@ -579,13 +687,12 @@ async function create() {
 
 onMounted(async () => {
   await load()
-  // "Tune from this" on the Baselines page hands over the same YAML the Import
-  // button takes; one-shot, so a reload of this page starts blank again.
-  const prefill = sessionStorage.getItem('autotune_campaign_prefill')
-  if (prefill) {
-    sessionStorage.removeItem('autotune_campaign_prefill')
-    importText.value = prefill
-    applyImport()
+  // "Tune from this" on the Baselines page opens this page with ?baseline=<id>.
+  const fromBaseline = Number(route.query.baseline)
+  if (fromBaseline) {
+    router.replace({ query: {} })
+    await draftFrom({ baseline_id: fromBaseline })
+    return
   }
 })
 </script>
@@ -595,6 +702,7 @@ onMounted(async () => {
     <div class="header-row">
       <h1 class="page-title">New campaign</h1>
       <div>
+        <el-button type="primary" plain @click="openDraft">Start from a baseline</el-button>
         <el-button @click="importOpen = true">Import YAML</el-button>
         <el-button text @click="router.push('/campaigns')">Cancel</el-button>
       </div>
@@ -753,21 +861,16 @@ onMounted(async () => {
               <template #label>
                 <span>Strategy</span>
                 <InfoHint :width="360">
-                  <b>Grid</b> is exhaustive and deterministic, which only works while the
-                  space is small — it works through points in declaration order, so a night
-                  that runs out of time stops wherever it stopped.
-                  <b>Random</b> samples the whole space instead.
-                  A <b>policy</b> is an external container (policy-as-code) that drives
-                  its own search over this space; the platform launches engines,
-                  benchmarks, and validates what it picks.
+                  With <b>no policy</b> the campaign tries every configuration in the
+                  space, in declaration order — exhaustive and repeatable, which works
+                  while the space is small; a window that runs out of time stops wherever
+                  it stopped. A <b>policy</b> is an external container (policy-as-code)
+                  that decides what to try next; the platform still launches, benchmarks
+                  and judges every configuration it picks.
                 </InfoHint>
               </template>
-              <el-select v-model="form.planner" style="width: 100%" filterable>
-                <el-option-group label="Built-in">
-                  <el-option value="grid" label="Grid — every configuration, once" />
-                  <el-option value="random" label="Random — sample until time runs out" />
-                  <el-option value="tpe" label="TPE — Bayesian, learns from results as they land" />
-                </el-option-group>
+              <el-select v-model="form.strategy" style="width: 100%" filterable>
+                <el-option value="" label="No policy — every configuration, in order" />
                 <el-option-group v-if="policies.length" label="Policy containers">
                   <el-option v-for="p in policies" :key="p.id" :value="`policy:${p.id}`"
                     :label="`Policy — ${p.name}`">
@@ -862,8 +965,20 @@ onMounted(async () => {
               <div class="stage-fields stacked">
                 <div class="stage-field">
                   <label class="muted tiny">Benchmark</label>
-                  <el-input v-model="form.benchmark_slug" class="mono" size="small"
-                    placeholder="rolling-replay-test-mf-v0" />
+                  <el-select v-model="form.benchmark_slug" size="small" clearable filterable
+                    allow-create default-first-option class="mono"
+                    placeholder="the platform default">
+                    <el-option v-for="b in benchmarks" :key="b.slug" :value="b.slug"
+                      :label="b.slug">
+                      <span class="mono">{{ b.slug }}</span>
+                      <span class="muted opt-help">{{ b.modules.join(' · ') }}</span>
+                    </el-option>
+                  </el-select>
+                  <el-button v-if="!benchmarks.some((b) => b.slug.startsWith('autotune-'))"
+                    link type="primary" size="small" :loading="ensuring"
+                    @click="ensureScreenBenchmark">
+                    Create AutoTune's screen benchmark on LLMBench
+                  </el-button>
                 </div>
                 <div class="stage-field">
                   <label class="muted tiny">
@@ -971,8 +1086,17 @@ onMounted(async () => {
                     <div class="stage-fields stacked">
                       <div class="stage-field">
                         <label class="muted tiny">Benchmark for the best few</label>
-                        <el-input v-model="form.verify_benchmark_slug" class="mono" size="small"
-                          placeholder="rolling-replay-test-mf-v0" />
+                        <el-select v-model="form.verify_benchmark_slug" size="small" clearable
+                          filterable allow-create default-first-option class="mono"
+                          placeholder="a benchmark that replays real traffic">
+                          <el-option v-for="b in benchmarks" :key="b.slug" :value="b.slug"
+                            :label="b.slug">
+                            <span class="mono">{{ b.slug }}</span>
+                            <span class="muted opt-help">
+                              {{ b.replays_profile ? `replays ${b.replays_profile}` : b.modules.join(' · ') }}
+                            </span>
+                          </el-option>
+                        </el-select>
                       </div>
                       <div class="stage-field">
                         <label class="muted tiny">Ranked by</label>
@@ -1101,6 +1225,22 @@ onMounted(async () => {
             </el-button>
           </div>
 
+          <div v-if="draftNotes" class="draft-notes">
+            <el-alert v-for="w in draftNotes.warnings" :key="w" type="warning"
+              :closable="false" show-icon :title="w" />
+            <details>
+              <summary class="muted tiny">
+                Drafted — where {{ Object.keys(draftNotes.provenance).length }} values came from
+              </summary>
+              <dl class="provenance">
+                <template v-for="(why, field) in draftNotes.provenance" :key="field">
+                  <dt class="mono">{{ field }}</dt>
+                  <dd>{{ why }}</dd>
+                </template>
+              </dl>
+            </details>
+          </div>
+
           <div v-if="checking" class="muted">Checking…</div>
 
           <el-alert v-else-if="preflight?.note" type="warning" :closable="false" show-icon
@@ -1169,7 +1309,7 @@ onMounted(async () => {
             <template v-if="selectedSpace">
               {{ selectedSpace.name }}
               <span class="muted">· {{ selectedSpace.candidate_count }} candidates
-                · {{ selectedPolicy ? `policy ${selectedPolicy.name}` : form.planner }}</span>
+                · {{ selectedPolicy ? `policy ${selectedPolicy.name}` : 'every configuration, in order' }}</span>
             </template>
             <template v-else>not chosen</template>
           </dd>
@@ -1198,6 +1338,45 @@ onMounted(async () => {
         <p v-if="nightsNeeded" class="muted tiny">{{ nightsNeeded }}</p>
       </aside>
     </div>
+
+    <el-dialog v-model="draftOpen" title="Start from what the platform knows" width="620px">
+      <p class="muted lead">
+        The image, model and production arguments come from the baseline; the grid is
+        sized to the machines; the dataset comes from LLMBench. Every value says where it
+        came from, and nothing is created until you press Create.
+      </p>
+      <el-form label-position="top">
+        <el-form-item label="Baseline">
+          <el-select v-model="draftForm.baseline_id" clearable filterable
+            placeholder="pick one — or name a model below">
+            <el-option v-for="b in baselines" :key="b.id" :value="b.id"
+              :label="`#${b.id} ${b.served_model_name} · ${b.engine} · ${b.card_type || 'any card'}`" />
+          </el-select>
+        </el-form-item>
+        <el-form-item v-if="!draftForm.baseline_id" label="Model (finds its baseline for these cards)">
+          <el-input v-model="draftForm.served_model_name" placeholder="served model name" />
+        </el-form-item>
+        <el-form-item label="Node group (optional — otherwise every leased machine)">
+          <el-select v-model="draftForm.node_group" clearable placeholder="single-node">
+            <el-option v-for="g in groups" :key="g.name" :value="g.name" :label="g.name" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="Verify the best few on (optional)">
+          <el-select v-model="draftForm.verify_benchmark_slug" clearable filterable allow-create
+            default-first-option class="mono" placeholder="no second stage">
+            <el-option v-for="b in benchmarks" :key="b.slug" :value="b.slug" :label="b.slug" />
+          </el-select>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="draftOpen = false">Cancel</el-button>
+        <el-button type="primary" :loading="drafting"
+          :disabled="!draftForm.baseline_id && !draftForm.served_model_name.trim()"
+          @click="submitDraft">
+          Draft and check
+        </el-button>
+      </template>
+    </el-dialog>
 
     <el-dialog v-model="importOpen" title="Import a campaign" width="720px">
       <p class="muted lead">
@@ -1508,5 +1687,20 @@ dd.empty {
 }
 .needs {
   color: var(--el-color-warning);
+}
+.draft-notes {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.provenance {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 4px 12px;
+  margin: 8px 0 0;
+  font-size: 12px;
+}
+.provenance dd {
+  margin: 0;
 }
 </style>

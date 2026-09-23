@@ -187,11 +187,14 @@ export default {
     evaluated: '{done}/{total} candidates evaluated',
     grid: 'grid',
     objective: 'objective',
-    planner: 'planner',
+    enumerates: 'every configuration, in order',
     policy: 'policy',
     report: 'Report',
     logs: 'Logs',
     exportYaml: 'Export YAML',
+    clone: 'Clone',
+    cloneName: 'Name for the copy — it keeps this campaign\'s definition, not its results',
+    cloneFailed: 'Clone failed',
     rerunFailedOne: 'Re-run {n} failed config',
     rerunFailedMany: 'Re-run {n} failed configs',
     pause: 'Pause',
@@ -221,7 +224,7 @@ export default {
     run: 'Run',
     sweptParameters: 'Swept parameters',
     notPlanned:
-      'Not expanded yet — the planner writes these {n} configurations out when the '
+      'Not expanded yet — the platform writes these {n} configurations out when the '
       + 'campaign first runs.',
     editSchedule: 'Edit schedule',
     addSchedule: 'Add a schedule',

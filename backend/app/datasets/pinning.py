@@ -54,8 +54,8 @@ DECIDE_TAKE_CURRENT = "take_current"
 
 # Where the replay module reports what it actually replayed. Flat keys, module
 # prefix included, exactly as they arrive.
-METRIC_BUILD_ID = "replay_prod.dataset_id"
-METRIC_SHA = "replay_prod.dataset_sha256"
+METRIC_BUILD_ID = "replay.dataset_id"
+METRIC_SHA = "replay.dataset_sha256"
 
 
 def uses_pinning(campaign: Campaign) -> bool:

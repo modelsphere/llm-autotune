@@ -938,7 +938,7 @@ onUnmounted(() => window.clearInterval(timer))
         </div>
         <el-form-item v-if="form.driver === 'k8s'" label="Node selector">
           <el-input v-model="form.node_selector" class="mono"
-            placeholder="kubernetes.io/hostname=gpu-005" />
+            placeholder="kubernetes.io/hostname=gpu-a100-1" />
           <div class="muted tiny">
             Which cluster nodes this slice's pods may land on, as
             <span class="mono">label=value</span> pairs (comma-separated). Pin one node

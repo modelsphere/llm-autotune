@@ -64,23 +64,27 @@ class LLMBenchClient:
         self,
         base_url: str | None = None,
         api_key: str | None = None,
-        username: str | None = None,
+        email: str | None = None,
         password: str | None = None,
         *,
         transport: httpx.BaseTransport | None = None,
         sleep: Callable[[float], None] | None = None,
+        max_attempts: int | None = None,
     ):
         settings = get_settings()
         self.base_url = (base_url or settings.llmbench_base_url).rstrip("/")
         self.api_key = api_key if api_key is not None else settings.llmbench_api_key
-        self.username = username if username is not None else settings.llmbench_username
+        self.email = email if email is not None else settings.llmbench_email
         self.password = password if password is not None else settings.llmbench_password
         self._token: str | None = self.api_key or None
+        # One catalog read serves every question asked of it within a
+        # short window (see list_benchmarks).
+        self._benchmarks: tuple[float, list[dict]] | None = None
         # Injection points for tests: a MockTransport that fails N times, and a
         # sleep that does not actually wait.
         self._transport = transport
         self._sleep = sleep or time.sleep
-        self._max_attempts = max(1, settings.llmbench_max_attempts)
+        self._max_attempts = max(1, max_attempts or settings.llmbench_max_attempts)
         self._backoff = settings.llmbench_retry_backoff_seconds
         self._backoff_cap = settings.llmbench_retry_backoff_cap_seconds
 
@@ -93,7 +97,7 @@ class LLMBenchClient:
             return
         response = self._send(
             "POST", "/auth/login", auth=False,
-            json={"username": self.username, "password": self.password},
+            json={"email": self.email, "password": self.password},
         )
         response.raise_for_status()
         self._token = response.json()["access_token"]
@@ -229,6 +233,56 @@ class LLMBenchClient:
         response.raise_for_status()
         return response.json()
 
+    def whoami(self) -> dict[str, Any]:
+        """The LLMBench account this platform acts as (`id`, `role`, …)."""
+        response = self._send("GET", "/auth/me")
+        response.raise_for_status()
+        return response.json()
+
+    def get_benchmark(self, slug: str) -> dict[str, Any] | None:
+        """One benchmark, whatever its status — None when there is no such slug."""
+        response = self._send("GET", f"/benchmarks/{slug}")
+        if response.status_code == 404:
+            return None
+        response.raise_for_status()
+        return response.json()
+
+    def import_benchmark(self, document: str) -> dict[str, Any]:
+        """Create a benchmark from LLMBench's own export YAML. A service account
+        becomes its creator, and so the one account allowed to change it."""
+        response = self._send(
+            "POST", "/benchmarks/admin/benchmarks/import",
+            files={"file": ("benchmark.yaml", document.encode(), "application/x-yaml")},
+        )
+        response.raise_for_status()
+        self._benchmarks = None          # the catalog just changed
+        return response.json()
+
+    def lock_benchmark(self, benchmark_id: int) -> dict[str, Any]:
+        """Toggle a benchmark's lock (LLMBench's route toggles; call it only
+        when the benchmark is unlocked)."""
+        response = self._send("PUT", f"/benchmarks/admin/benchmarks/{benchmark_id}/lock")
+        response.raise_for_status()
+        return response.json()
+
+    CATALOG_TTL_SECONDS = 30.0
+
+    def list_benchmarks(self) -> list[dict]:
+        """The active benchmarks this account can submit to, as LLMBench lists
+        them (slug, name, modules with their params). Read once per client per
+        CATALOG_TTL_SECONDS: a preflight asks several questions of the same
+        catalog, and the campaign picker asks again moments later."""
+        now = time.monotonic()
+        if self._benchmarks is not None and now - self._benchmarks[0] < self.CATALOG_TTL_SECONDS:
+            return self._benchmarks[1]
+        response = self._send("GET", "/benchmarks")
+        response.raise_for_status()
+        payload = response.json()
+        benchmarks = payload.get("benchmarks", []) if isinstance(payload, dict) else payload
+        benchmarks = [b for b in benchmarks or [] if isinstance(b, dict) and b.get("slug")]
+        self._benchmarks = (now, benchmarks)
+        return benchmarks
+
     def modules_by_benchmark(self) -> dict[str, list[str]]:
         """Every benchmark this account can submit to, and what each one runs.
 
@@ -242,39 +296,30 @@ class LLMBenchClient:
         lists `perf_guidellm_sweep` and `perf_guidellm_sweep#2`, so an
         objective on the second run validates the same way it is reported.
         """
-        response = self._send("GET", "/benchmarks")
-        response.raise_for_status()
-        payload = response.json()
-        benchmarks = payload.get("benchmarks", []) if isinstance(payload, dict) else payload
+        def in_order(modules: list[dict]) -> list[dict]:
+            return sorted(modules or [], key=lambda m: m.get("order_index") or 0)
+
         return {
-            b["slug"]: instance_keys(
-                m.get("module_name", "") for m in (b.get("modules") or [])
-            )
-            for b in benchmarks
-            if isinstance(b, dict) and b.get("slug")
+            b["slug"]: instance_keys(m.get("module_name", "") for m in in_order(b.get("modules")))
+            for b in self.list_benchmarks()
         }
 
     def dataset_profiles_by_benchmark(self) -> dict[str, str]:
         """Which collection profile each benchmark's replay module resolves.
 
         Empty string where a benchmark has no replay module, or has one that
-        does not resolve a profile (`dataset_source` other than "auto"). This
-        is what makes pinning checkable: a campaign can pin all it likes, but
-        if the benchmark it submits to resolves a different profile, every run
-        replays something else and every result mismatches.
+        does not resolve a profile. A module resolves one only when its
+        `dataset_source` is "auto": a fixed-file module can still carry a stale
+        `dataset_profile` param from before it was switched, and LLMBench
+        ignores it — so must this, or a pinned campaign would pass preflight
+        while every run replays the fixed file.
         """
-        response = self._send("GET", "/benchmarks")
-        response.raise_for_status()
-        payload = response.json()
-        benchmarks = payload.get("benchmarks", []) if isinstance(payload, dict) else payload
         wired: dict[str, str] = {}
-        for benchmark in benchmarks or []:
-            if not isinstance(benchmark, dict) or not benchmark.get("slug"):
-                continue
+        for benchmark in self.list_benchmarks():
             profile = ""
             for module in benchmark.get("modules") or []:
                 params = module.get("params_json") or {}
-                if params.get("dataset_profile"):
+                if params.get("dataset_source") == "auto" and params.get("dataset_profile"):
                     profile = str(params["dataset_profile"])
                     break
             wired[benchmark["slug"]] = profile
@@ -287,11 +332,9 @@ class LLMBenchClient:
             logger.warning("LLMBench cancel(%s) failed: %s", submission_id, exc)
 
     def preflight(self, endpoint_url: str, model_name: str, api_key: str = "") -> dict[str, Any]:
-        """LLMBench's own pre-submit endpoint probe.
-
-        NOTE: their endpoint is session-gated (browser JWT only) — an API-key
-        caller gets 403 by design. Usable only under username/password auth.
-        """
+        """LLMBench's own pre-submit endpoint probe, run from LLMBench's network
+        position. Open to a login session and to a service account's API key;
+        a personal API key gets 403."""
         response = self._send(
             "POST", "/submissions/preflight",
             json={"endpoint_url": endpoint_url, "model": model_name, "api_key": api_key},
@@ -466,10 +509,13 @@ def instance_keys(module_names: Iterable[str]) -> list[str]:
     The first run of a module keeps the bare name — every existing objective
     (`perf_guidellm_sweep.output_tpm_card_norm`) and the metrics catalog
     address it unchanged — and each further run of the same module takes an
-    ordinal suffix: `perf_guidellm_sweep#2`. Position is the only identity a
-    submission payload offers (its runs carry no benchmark_module_id), and
-    LLMBench lists runs in the benchmark's module order, so the suffix is
-    stable across every submission of one benchmark. `#` because a metric key
+    ordinal suffix: `perf_guidellm_sweep#2`. The ordinal is the module's
+    position in the benchmark: LLMBench creates a submission's runs in module
+    order, so run ids ascend in that order, and `_keyed_runs` sorts by run id
+    rather than trusting the list order of a response. (Runs also carry
+    `benchmark_module_id`, which names the module outright; the key stays
+    positional so the same name addresses the same module in the benchmark
+    catalog, where there is no run.) `#` because a metric key
     is split on `.` to find its module, and the suffix must never read as a
     real module name.
     """
@@ -483,7 +529,9 @@ def instance_keys(module_names: Iterable[str]) -> list[str]:
 
 
 def _keyed_runs(submission: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
-    runs = submission.get("runs", [])
+    runs = list(submission.get("runs", []))
+    if runs and all(isinstance(run.get("id"), int) for run in runs):
+        runs.sort(key=lambda run: run["id"])
     keys = instance_keys(run.get("module_name", "module") for run in runs)
     return list(zip(keys, runs, strict=True))
 
@@ -616,14 +664,17 @@ class LLMBenchEvaluator(Evaluator):
         )
 
     def _preflight_or_reject(self, endpoint_url: str, model_name: str, api_key: str) -> None:
-        if self.client.api_key:
-            # LLMBench gates /submissions/preflight to browser sessions on
-            # purpose ("NOT part of the programmatic API … can't be used as an
-            # open SSRF probe"), so an API-key caller always gets 403. Our own
-            # health gate covers the same ground; don't bother asking.
-            return
         try:
             result = self.client.preflight(endpoint_url, model_name, api_key)
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 403:
+                # A service account's key may preflight; a person's key may not
+                # (nor may any key on an LLMBench older than the service role).
+                # Our own health gate covers the same ground — carry on.
+                logger.info("LLMBench preflight refused for this credential; submitting anyway")
+                return
+            logger.warning("LLMBench preflight unavailable (%s); submitting anyway", exc)
+            return
         except (httpx.HTTPError, KeyError) as exc:
             # Preflight itself is unavailable — don't block the benchmark on it.
             logger.warning("LLMBench preflight unavailable (%s); submitting anyway", exc)
@@ -660,6 +711,17 @@ class LLMBenchEvaluator(Evaluator):
                     status=EvalStatus.FAILED,
                     error="benchmark ran but did not pass: "
                     + (_failed_modules(submission) or "see submission detail"),
+                    metrics=_flatten_metrics(submission),
+                    raw=submission,
+                )
+            if submission.get("passed") is None:
+                # `done` with no verdict means no module produced a result
+                # (LLMBench leaves `passed` null then). There is nothing to
+                # rank; reporting it as a pass would enter an empty row that
+                # fails every redline later, with no hint why.
+                return EvalOutcome(
+                    status=EvalStatus.FAILED,
+                    error="benchmark finished but no module reported a result",
                     metrics=_flatten_metrics(submission),
                     raw=submission,
                 )

@@ -16,7 +16,9 @@ from typing import Any
 
 # Redline metric names a gate is read from. They are suffixes: a redline names
 # a module too (`perf_sweep.ttft_p50_ms`), and the gate is per-scenario.
-TTFT_SUFFIXES = ("ttft_p50_ms", "ttft_p90_ms", "ttft_p95_ms", "ttft_p99_ms")
+# The TTFT percentiles LLMBench reports. There is no p95: a redline written
+# against one would set a gate whose percentile no result ever carries.
+TTFT_SUFFIXES = ("ttft_p50_ms", "ttft_p90_ms", "ttft_p99_ms")
 REQUEST_TPS_SUFFIX = "request_output_tps"
 
 

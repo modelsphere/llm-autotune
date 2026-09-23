@@ -361,10 +361,9 @@ export interface Campaign {
   /** Set by Force start: run regardless of the clock until this instant. */
   override_until: string | null
   max_run_minutes: number
-  /** The built-in search: grid | random | tpe. Ignored when `policy_id` is set. */
-  planner: string
-  /** An external policy container (policy-as-code) drives the search instead of
-   *  the built-in planner; the platform only launches, benchmarks and judges. */
+  /** An external policy container (policy-as-code) that decides what to try.
+   *  Null: the campaign tries every configuration in the space, in order. The
+   *  platform launches, benchmarks and judges either way. */
   policy_id: number | null
   policy_settings: Record<string, unknown>
   confirm_top_k: number
@@ -393,7 +392,7 @@ export interface Campaign {
    *  of waiting for someone to press Generate MR. Honours the platform's
    *  dry-run setting exactly as the button does. */
   auto_promote: boolean
-  /** What the search space expands to. Declared, not planned: the planner only
+  /** What the search space expands to. Declared, not planned: the platform only
    *  creates candidate rows once the campaign is active. */
   candidate_count: number
   created_at: string

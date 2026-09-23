@@ -395,8 +395,8 @@ def test_node_selector_comes_from_the_machine_slice():
     # A k8s machine IS a named node-slice, so its selector is a property of the
     # machine (set on the Resources page), rendered in both workload modes. Two
     # pairs, tolerant of spaces.
-    sel = "kubernetes.io/hostname=gpu-005, nvidia.com/gpu.product=A100"
-    want = {"kubernetes.io/hostname": "gpu-005", "nvidia.com/gpu.product": "A100"}
+    sel = "kubernetes.io/hostname=gpu-a100-1, nvidia.com/gpu.product=A100"
+    want = {"kubernetes.io/hostname": "gpu-a100-1", "nvidia.com/gpu.product": "A100"}
     spec = _spec(machine=_k8s_machine(node_selector=sel))
 
     dep = render_workload(spec, _clone(k8s_workload_kind="deployment"))[0]
@@ -408,11 +408,11 @@ def test_node_selector_comes_from_the_machine_slice():
 def test_node_selector_machine_wins_over_global_then_falls_back():
     # The machine's slice takes precedence; the global AUTOTUNE_K8S_NODE_SELECTOR
     # is only a fallback for a machine that declares none.
-    pinned = _spec(machine=_k8s_machine(node_selector="kubernetes.io/hostname=gpu-055"))
+    pinned = _spec(machine=_k8s_machine(node_selector="kubernetes.io/hostname=gpu-h100-2"))
     won = render_workload(
         pinned, _clone(k8s_workload_kind="custom", k8s_node_selector="kubernetes.io/hostname=OTHER")
     )[0]
-    assert won["spec"]["nodeSelector"] == {"kubernetes.io/hostname": "gpu-055"}
+    assert won["spec"]["nodeSelector"] == {"kubernetes.io/hostname": "gpu-h100-2"}
 
     # No machine selector → the global fills in.
     plain = _spec(machine=_k8s_machine())

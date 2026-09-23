@@ -26,7 +26,6 @@ export const PORTABLE_KEYS = [
   'service_port',
   'share_machine',
   'max_run_minutes',
-  'planner',
   'run_baseline_canary',
   'extra_env',
   'extra_volumes',
@@ -47,6 +46,12 @@ export const PORTABLE_KEYS = [
   'daily_end',
   'schedule_timezone',
   'schedule_until',
+  // Who searches, where, and what happens to a winner.
+  'policy_id',
+  'policy_settings',
+  'node_group',
+  'deploy_branch',
+  'auto_promote',
 ] as const
 
 const HEADER = `# LLM Autotune campaign.

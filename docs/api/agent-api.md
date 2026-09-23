@@ -124,7 +124,7 @@ ran, produced by the same renderer, so it is copy-pasteable.
     "source": "campaign",
     "submission_id": 91, "submission_name": "kv fp8", "version": 1,
     "supersedes_submission_id": 88, "notes": "same as #88 but kv cache fp8",
-    "campaign_id": 402, "candidate_id": 1190, "submitted_by": "sunjichen"
+    "campaign_id": 402, "candidate_id": 1190, "submitted_by": "alice"
   }
 }
 ```

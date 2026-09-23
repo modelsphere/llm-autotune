@@ -1,6 +1,6 @@
 """values_yaml — a Helm-values style file, read and edited line by line.
 
-The shape `llm-serving-deploy` uses, and most values files like it: a few
+The shape of a per-model Helm values file: a few
 top-level mappings holding the image, the model, the service, plus an
 `extraArgs` list of engine flags and a k8s-style `env` list. Where each of
 those lives, and how the args are spelled, are OPTIONS (dotted paths and a

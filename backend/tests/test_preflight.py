@@ -255,7 +255,7 @@ def test_a_valued_flag_shows_its_value_and_a_boolean_does_not():
 
 CATALOG = {
     "autotune-test-v0": ["functional_acceptance", "perf_guidellm_sweep"],
-    "rolling-replay-test-mf-v0": ["replay_prod"],
+    "rolling-replay-test-mf-v0": ["replay"],
 }
 
 
@@ -264,13 +264,13 @@ def _bench(slug, target="", catalog=CATALOG):
 
 
 def test_a_benchmark_that_can_report_the_objective_passes():
-    check = _bench("rolling-replay-test-mf-v0", "replay_prod.score_card_norm")
+    check = _bench("rolling-replay-test-mf-v0", "replay.score_card_norm")
     assert check.status == pf.PASS
-    assert "replay_prod" in check.detail
+    assert "replay" in check.detail
 
 
 def test_a_slug_that_does_not_exist_blocks():
-    check = _bench("rolling-replay-test-mf-v1", "replay_prod.score")
+    check = _bench("rolling-replay-test-mf-v1", "replay.score")
     assert check.status == pf.FAIL
     assert "rolling-replay-test-mf-v0" in check.hint, "suggest the near miss"
 
@@ -281,7 +281,7 @@ def test_an_objective_the_benchmark_cannot_report_blocks():
     None, and the morning report says nothing held its redlines."""
     check = _bench("rolling-replay-test-mf-v0", "perf_guidellm_sweep.output_tpm_card_norm")
     assert check.status == pf.FAIL
-    assert "replay_prod" in check.detail and "perf_guidellm_sweep" in check.detail
+    assert "replay" in check.detail and "perf_guidellm_sweep" in check.detail
 
 
 def test_a_second_run_of_the_same_module_is_addressable_by_its_instance_key():
@@ -305,7 +305,7 @@ def test_an_empty_slug_is_the_platform_default_not_a_missing_benchmark():
 def test_an_unreachable_benchmark_platform_is_skipped_not_failed():
     """Whether LLMBench answers right now is a fact about LLMBench. Blocking a
     campaign on it would make the whole form unusable during a deploy."""
-    check = _bench("anything", "replay_prod.score", catalog=None)
+    check = _bench("anything", "replay.score", catalog=None)
     assert check.status == pf.SKIP
 
 

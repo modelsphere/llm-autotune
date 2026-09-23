@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -63,6 +64,44 @@ async def create_objective(
     session.add(
         Event(actor=user.username, kind="objective_created", payload={"name": body.name})
     )
+    await session.commit()
+    await session.refresh(objective)
+    return objective
+
+
+class DuplicateIn(BaseModel):
+    name: str = ""
+
+
+@router.post("/{objective_id}/duplicate", response_model=ObjectiveOut)
+async def duplicate_objective(
+    objective_id: int,
+    body: DuplicateIn,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_async_session),
+):
+    """An editable copy of any objective — the way to start from a built-in one,
+    which cannot be edited itself. Named `<name> (copy)` unless a name is given."""
+    source = await session.get(Objective, objective_id)
+    if source is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "objective not found")
+    name = body.name.strip() or f"{source.name} (copy)"
+    taken = set((await session.execute(select(Objective.name))).scalars())
+    if not body.name.strip():
+        n = 2
+        while name in taken:
+            name = f"{source.name} (copy {n})"
+            n += 1
+    elif name in taken:
+        raise HTTPException(status.HTTP_409_CONFLICT, "an objective with that name exists")
+    objective = Objective(
+        owner_id=user.id, name=name, description=source.description,
+        target_metric=source.target_metric, direction=source.direction,
+        redlines=list(source.redlines or []),
+    )
+    session.add(objective)
+    session.add(Event(actor=user.username, kind="objective_created",
+                      payload={"name": name, "duplicated_from": source.id}))
     await session.commit()
     await session.refresh(objective)
     return objective

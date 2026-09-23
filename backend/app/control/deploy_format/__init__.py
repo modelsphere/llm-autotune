@@ -2,7 +2,7 @@
 
 A binding's `format` is `{"adapter": <name>, "options": {...}}`. `get_format`
 resolves it; `PRESETS` are ready-made specs for repos we know, so binding a
-baseline to `llm-serving-deploy` is one click and a different values layout is
+baseline to a common values layout is one click and a different values layout is
 a new preset (data), not a new adapter (code).
 """
 
@@ -20,15 +20,15 @@ FORMAT_REGISTRY: dict[str, type[DeployFormat]] = {
 PRESETS: dict[str, dict[str, Any]] = {
     # A Helm values file on a release branch: config/model.yaml on a
     # release/<model>-<card>-<engine> branch, extraArgs as "--flag=value".
-    "llm-serving-deploy": {
-        "label": "llm-serving-deploy (config/model.yaml)",
+    "helm-release-branch": {
+        "label": "Helm values on a release branch (config/model.yaml)",
         "path": "config/model.yaml",
         "adapter": "values_yaml",
         "options": dict(ValuesYamlFormat.default_options),
     },
 }
 
-DEFAULT_PRESET = "llm-serving-deploy"
+DEFAULT_PRESET = "helm-release-branch"
 
 
 def get_format(spec: dict[str, Any] | None) -> DeployFormat:

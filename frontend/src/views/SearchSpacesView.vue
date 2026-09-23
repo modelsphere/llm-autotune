@@ -137,7 +137,7 @@ function removeRow(index: number) {
   form.value.rows.splice(index, 1)
 }
 
-/** Rows -> the {base, grid, tied, range, conditions} shape the planner
+/** Rows -> the {base, grid, tied, range, conditions} shape the platform
  *  consumes. */
 function toSpace() {
   const base: Record<string, unknown> = {}
@@ -583,7 +583,7 @@ onMounted(() => {
         </div>
 
         <el-collapse class="raw">
-          <el-collapse-item title="As YAML — what the planner receives">
+          <el-collapse-item title="As YAML — what the campaign receives">
             <pre class="mono block">{{ toYaml({
               base: draftSpace.base,
               grid: draftSpace.grid,

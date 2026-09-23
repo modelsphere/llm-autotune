@@ -6,7 +6,6 @@ import { api, type Baseline, type DeployFormatsCatalog } from '../api/client'
 import DeployBindingPanel from '../components/DeployBindingPanel.vue'
 import InfoHint from '../components/InfoHint.vue'
 import { useI18n } from '../i18n'
-import { campaignToYaml } from '../utils/campaignYaml'
 import { exactTime, relativeTime } from '../utils/time'
 import { fromYaml, toYaml } from '../utils/yaml'
 
@@ -222,11 +221,10 @@ async function remove(b: Baseline) {
 /** Start a campaign from this config: the knobs become the search space's
  *  base, the rest the campaign's fixed fields. Hands the New campaign page
  *  the same YAML its Import button takes. */
-async function tuneFromThis(b: Baseline) {
-  const { data } = await api.get(`/baselines/${b.id}/as-campaign`)
-  const yaml = campaignToYaml({ ...data, name: `${b.served_model_name} from baseline #${b.id}` })
-  sessionStorage.setItem('autotune_campaign_prefill', yaml)
-  router.push('/campaigns/new')
+/** The wizard drafts the campaign server-side: this baseline's launch, a grid
+ *  sized to the fleet, and where each value came from. */
+function tuneFromThis(b: Baseline) {
+  router.push({ path: '/campaigns/new', query: { baseline: String(b.id) } })
 }
 
 const capturedNote = computed(

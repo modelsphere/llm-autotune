@@ -4,7 +4,7 @@
  *  保持一致，不要各自重新组织。
  *
  *  术语保持英文，不硬翻。campaign、run、baseline、canary、benchmark、replay、
- *  redline、planner、worker、tick，以及 TTFT / TPM / GPU / LLM / YAML / API 这类
+ *  redline、policy、worker、tick，以及 TTFT / TPM / GPU / LLM / YAML / API 这类
  *  缩写，都是工程师日常直接说的词——翻成中文只会让人多做一次心算，也搜不到对应的
  *  日志和文档。中英混排在这类工程界面里本来就是自然的写法。
  *
@@ -185,11 +185,14 @@ const zh: typeof en = {
     evaluated: '已评估 {done}/{total} 个候选配置',
     grid: '搜索空间',
     objective: '目标',
-    planner: 'planner',
+    enumerates: '逐个尝试全部配置',
     policy: 'policy',
     report: '报告',
     logs: '日志',
     exportYaml: '导出 YAML',
+    clone: '克隆',
+    cloneName: '副本名称（保留此 campaign 的定义，不含结果）',
+    cloneFailed: '克隆失败',
     rerunFailedOne: '重跑 {n} 个失败配置',
     rerunFailedMany: '重跑 {n} 个失败配置',
     pause: '暂停',
@@ -216,7 +219,7 @@ const zh: typeof en = {
     noRuns: '还没有成功的 benchmark 结果。',
     run: 'Run',
     sweptParameters: '搜索参数',
-    notPlanned: '尚未展开 —— campaign 第一次运行时，planner 才会写出这 {n} 个配置。',
+    notPlanned: '尚未展开 —— campaign 第一次运行时，平台才会写出这 {n} 个配置。',
     editSchedule: '修改定时',
     addSchedule: '添加定时',
     exportTitle: 'Campaign YAML',

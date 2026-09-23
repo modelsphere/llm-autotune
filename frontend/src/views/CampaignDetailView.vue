@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { computed, onMounted, onUnmounted, ref } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import {
   api,
   downloadText,
@@ -125,7 +125,7 @@ const objective = computed(() =>
 /** The second stage's own objective. Separate because the two benchmarks share
  *  no metric names — the screening target does not exist in a replay result. */
 const verifyObjective = computed(() =>
-  describe(campaign.value?.verify_objective, 'replay_prod.score_card_norm'))
+  describe(campaign.value?.verify_objective, 'replay.score_card_norm'))
 
 const staged = computed(
   () => !!campaign.value?.verify_benchmark_slug && (campaign.value?.verify_top_k ?? 0) > 0)
@@ -277,6 +277,29 @@ const winner = computed(() => leaderboard.value.find((e) => !e.is_baseline) ?? n
 /** This campaign as a file. Only the inputs — status, the window it happens to
  *  be serving and any force-start override are results of running it, and a
  *  file that carried them would recreate a campaign already half-finished. */
+const router = useRouter()
+
+/** A new campaign with this one's definition — never its results or window —
+ *  validated server-side exactly like a new one, then opened for editing. */
+async function cloneCampaign() {
+  if (!campaign.value) return
+  let name: string
+  try {
+    ({ value: name } = await ElMessageBox.prompt(t('campaign.cloneName'), t('campaign.clone'), {
+      inputValue: `${campaign.value.name} (copy)`,
+      inputValidator: (v: string) => !!v.trim(),
+    }))
+  } catch {
+    return
+  }
+  try {
+    const { data } = await api.post(`/campaigns/${campaign.value.id}/clone`, { name: name.trim() })
+    router.push(`/campaigns/${data.id}`)
+  } catch (error: any) {
+    ElMessage.error(error.response?.data?.detail ?? t('campaign.cloneFailed'))
+  }
+}
+
 const exportYaml = computed(() =>
   campaign.value ? campaignToYaml(campaign.value as unknown as Record<string, unknown>) : '')
 
@@ -575,8 +598,8 @@ const configRows = computed(() => {
         }]
       : []),
     { label: 'Machines', value: (c.machine_names ?? []).join(', ') || 'any registered machine' },
-    // A policy campaign has no planner: an external container decides what to
-    // try, so showing "grid" here would name a search that never runs.
+    // Who decides what to try: an external policy container, or — with none —
+    // every configuration in the space, in declaration order.
     ...(c.policy_id != null
       ? [{
           label: 'Policy',
@@ -588,7 +611,7 @@ const configRows = computed(() => {
                 .map(([k, v]) => `${k}=${v}`).join(', ')
             : 'default policy settings',
         }]
-      : [{ label: 'Planner', value: c.planner }]),
+      : [{ label: 'Search', value: 'every configuration in the space, in order' }]),
     { label: 'Max run minutes', value: String(c.max_run_minutes) },
     {
       label: 'Baseline canary',
@@ -649,7 +672,6 @@ function copyEverything() {
       machine_names: c.machine_names,
       max_run_minutes: c.max_run_minutes,
       run_baseline_canary: c.run_baseline_canary,
-      planner: c.planner,
       extra_env: c.extra_env,
       extra_volumes: c.extra_volumes,
       search_space: c.search_space,
@@ -671,7 +693,7 @@ const baseConfig = computed<Record<string, unknown>>(() => space.value.base ?? {
 
 /** What became of a candidate, in the words of what actually happened to it:
  *  the run is authoritative, the candidate's own status only says whether the
- *  planner still owes it a run. */
+ *  platform still owes it a run. */
 function candidateOutcome(candidate: Candidate) {
   if (candidate.validation_error) {
     return { label: 'rejected', type: 'danger', detail: candidate.validation_error }
@@ -699,7 +721,7 @@ const machineCards = computed(() => {
 
 /** How big the search space IS, from the campaign's own declaration.
  *
- *  Not the number of candidate rows: the planner expands the space only once
+ *  Not the number of candidate rows: the space is expanded only once
  *  the campaign is active, so a scheduled or paused campaign has none, and
  *  showing that count said a 48-config sweep was empty. Computed on the
  *  server, where conditions are applied — multiplying the axes here would
@@ -755,7 +777,7 @@ function offChip(row: LeaderboardEntry): boolean {
 
 const progress = computed(() => {
   // The denominator is the LARGER of the declared space size and the candidate
-  // rows created so far — not the row count alone. The grid planner materializes
+  // rows created so far — not the row count alone. Enumeration materializes
   // candidates in batches (max_new per pass), so mid-search there are fewer rows
   // than the space will produce, and dividing by them read a 256-config sweep as
   // "101/205" — a moving denominator still being planned. Verify repeats, on the
@@ -834,7 +856,7 @@ onUnmounted(() => window.clearInterval(timer))
           <template v-if="campaign.policy_id != null">
             {{ t('campaign.policy') }}: {{ policy?.name ?? `#${campaign.policy_id}` }} ·
           </template>
-          <template v-else>{{ t('campaign.planner') }}: {{ campaign.planner }} ·</template>
+          <template v-else>{{ t('campaign.enumerates') }} ·</template>
           {{ t('campaign.evaluated', { done: progress.done, total: progress.total }) }}
           <template v-if="spaceName"><br />{{ t('campaign.grid') }}: <b>{{ spaceName }}</b></template>
           <template v-if="objective.name"> · {{ t('campaign.objective') }}:
@@ -850,6 +872,7 @@ onUnmounted(() => window.clearInterval(timer))
         <el-button v-if="logSources.length" @click="logOpen = true">
           {{ t('campaign.logs') }}
         </el-button>
+        <el-button @click="cloneCampaign">{{ t('campaign.clone') }}</el-button>
         <el-button @click="exportOpen = true">
           {{ t('campaign.exportYaml') }}
           <InfoHint :width="320">

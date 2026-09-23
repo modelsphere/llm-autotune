@@ -69,7 +69,12 @@ onMounted(load)
           <span :class="schedule(row).auto ? 'mono' : 'muted'">{{ schedule(row).text }}</span>
         </template>
       </el-table-column>
-      <el-table-column prop="planner" :label="t('campaigns.search')" width="90" />
+      <el-table-column :label="t('campaigns.search')" width="110">
+        <template #default="{ row }">
+          <span v-if="row.policy_id != null" class="mono">policy #{{ row.policy_id }}</span>
+          <span v-else class="muted">{{ t('campaign.enumerates') }}</span>
+        </template>
+      </el-table-column>
       <el-table-column :label="t('common.created')" min-width="130">
         <template #default="{ row }">
           <span :title="exactTime(row.created_at)">{{ relativeTime(row.created_at) }}</span>

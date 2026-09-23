@@ -79,7 +79,7 @@ def _platform(*, auto_promote=True, deploy_branch="", bound=True):
         if bound:
             baseline.binding = DeployBinding(
                 project="group/deploy", branch=TRACKED, path="config/model.yaml",
-                format={"preset": "llm-serving-deploy"},
+                format={"preset": "helm-release-branch"},
                 policy={"fields": {"model_path": "ignore", "image": "ignore"},
                         "path_knobs": "ignore"},
                 commit="aaa111", document=MODEL_YAML,

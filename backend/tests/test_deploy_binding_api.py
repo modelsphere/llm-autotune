@@ -223,10 +223,10 @@ async def _bind(client, baseline_id):
     response = await client.put(
         f"/api/baselines/{baseline_id}/binding",
         json={
-            "project": "example-org/llm-serving-deploy",
+            "project": "example-org/model-deploy",
             "branch": "release/modelforge_0.0.2-nvidia_h100-sglang",
             "path": "config/model.yaml",
-            "format": {"preset": "llm-serving-deploy"},
+            "format": {"preset": "helm-release-branch"},
         },
     )
     assert response.status_code == 200, response.text

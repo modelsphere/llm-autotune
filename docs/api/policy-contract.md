@@ -99,7 +99,7 @@ the response is always current.
   },
 
   "hardware": {
-    "machine": "gpu-051",
+    "machine": "gpu-h100-1",
     "gpu_type": "H100",
     "gpu_indices": [0, 1, 2, 3],
     "ports": [28200, 28201, 28202, 28203],
@@ -130,7 +130,7 @@ the response is always current.
   "services": {
     "launch": true,
     "benchmarks": {
-      "screen": {"slug": "perf-suite-v1", "approx_minutes": 10, "dataset_build_id": "b-20260818"}
+      "screen": {"slug": "autotune-screen-v1", "approx_minutes": 10, "dataset_build_id": "b-20260818"}
     },
     "state": true
   },

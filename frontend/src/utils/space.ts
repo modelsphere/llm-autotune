@@ -1,4 +1,4 @@
-/** Reading a search space the way the planner does.
+/** Reading a search space the way the platform expands it.
  *
  *  The campaign's own declaration is the source of truth for what varies —
  *  inferring it by diffing candidate configs disagrees the moment two points

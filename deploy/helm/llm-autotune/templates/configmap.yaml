@@ -22,8 +22,11 @@ data:
   AUTOTUNE_LLMBENCH_BASE_URL: {{ .Values.llmbench.url | quote }}
   {{- end }}
   AUTOTUNE_LLMBENCH_BENCHMARK_SLUG: {{ .Values.llmbench.benchmarkSlug | quote }}
-  {{- if .Values.llmbench.username }}
-  AUTOTUNE_LLMBENCH_USERNAME: {{ .Values.llmbench.username | quote }}
+  {{- if .Values.llmbench.webUrl }}
+  AUTOTUNE_LLMBENCH_WEB_URL: {{ .Values.llmbench.webUrl | quote }}
+  {{- end }}
+  {{- if .Values.llmbench.email }}
+  AUTOTUNE_LLMBENCH_EMAIL: {{ .Values.llmbench.email | quote }}
   {{- end }}
   {{- if .Values.gpuCluster.inCluster }}
   # The launch driver talks to the API server this release runs in, using the

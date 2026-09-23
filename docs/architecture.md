@@ -116,7 +116,7 @@ So the platform owns the roll rather than inheriting it:
 - **We trigger the rebuild, not LLMBench's clock.** A profile is set aside with
   `schedule_interval_hours: 0`, so nothing rebuilds it but our `trigger_build`
   call. The whole coupling is: ask for a build, get told its id, and read that id
-  back off every result (`replay_prod.dataset_id` / `_sha256`). We never fetch
+  back off every result (`replay.dataset_id` / `_sha256`). We never fetch
   or inspect the data — LLMBench owns everything behind the id.
 - **Fresh across campaigns.** At its first measurement a campaign resolves the
   profile's current build; under `rebuild_at_start` it triggers a fresh one from

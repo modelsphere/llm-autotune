@@ -2292,6 +2292,7 @@ class Supervisor:
                 "machine_count": machine_count,
                 "card_type": run.machine.gpu_type or None,
             }
+        return context
 
     def _node_assignments(self, session: Session, run: Run) -> list[NodeAssignment]:
         """The run's node plan, master first, rebuilt from `run_nodes`.

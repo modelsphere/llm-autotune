@@ -152,9 +152,9 @@ class BenchFailedEvaluator(Evaluator):
     def poll(self, external_ref) -> EvalOutcome:
         return EvalOutcome(
             status=EvalStatus.FAILED,
-            error="benchmark ran but did not pass: replay_prod (uptime 0.06 < 0.99)",
-            metrics={"replay_prod.uptime": 0.06},
-            raw={"passed": False, "runs": [{"module_name": "replay_prod", "passed": False}]},
+            error="benchmark ran but did not pass: replay (uptime 0.06 < 0.99)",
+            metrics={"replay.uptime": 0.06},
+            raw={"passed": False, "runs": [{"module_name": "replay", "passed": False}]},
         )
 
 

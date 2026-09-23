@@ -44,8 +44,8 @@ SCREEN_OBJECTIVE = {
     "redlines": [{"metric": "functional_acceptance.pass_rate", "op": ">=", "value": 0.99}],
 }
 REPLAY_OBJECTIVE = {
-    "target_metric": "replay_prod.score_card_norm",
-    "redlines": [{"metric": "replay_prod.uptime", "op": ">=", "value": 0.95}],
+    "target_metric": "replay.score_card_norm",
+    "redlines": [{"metric": "replay.uptime", "op": ">=", "value": 0.95}],
 }
 GRID = {"grid": {"tp": [2, 4]}}
 
@@ -279,8 +279,8 @@ def test_a_verification_run_is_judged_by_the_replay_objective():
     supervisor.tick()
 
     replay_metrics = {
-        "replay_prod.score_card_norm": 4565217.07,
-        "replay_prod.uptime": 1.0,
+        "replay.score_card_norm": 4565217.07,
+        "replay.uptime": 1.0,
     }
     with factory() as session:
         campaign = session.get(Campaign, 1)
@@ -372,7 +372,7 @@ def test_a_verification_result_never_reaches_the_screening_ranking():
         session.add(Run(id=70, campaign_id=1, candidate_id=candidate.id,
                         machine_id=1, status=RunStatus.SUCCEEDED.value))
         session.add(Result(run_id=70, source="llmbench", passed=True,
-                           metrics={"replay_prod.score_card_norm": 9.0},
+                           metrics={"replay.score_card_norm": 9.0},
                            objective_value=9.0, feasible=True, breaches=[]))
         session.commit()
 
@@ -399,7 +399,7 @@ def test_ranking_for_verification_ignores_verification_results():
         session.add(Run(id=80, campaign_id=1, candidate_id=candidate.id,
                         machine_id=1, status=RunStatus.SUCCEEDED.value))
         session.add(Result(run_id=80, source="llmbench", passed=True,
-                           metrics={"replay_prod.score_card_norm": 4_565_217.0},
+                           metrics={"replay.score_card_norm": 4_565_217.0},
                            objective_value=4_565_217.0, feasible=True, breaches=[]))
         session.commit()
 

@@ -144,7 +144,7 @@ SUBMISSION: dict = {
     "card_type": "A100",
     "runs": [
         {
-            "module_name": "replay_prod",
+            "module_name": "replay",
             "status": "done",
             "score": MODULE_SCORE,
             "passed": False,

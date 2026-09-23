@@ -12,7 +12,7 @@ is what decides the winner.
 
 The two stages report DIFFERENT METRIC NAMES — guidellm's
 `perf_guidellm_sweep.c1.output_tps` has no counterpart in replay's flat
-`replay_prod.output_tpm`, and vice versa. So a stage carries its own
+`replay.output_tpm`, and vice versa. So a stage carries its own
 objective as well as its own benchmark: scoring a replay result against the
 screening objective yields None, which reads downstream as "this run produced
 nothing" rather than "this run was measured differently".

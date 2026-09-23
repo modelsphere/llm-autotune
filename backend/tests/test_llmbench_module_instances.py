@@ -47,9 +47,9 @@ def test_the_first_run_keeps_the_bare_name_and_later_runs_are_numbered():
     assert instance_keys(["functional_acceptance", "perf_guidellm_sweep"]) == [
         "functional_acceptance", "perf_guidellm_sweep",
     ]
-    assert instance_keys(["perf_guidellm_sweep", "perf_guidellm_sweep", "replay_prod",
+    assert instance_keys(["perf_guidellm_sweep", "perf_guidellm_sweep", "replay",
                           "perf_guidellm_sweep"]) == [
-        "perf_guidellm_sweep", "perf_guidellm_sweep#2", "replay_prod",
+        "perf_guidellm_sweep", "perf_guidellm_sweep#2", "replay",
         "perf_guidellm_sweep#3",
     ]
 
@@ -107,12 +107,12 @@ def test_the_benchmark_catalog_lists_instance_keys_so_objectives_on_them_validat
         {"slug": "sweep-test", "modules": [
             {"module_name": "perf_guidellm_sweep"}, {"module_name": "perf_guidellm_sweep"},
         ]},
-        {"slug": "replay", "modules": [{"module_name": "replay_prod"}]},
+        {"slug": "replay", "modules": [{"module_name": "replay"}]},
     ]}
     client._send = lambda *a, **k: SimpleNamespace(  # type: ignore[method-assign]
         raise_for_status=lambda: None, json=lambda: payload,
     )
     assert client.modules_by_benchmark() == {
         "sweep-test": ["perf_guidellm_sweep", "perf_guidellm_sweep#2"],
-        "replay": ["replay_prod"],
+        "replay": ["replay"],
     }

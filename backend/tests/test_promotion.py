@@ -59,7 +59,8 @@ def _rows():
         objective_value=1875.0,
         feasible=True,
         breaches=[],
-        metrics={"output_tpm_card_norm": 1875.0, "dataset_id": "20260807T00Z"},
+        # Namespaced by module, as every harvested result is.
+        metrics={"output_tpm_card_norm": 1875.0, "replay.dataset_id": "20260807T00Z"},
     )
     return campaign, candidate, run, result
 

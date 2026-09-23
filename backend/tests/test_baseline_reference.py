@@ -69,7 +69,7 @@ def _platform(*, baseline_args=None, prod=True, card_type="A100",
             status=CampaignStatus.ACTIVE.value, run_baseline_canary=canary,
             verify_benchmark_slug="rolling-replay-test-mf-v0" if staged else "",
             verify_top_k=1 if staged else 0,
-            verify_objective={"target_metric": "replay_prod.score_card_norm"},
+            verify_objective={"target_metric": "replay.score_card_norm"},
         ))
         if baseline_args is not None:
             session.add(Baseline(

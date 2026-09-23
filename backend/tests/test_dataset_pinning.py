@@ -48,7 +48,7 @@ BUILD_A = {
 BUILD_B = {**BUILD_A, "build_id": "20260806T091004Z", "sha256": "aa11" * 16, "records": 812}
 
 SCREEN_OBJECTIVE = {"target_metric": "perf_guidellm_sweep.output_tpm_card_norm"}
-REPLAY_OBJECTIVE = {"target_metric": "replay_prod.score_card_norm"}
+REPLAY_OBJECTIVE = {"target_metric": "replay.score_card_norm"}
 
 
 class FakeProfiles:
@@ -407,10 +407,10 @@ def test_a_result_from_another_build_is_flagged_and_ranked_last():
         dataset_build_id=BUILD_A["build_id"],
         dataset_sha256=BUILD_A["sha256"],
     )
-    same = {"replay_prod.dataset_id": BUILD_A["build_id"],
-            "replay_prod.dataset_sha256": BUILD_A["sha256"][:16]}
-    other = {"replay_prod.dataset_id": BUILD_B["build_id"],
-             "replay_prod.dataset_sha256": BUILD_B["sha256"][:16]}
+    same = {"replay.dataset_id": BUILD_A["build_id"],
+            "replay.dataset_sha256": BUILD_A["sha256"][:16]}
+    other = {"replay.dataset_id": BUILD_B["build_id"],
+             "replay.dataset_sha256": BUILD_B["sha256"][:16]}
 
     assert pinning.mismatch(campaign, same) is None
     assert pinning.mismatch(campaign, other) == (BUILD_B["build_id"], BUILD_B["sha256"][:16])
@@ -428,7 +428,7 @@ def test_a_screening_result_has_no_dataset_and_is_not_missing_one():
 
 
 def test_a_campaign_that_pins_nothing_flags_nothing():
-    assert pinning.mismatch(Campaign(), {"replay_prod.dataset_id": "whatever"}) is None
+    assert pinning.mismatch(Campaign(), {"replay.dataset_id": "whatever"}) is None
 
 
 # -- the check that runs before the night is spent ----------------------------

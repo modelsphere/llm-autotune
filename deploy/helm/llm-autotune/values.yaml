@@ -101,11 +101,17 @@ redis:
 # deployment. `mock.enabled` (values-mock.yaml) replaces it with a fake for a
 # GPU-free trial.
 llmbench:
+  # How this platform's pods reach LLMBench's API, e.g. the backend service
+  # http://llm-bench-backend.llm-bench:8000 when both run in one cluster.
   url: ""
+  # Where people open LLMBench in a browser (links in reports). Empty = url.
+  webUrl: ""
+  # The service-account key LLMBench was installed with (its
+  # secrets.serviceApiKey). See LLMBench's docs/deploying.md.
   apiKey: ""
-  username: ""
+  email: ""
   password: ""
-  benchmarkSlug: perf-suite-v1
+  benchmarkSlug: autotune-screen-v1
 
 # The GPU cluster runs land on.
 gpuCluster:

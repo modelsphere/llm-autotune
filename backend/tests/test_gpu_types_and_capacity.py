@@ -82,8 +82,8 @@ def _probe(nodes: list[dict], selector: str) -> dict:
 
 def test_probe_reads_count_and_type_of_a_single_pinned_node():
     result = _probe(
-        [_node("gpu-051", "NVIDIA-H100-80GB-HBM3", 8)],
-        "kubernetes.io/hostname=gpu-051",
+        [_node("gpu-h100-1", "NVIDIA-H100-80GB-HBM3", 8)],
+        "kubernetes.io/hostname=gpu-h100-1",
     )
     assert result["supported"] is True
     assert result["gpu_count"] == 8
@@ -94,8 +94,8 @@ def test_probe_reads_count_and_type_of_a_single_pinned_node():
 
 def test_probe_sums_a_type_pool_and_reports_the_shared_type():
     result = _probe(
-        [_node("gpu-051", "NVIDIA-H100-80GB-HBM3", 8),
-         _node("gpu-055", "NVIDIA-H100-80GB-HBM3", 8)],
+        [_node("gpu-h100-1", "NVIDIA-H100-80GB-HBM3", 8),
+         _node("gpu-h100-2", "NVIDIA-H100-80GB-HBM3", 8)],
         "nvidia.com/gpu.product=NVIDIA-H100-80GB-HBM3",
     )
     assert result["gpu_count"] == 16
@@ -105,8 +105,8 @@ def test_probe_sums_a_type_pool_and_reports_the_shared_type():
 
 def test_probe_warns_and_withholds_a_type_when_a_pool_spans_two_cards():
     result = _probe(
-        [_node("gpu-005", "NVIDIA-A100-SXM4-80GB", 8),
-         _node("gpu-051", "NVIDIA-H100-80GB-HBM3", 8)],
+        [_node("gpu-a100-1", "NVIDIA-A100-SXM4-80GB", 8),
+         _node("gpu-h100-1", "NVIDIA-H100-80GB-HBM3", 8)],
         "some-shared-label=true",
     )
     # Summed capacity is still meaningful, but a single card type is not — so it
@@ -121,7 +121,7 @@ def test_probe_warns_on_an_unknown_card_and_on_no_selector():
     assert unknown["gpu_type"] == ""
     assert any("unknown GPU product" in w for w in unknown["warnings"])
 
-    none = _probe([_node("gpu-051", "NVIDIA-H100-80GB-HBM3", 8)], "")
+    none = _probe([_node("gpu-h100-1", "NVIDIA-H100-80GB-HBM3", 8)], "")
     assert none["node_count"] == 0
     assert any("no node selector" in w for w in none["warnings"])
 
@@ -141,14 +141,14 @@ def test_bare_metal_driver_cannot_probe():
 def test_environment_records_the_card_the_run_actually_landed_on():
     settings = _clone(k8s_workload_kind="deployment")
     api = FakeK8sApi(settings)
-    api.nodes = [_node("gpu-051", "NVIDIA-H100-80GB-HBM3", 8)]
+    api.nodes = [_node("gpu-h100-1", "NVIDIA-H100-80GB-HBM3", 8)]
     driver = _driver(settings, api)
     handle, _ = driver.launch(_spec())
-    # The pod landed on gpu-051, which the node read says is an H100.
-    api.pods = [{"spec": {"nodeName": "gpu-051"}, "status": {}}]
+    # The pod landed on gpu-h100-1, which the node read says is an H100.
+    api.pods = [{"spec": {"nodeName": "gpu-h100-1"}, "status": {}}]
 
     snapshot = driver.environment(handle)
-    assert snapshot["k8s_node"] == "gpu-051"
+    assert snapshot["k8s_node"] == "gpu-h100-1"
     assert snapshot["card_type"] == "H100"
 
 

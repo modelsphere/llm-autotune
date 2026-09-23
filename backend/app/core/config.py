@@ -21,12 +21,28 @@ class Settings(BaseSettings):
     jwt_expire_minutes: int = 1440
 
     llmbench_base_url: str = "http://llmbench:8000"
-    # A personal API key ("llmb_…") authenticates directly — no login call.
-    # Username/password remain as a fallback when no key is configured.
+    # The API key of LLMBench's service account ("llmb_…", seeded by LLMBench's
+    # deployment from the same value) — authenticates directly, no login call.
+    # Email/password remain as a fallback when no key is configured.
     llmbench_api_key: str = ""
-    llmbench_username: str = ""
+    llmbench_email: str = ""
     llmbench_password: str = ""
-    llmbench_benchmark_slug: str = "perf-suite-v1"  # default when a campaign sets none
+    # The benchmark a campaign screens with when it names none: AutoTune's own,
+    # a sweep-only benchmark it creates and locks on LLMBench from
+    # app/evaluation/benchmark_templates/ (at bootstrap, or via the UI).
+    llmbench_benchmark_slug: str = "autotune-screen-v1"
+    llmbench_ensure_benchmarks: bool = True
+    # Where a PERSON opens LLMBench in a browser, for links in reports and the
+    # UI. Distinct from llmbench_base_url, which is how this platform's pods
+    # reach it (inside a cluster, a service address no browser can open).
+    # Empty = derive from llmbench_base_url by dropping a trailing /api.
+    llmbench_web_url: str = ""
+
+    # The window a drafted campaign runs in when its author names none
+    # (POST /campaigns/draft). Empty = no clock: the draft starts when started.
+    default_daily_start: str = ""
+    default_daily_end: str = ""
+    default_schedule_timezone: str = ""
     # Run LLMBench's own endpoint probe before submitting (near-free, and it
     # tests reachability from the benchmark platform's network position).
     llmbench_preflight: bool = True
@@ -244,7 +260,7 @@ class Settings(BaseSettings):
     k8s_engine_cpu_limit: str = ""
     k8s_engine_memory_limit: str = ""
     # Constrain which nodes a run's pod may land on, as comma-separated
-    # `label=value` pairs (e.g. "kubernetes.io/hostname=gpu-005" or
+    # `label=value` pairs (e.g. "kubernetes.io/hostname=gpu-a100-1" or
     # "nvidia.com/gpu.product=NVIDIA-A100-SXM4-80GB"). Empty = the scheduler is
     # free. This matters when weights are a per-node hostPath that only some
     # nodes carry: without it the scheduler can place the pod on a node missing

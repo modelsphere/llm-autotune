@@ -25,7 +25,7 @@ def _driver(**over):
 
 def _node(gpus: int):
     return {
-        "metadata": {"name": "gpu-005"},
+        "metadata": {"name": "gpu-a100-1"},
         "status": {"allocatable": {"nvidia.com/gpu": str(gpus)}},
     }
 
@@ -62,7 +62,7 @@ def test_a_bound_pod_is_placed_even_while_it_pulls():
     the run owns hardware even before a container starts. Withdrawing it would
     throw away real work."""
     driver, api, handle = _driver()
-    api.pods = [{"metadata": {"name": "p"}, "spec": {"nodeName": "gpu-005"}, "status": {}}]
+    api.pods = [{"metadata": {"name": "p"}, "spec": {"nodeName": "gpu-a100-1"}, "status": {}}]
     assert driver.placement(handle) == "placed"
 
 

@@ -107,7 +107,10 @@ def _first_line(text: str | None, limit: int = 300) -> str:
 
 
 def _llmbench_web_base() -> str:
-    base = (get_settings().llmbench_base_url or "").rstrip("/")
+    settings = get_settings()
+    if settings.llmbench_web_url:
+        return settings.llmbench_web_url.rstrip("/")
+    base = (settings.llmbench_base_url or "").rstrip("/")
     return base.removesuffix("/api") if base else ""
 
 

@@ -56,7 +56,7 @@ def _m(
 
 PERF = "perf_guidellm_sweep"
 FUNC = "functional_acceptance"
-REPLAY = "replay_prod"
+REPLAY = "replay"
 
 METRICS: list[dict[str, Any]] = [
     # -- throughput, card-normalized -----------------------------------------
@@ -213,7 +213,7 @@ METRICS: list[dict[str, Any]] = [
 
 DEFAULT_TARGET_METRIC = f"{PERF}.output_tpm_card_norm"
 # What the expensive stage ranks on when a campaign does not say. Card
-# normalization is the whole reason this is not simply `replay_prod.score`:
+# normalization is the whole reason this is not simply `replay.score`:
 # see the entry above.
 DEFAULT_VERIFY_TARGET_METRIC = f"{REPLAY}.score_card_norm"
 

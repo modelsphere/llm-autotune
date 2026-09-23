@@ -10,6 +10,7 @@ from app.api import (
     api_keys,
     auth,
     baselines,
+    benchmarks,
     campaigns,
     clusters,
     leases,
@@ -137,6 +138,7 @@ app.include_router(campaigns.router, prefix=api_prefix)
 app.include_router(runs.router, prefix=api_prefix)
 app.include_router(search_spaces.router, prefix=api_prefix)
 app.include_router(objectives.router, prefix=api_prefix)
+app.include_router(benchmarks.router, prefix=api_prefix)
 app.include_router(baselines.router, prefix=api_prefix)
 app.include_router(promotions.router, prefix=api_prefix)
 app.include_router(policies.router, prefix=api_prefix)

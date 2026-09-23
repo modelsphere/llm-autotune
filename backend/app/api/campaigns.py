@@ -1,5 +1,6 @@
 import logging
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 import anyio
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -9,6 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.campaign_spec import SPEC_KEYS, DraftRequest, draft_campaign, spec_of
 from app.control.launch import MachineInfo, get_driver
 from app.control.launch import preflight as pf
 from app.control.orchestrator import lifecycle
@@ -178,6 +180,84 @@ async def dataset_profiles(_: User = Depends(get_current_user)):
     return out
 
 
+@router.get("/benchmarks", summary="Benchmarks on LLMBench a campaign can submit to")
+async def benchmarks(_: User = Depends(get_current_user)):
+    """For the campaign form's pickers: each benchmark's slug, the modules it
+    runs (as the instance keys an objective names), and the rolling dataset it
+    replays, if any. Proxied like /dataset-profiles — LLMBench is the source."""
+    def _read() -> list[dict]:
+        client = LLMBenchClient()
+        modules = client.modules_by_benchmark()
+        wired = client.dataset_profiles_by_benchmark()
+        return [
+            {"slug": b["slug"], "name": b.get("name") or b["slug"],
+             "modules": modules.get(b["slug"], []), "replays_profile": wired.get(b["slug"], "")}
+            for b in client.list_benchmarks()
+        ]
+
+    try:
+        return await anyio.to_thread.run_sync(_read)
+    except Exception as exc:
+        raise HTTPException(
+            status.HTTP_502_BAD_GATEWAY, f"could not reach the benchmark platform: {exc}"
+        ) from exc
+
+
+class DraftIn(BaseModel):
+    """What to start from. Everything else is derived — see app/campaign_spec.py."""
+
+    baseline_id: int | None = None
+    served_model_name: str = ""
+    engine: str = ""
+    machine_names: list[str] = Field(default_factory=list)
+    node_group: str = ""
+    benchmark_slug: str = ""
+    verify_benchmark_slug: str = ""
+    policy_id: int | None = None
+    daily_start: str = ""
+    daily_end: str = ""
+    schedule_timezone: str = ""
+    name: str = ""
+
+
+class DraftOut(BaseModel):
+    campaign: dict[str, Any]
+    provenance: dict[str, str]
+    warnings: list[str]
+
+
+@router.post(
+    "/draft", response_model=DraftOut, summary="Draft a campaign from what the platform knows"
+)
+async def draft(
+    body: DraftIn,
+    _: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_async_session),
+):
+    """A complete campaign body built from a baseline, the fleet, LLMBench and
+    the metrics catalog, with where each value came from. Nothing is saved:
+    review it, preflight it, then POST it to /api/campaigns."""
+    wiring: dict[str, str] | None = None
+    if body.verify_benchmark_slug:
+        try:
+            wiring = await anyio.to_thread.run_sync(
+                lambda: LLMBenchClient().dataset_profiles_by_benchmark()
+            )
+        except Exception as exc:  # a fact about LLMBench now, not about the draft
+            logger.info("draft could not read benchmark datasets: %s", exc)
+    request = DraftRequest(**body.model_dump())
+    try:
+        result = await session.run_sync(
+            lambda s: draft_campaign(s, request, dataset_wiring=wiring)
+        )
+    except LookupError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
+    except (ValueError, ValidationError) as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+    return DraftOut(campaign=result.campaign, provenance=result.provenance,
+                    warnings=result.warnings)
+
+
 @router.get("", response_model=list[CampaignOut])
 async def list_campaigns(
     _: User = Depends(get_current_user), session: AsyncSession = Depends(get_async_session)
@@ -193,6 +273,13 @@ async def create_campaign(
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_async_session),
 ):
+    return await _create(session, user, body)
+
+
+async def _create(session: AsyncSession, user: User, body: CampaignCreate) -> Campaign:
+    """Validate and save a campaign. The one path every way of making one takes
+    — the form, an imported spec, a clone, a posted draft — so a rule added here
+    holds for all of them."""
     if body.engine not in _ALLOWED_ENGINES:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "engine must be sglang|vllm")
     # With no policy the platform simply enumerates the declared space; with
@@ -270,6 +357,52 @@ _LIVE_CAMPAIGN_STATES = (
     CampaignStatus.ACTIVE.value,
     CampaignStatus.PAUSED.value,
 )
+
+
+@router.get("/{campaign_id}/spec", summary="The body that would create this campaign again")
+async def campaign_spec(
+    campaign_id: int,
+    _: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_async_session),
+):
+    campaign = await session.get(Campaign, campaign_id)
+    if campaign is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "campaign not found")
+    return spec_of(campaign)
+
+
+class CloneIn(BaseModel):
+    name: str
+    # Any spec field to change on the copy, e.g. {"search_space": {...}}.
+    overrides: dict[str, Any] = Field(default_factory=dict)
+
+
+@router.post("/{campaign_id}/clone", response_model=CampaignOut)
+async def clone_campaign(
+    campaign_id: int,
+    body: CloneIn,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_async_session),
+):
+    """A new campaign from this one's definition — never its results, window or
+    status — with any fields overridden. Validated exactly like a new one."""
+    source = await session.get(Campaign, campaign_id)
+    if source is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "campaign not found")
+    unknown = sorted(set(body.overrides) - set(SPEC_KEYS))
+    if unknown:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            f"not campaign fields: {', '.join(unknown)} (see GET /campaigns/{campaign_id}/spec)",
+        )
+    try:
+        new = CampaignCreate.model_validate(
+            {**spec_of(source), **body.overrides, "name": body.name}
+        )
+    except ValidationError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+    campaign = await _create(session, user, new)
+    return await _campaign_out(session, campaign)
 
 
 async def _campaign_out(session: AsyncSession, campaign: Campaign) -> CampaignOut:
@@ -405,25 +538,24 @@ class PreflightRequest(BaseModel):
     dataset_profile: str = ""
 
 
-def _benchmark_catalog() -> dict[str, list[str]] | None:
+def _benchmark_catalog(client: LLMBenchClient) -> dict[str, list[str]] | None:
     """What LLMBench offers this account. None when it could not be asked —
     which is a fact about the platform right now, never a verdict on a
     campaign, so the checks built from it degrade to SKIP."""
     try:
-        return LLMBenchClient().modules_by_benchmark()
+        return client.modules_by_benchmark()
     except Exception as exc:  # unreachable, unauthorized, shape changed
         logger.info("preflight could not list benchmarks: %s", exc)
         return None
 
 
-def _dataset_wiring() -> tuple[dict[str, str] | None, list[str] | None]:
+def _dataset_wiring(client: LLMBenchClient) -> tuple[dict[str, str] | None, list[str] | None]:
     """Which profile each benchmark replays, and which profiles exist.
 
     Both None when LLMBench could not be asked — same rule as the benchmark
     catalog: a fact about the platform right now is never a verdict on a
     campaign, so the check degrades to SKIP rather than blocking a night.
     """
-    client = LLMBenchClient()
     try:
         wired = client.dataset_profiles_by_benchmark()
     except Exception as exc:
@@ -439,7 +571,9 @@ def _dataset_wiring() -> tuple[dict[str, str] | None, list[str] | None]:
     return wired, profiles
 
 
-def _benchmark_checks(body: PreflightRequest, catalog: dict[str, list[str]] | None) -> list:
+def _benchmark_checks(
+    body: PreflightRequest, catalog: dict[str, list[str]] | None, client: LLMBenchClient
+) -> list:
     checks = [
         pf.benchmark_check(
             "benchmark", "Benchmark", body.benchmark_slug, catalog,
@@ -455,7 +589,7 @@ def _benchmark_checks(body: PreflightRequest, catalog: dict[str, list[str]] | No
                 ),
             )
         )
-        wired, profiles = _dataset_wiring()
+        wired, profiles = _dataset_wiring(client)
         checks.append(
             pf.dataset_check(
                 body.dataset_profile.strip(), body.verify_benchmark_slug, wired, profiles
@@ -482,8 +616,10 @@ def _run_preflight(body: PreflightRequest, machines: list[Machine]) -> list[dict
     space_check = pf.space_check(
         candidate_count(body.search_space or {}), space_errors(body.search_space or {})
     )
-    # One HTTP call, not one per machine: the answer is about the campaign.
-    benchmark_checks = _benchmark_checks(body, _benchmark_catalog())
+    # One catalog read for the whole campaign, not one per machine or per
+    # question: the client memoizes it, and both checks share this client.
+    llmbench = LLMBenchClient()
+    benchmark_checks = _benchmark_checks(body, _benchmark_catalog(llmbench), llmbench)
     # A declared node group is a fact about the deployment, worth one line so the
     # author sees the shape they are about to save (and that the Machines list is
     # no longer the pin). Its existence was checked when the campaign was built;

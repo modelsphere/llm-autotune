@@ -1,0 +1,39 @@
+# The benchmark AutoTune screens every candidate with, created on LLMBench by
+# AutoTune itself (POST /api/benchmarks/ensure, and at startup) and then locked,
+# so the thing every result in a campaign was measured with cannot move.
+#
+# LLMBench's own export format — `GET /benchmarks/admin/benchmarks/{id}/export`
+# writes it and the import reads it — so a template is refreshed by exporting a
+# benchmark tuned in LLMBench's editor and dropping the file here.
+#
+# One module on purpose: a screen runs once per candidate, all night, so it is
+# the throughput sweep and nothing that does not move with a serving config.
+# Correctness and replay belong in a verify benchmark run on the few that win.
+slug: autotune-screen-v1
+name: AutoTune screen — throughput sweep
+description: >
+  Output throughput and latency at four concurrency levels. Created and locked by
+  LLM AutoTune; edit the template in AutoTune, not this benchmark.
+version: "1"
+status: active
+modules:
+  - module_name: perf_guidellm_sweep
+    order_index: 0
+    weight: 1.0
+    skip_if_prev_failed: false
+    params:
+      search_mode: grid
+      concurrencies: "1,4,16,64"
+      input_tokens: 2048
+      output_tokens: 512
+      max_seconds: 60
+      warmup_seconds: 10
+      request_timeout: 300
+    metric_configs:
+      - {key: output_tps, role: score, weight: 1.0, formula: ratio_capped, baseline: 5000.0}
+      - {key: uptime, role: redline, min_val: 0.95}
+      - {key: ttft_p50_ms, role: display}
+      - {key: ttft_p99_ms, role: display}
+      - {key: itl_p99_ms, role: display}
+      - {key: request_output_tps, role: display}
+      - {key: reported_concurrency, role: display}

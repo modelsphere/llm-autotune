@@ -20,6 +20,7 @@ from typing import Any
 from app.control.engines import get_adapter
 from app.control.launch.base import LaunchSpec, MachineInfo
 from app.control.search.validation import cards_used
+from app.datasets.pinning import dataset_of
 from app.db.models import Campaign, Candidate, Result, Run
 
 
@@ -94,8 +95,9 @@ def build_promotion_config(
             "feasible": bool(result.feasible),
             "breaches": list(result.breaches or []),
             # How this result knows it is comparable to the baseline/other
-            # nights — the replayed build. From the flat replay metrics.
-            "dataset_build_id": str(metrics.get("dataset_id", "") or ""),
+            # nights — the replayed build. The metrics are namespaced by
+            # module (`replay.dataset_id`), so read them the way pinning does.
+            "dataset_build_id": (dataset_of(metrics) or ("", ""))[0],
         }
     return {
         "campaign_id": campaign.id,

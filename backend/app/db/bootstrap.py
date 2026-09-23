@@ -101,6 +101,27 @@ def _seed(engine) -> None:
     except Exception:  # noqa: BLE001 — a seed must never block a deploy
         logger.exception("admin seeding failed — no user was created")
     _register_local_cluster(engine)
+    _ensure_screen_benchmark()
+
+
+def _ensure_screen_benchmark() -> None:
+    """Create and lock AutoTune's screening benchmark on LLMBench, if it can be
+    reached. Never fatal: LLMBench is a separate install that may come up after
+    this one, and the same thing can be done later from the campaign form or
+    POST /api/benchmarks/ensure."""
+    settings = get_settings()
+    if not settings.llmbench_ensure_benchmarks or not settings.llmbench_base_url:
+        return
+    from app.evaluation.benchmarks import ensure_benchmark
+    from app.evaluation.llmbench import LLMBenchClient
+
+    try:
+        ensured = ensure_benchmark(LLMBenchClient(max_attempts=1))
+    except Exception as exc:  # unreachable, no service key yet, refused
+        logger.info("screening benchmark not ensured now (%s); ensure it later from the UI", exc)
+        return
+    logger.info("screening benchmark %s %s and locked", ensured.slug,
+                "created" if ensured.created else "present")
 
 
 def _register_local_cluster(engine) -> None:

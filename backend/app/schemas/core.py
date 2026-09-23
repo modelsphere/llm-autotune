@@ -86,7 +86,7 @@ class MachineCreate(BaseModel):
     # meant before clusters existed.
     cluster_id: int | None = None
     # k8s only: which nodes this slice's pods may land on, as "label=value"
-    # pairs (e.g. "kubernetes.io/hostname=gpu-005"). Empty = scheduler is free.
+    # pairs (e.g. "kubernetes.io/hostname=gpu-a100-1"). Empty = scheduler is free.
     node_selector: str = ""
     # Where the ENGINE reaches this box for inter-node traffic (dist-init /
     # NCCL), when that is not the same as `host` — `host` is the ssh target and

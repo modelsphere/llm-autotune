@@ -76,14 +76,42 @@ to run experiments on a machine it could not capture.
 
 ## What measures a run
 
-Every run is benchmarked by an external platform; the adapter targets LLMBench.
+Every run is benchmarked by an external platform; the adapter targets
+[LLMBench](https://github.com/modelsphere/llm-bench), installed from its own chart.
+The two are wired by one shared secret: a **service account** on LLMBench that
+AutoTune acts as. It can submit, read and trigger rolling-dataset builds, and
+create and change only the benchmarks it created itself. It is never an admin.
+
+```bash
+# 1. Mint a key once (llm-bench/scripts/gen-prod-secrets.sh --service-key does this)
+KEY="llmb_$(openssl rand -hex 24)"
+
+# 2. LLMBench seeds the service account with it
+helm upgrade --install llm-bench ./deploy/helm/llm-bench -n llm-bench \
+  --set secrets.serviceUsername=autotune --set secrets.serviceApiKey="$KEY" ...
+
+# 3. AutoTune authenticates with the same value
+helm upgrade --install llm-autotune ./deploy/helm/llm-autotune -n llm-autotune \
+  --set llmbench.url=http://llm-bench-backend.llm-bench:8000 \
+  --set llmbench.apiKey="$KEY" ...
+```
 
 ```yaml
 llmbench:
-  url: http://llmbench.your-cluster:8000
-  apiKey: ""            # a personal key authenticates directly
-  benchmarkSlug: perf-suite-v1
+  url: http://llm-bench-backend.llm-bench:8000
+  webUrl: https://llmbench.example.com   # where a person opens a submission; default: url
+  apiKey: ""            # the service key above (or email + password for a user account)
+  benchmarkSlug: autotune-screen-v1   # created and locked on LLMBench at startup
 ```
+
+At startup AutoTune creates its screening benchmark on LLMBench from
+`backend/app/evaluation/benchmark_templates/autotune-screen-v1.yaml` and locks
+it, so every result in a campaign is measured with the same thing. If that slug
+already exists and another account created it, AutoTune refuses to adopt it;
+choose another slug. An admin can re-run this from the New campaign page, or
+with `POST /api/benchmarks/ensure`. The full contract between the two platforms
+(routes, roles, metric names, dataset stamping) is in llm-bench's
+`docs/api/for-autotune.md`.
 
 Without it, runs launch and then have nothing to measure them. To try the
 platform before you have one, use the mock: `-f values-mock.yaml` replaces

@@ -180,7 +180,7 @@ def test_llmbench_adapter_against_mock(mock_engine, mock_llmbench):
 
     assert outcome.status == EvalStatus.PASSED, outcome.error
     assert outcome.metrics["score_total"] > 0
-    assert "perf_mock.output_tps" in outcome.metrics
+    assert "perf_guidellm_sweep.output_tps" in outcome.metrics
 
 
 def test_api_key_needs_no_login_round_trip(mock_llmbench):
@@ -192,12 +192,13 @@ def test_api_key_needs_no_login_round_trip(mock_llmbench):
 
 
 def test_preflight_rejects_a_dead_endpoint_before_submitting(mock_llmbench, monkeypatch):
-    """Under JWT auth (the only mode LLMBench allows preflight in), a dead
-    endpoint is caught by their probe — no submission is made."""
+    """Under a login session, a dead endpoint is caught by LLMBench's probe —
+    no submission is made."""
     monkeypatch.setenv("AUTOTUNE_LLMBENCH_PREFLIGHT", "true")
     get_settings.cache_clear()
     try:
-        client = LLMBenchClient(base_url=mock_llmbench, api_key="", username="u", password="p")
+        client = LLMBenchClient(base_url=mock_llmbench, api_key="",
+                                email="u@example.com", password="p")
         evaluator = LLMBenchEvaluator(client=client, benchmark_slug="perf-suite-v1")
         with pytest.raises(EvaluatorRejected, match="preflight"):
             evaluator.start("http://127.0.0.1:1", "m", {})
@@ -205,22 +206,45 @@ def test_preflight_rejects_a_dead_endpoint_before_submitting(mock_llmbench, monk
         get_settings.cache_clear()
 
 
-def test_preflight_is_skipped_for_api_key_auth(mock_llmbench, monkeypatch):
-    """LLMBench 403s preflight for API keys by design — don't even ask, and
-    never let that stop a submission."""
+def test_a_service_key_preflights_and_a_dead_endpoint_is_rejected(mock_llmbench, monkeypatch):
+    """LLMBench lets a service account's key run its endpoint probe, so a dead
+    endpoint is caught before a submission is made — same as under a login."""
     monkeypatch.setenv("AUTOTUNE_LLMBENCH_PREFLIGHT", "true")
     get_settings.cache_clear()
     try:
         client = LLMBenchClient(base_url=mock_llmbench, api_key="llmb_testkey")
         evaluator = LLMBenchEvaluator(client=client, benchmark_slug="perf-suite-v1")
-        # dead endpoint, yet the submission still goes through (no preflight)
-        assert evaluator.start("http://127.0.0.1:1", "m", {})
+        with pytest.raises(EvaluatorRejected, match="preflight"):
+            evaluator.start("http://127.0.0.1:1", "m", {})
+    finally:
+        get_settings.cache_clear()
+
+
+def test_a_refused_preflight_never_blocks_the_submission(monkeypatch):
+    """A personal key, or an LLMBench without the service role, answers 403 to
+    preflight. That means "cannot ask", not "endpoint broken": submit anyway."""
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.url.path)
+        if request.url.path == "/submissions/preflight":
+            return httpx.Response(403, json={"detail": "website session required"})
+        return httpx.Response(202, json={"id": 7, "status": "queued"})
+
+    monkeypatch.setenv("AUTOTUNE_LLMBENCH_PREFLIGHT", "true")
+    get_settings.cache_clear()
+    try:
+        client = LLMBenchClient(base_url="http://llmbench.test", api_key="llmb_personal",
+                                transport=httpx.MockTransport(handler))
+        evaluator = LLMBenchEvaluator(client=client, benchmark_slug="perf-suite-v1")
+        assert evaluator.start("http://127.0.0.1:1", "m", {}) == "7"
+        assert seen == ["/submissions/preflight", "/submissions/benchmarks/perf-suite-v1/submit"]
     finally:
         get_settings.cache_clear()
 
 
 def test_preflight_passes_for_a_live_endpoint(mock_engine, mock_llmbench):
-    client = LLMBenchClient(base_url=mock_llmbench, api_key="", username="u", password="p")
+    client = LLMBenchClient(base_url=mock_llmbench, api_key="", email="u@example.com", password="p")
     result = client.preflight(mock_engine, "mock-model")
     assert result["ok"] is True
     assert all(check["status"] == "pass" for check in result["checks"])
@@ -253,7 +277,7 @@ def test_a_redline_breach_is_not_a_pass(mock_engine, mock_llmbench, monkeypatch)
 
     assert outcome.status == EvalStatus.FAILED
     assert "did not pass" in outcome.error
-    assert "perf_mock" in outcome.error  # names the offending module
+    assert "perf_guidellm_sweep" in outcome.error  # names the offending module
     assert outcome.metrics, "metrics are still recorded for a failed verdict"
 
 
