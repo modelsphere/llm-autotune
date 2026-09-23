@@ -2296,10 +2296,13 @@ class Supervisor:
         # Who the submission is listed under on LLMBench, and the way back: a
         # row on its leaderboard should lead to the campaign that produced it.
         session = Session.object_session(run)
-        owner = session.get(User, campaign.owner_id) if session is not None and campaign.owner_id else None
+        owner = None
+        if session is not None and campaign.owner_id:
+            owner = session.get(User, campaign.owner_id)
         context["contributor"] = f"autotune:{owner.username}" if owner else "autotune"
-        if self.settings.public_ui_url:
-            context["source_url"] = f"{self.settings.public_ui_url.rstrip('/')}/campaigns/{campaign.id}"
+        ui = self.settings.public_ui_url.rstrip("/")
+        if ui:
+            context["source_url"] = f"{ui}/campaigns/{campaign.id}"
         return context
 
     def _node_assignments(self, session: Session, run: Run) -> list[NodeAssignment]:
