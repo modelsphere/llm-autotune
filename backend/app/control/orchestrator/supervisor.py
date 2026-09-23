@@ -109,6 +109,7 @@ from app.db.models import (
     RunKind,
     RunNode,
     RunStatus,
+    User,
     is_baseline_candidate,
     is_in_place_baseline,
 )
@@ -2292,6 +2293,13 @@ class Supervisor:
                 "machine_count": machine_count,
                 "card_type": run.machine.gpu_type or None,
             }
+        # Who the submission is listed under on LLMBench, and the way back: a
+        # row on its leaderboard should lead to the campaign that produced it.
+        session = Session.object_session(run)
+        owner = session.get(User, campaign.owner_id) if session is not None and campaign.owner_id else None
+        context["contributor"] = f"autotune:{owner.username}" if owner else "autotune"
+        if self.settings.public_ui_url:
+            context["source_url"] = f"{self.settings.public_ui_url.rstrip('/')}/campaigns/{campaign.id}"
         return context
 
     def _node_assignments(self, session: Session, run: Run) -> list[NodeAssignment]:

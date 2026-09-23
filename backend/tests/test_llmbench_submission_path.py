@@ -66,6 +66,7 @@ def test_a_submission_carries_the_benchmark_the_hardware_and_the_config():
         return httpx.Response(202, json={"id": 41, "status": "queued"})
 
     supervisor, factory = _stack()
+    supervisor.settings.public_ui_url = "https://autotune.example/"
     evaluator = LLMBenchEvaluator(client=LLMBenchClient(
         base_url="http://llmbench.test", api_key="llmb_service",
         transport=httpx.MockTransport(llmbench)))
@@ -87,3 +88,8 @@ def test_a_submission_carries_the_benchmark_the_hardware_and_the_config():
     # is what makes LLMBench's card-normalized throughput comparable.
     assert (body["cards_per_machine"], body["machine_count"], body["card_type"]) == (2, 1, "H100")
     assert "tp=2" in body["description_summary"]
+    # Listed under the platform and its author, with the way back to the
+    # campaign: a leaderboard row on LLMBench that leads nowhere was the first
+    # thing the cluster deploy showed.
+    assert body["contributor"] == "autotune:u"
+    assert body["source_url"] == "https://autotune.example/campaigns/1"
