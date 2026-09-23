@@ -29,6 +29,11 @@ WORKDIR /app
 # survives every code-only rebuild. --frozen = the lock IS the resolution; a
 # build must never quietly resolve different versions than the dev box tested.
 COPY pyproject.toml uv.lock ./
+# The lock pins each wheel's URL, so an index mirror does not apply; on a slow
+# link, raise the per-request timeout: --build-arg UV_HTTP_TIMEOUT=600.
+ARG UV_HTTP_TIMEOUT=120
+ARG UV_HTTP_RETRIES=3
+ENV UV_HTTP_TIMEOUT=${UV_HTTP_TIMEOUT} UV_HTTP_RETRIES=${UV_HTTP_RETRIES}
 RUN uv sync --frozen --no-dev --compile-bytecode
 
 COPY alembic.ini ./
