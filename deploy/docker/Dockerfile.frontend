@@ -11,6 +11,10 @@ ARG NGINX_IMAGE=nginx:1.27-alpine
 
 FROM ${NODE_IMAGE} AS build
 WORKDIR /app
+# Behind a package mirror, pass it in rather than editing this file:
+#   docker build --build-arg NPM_REGISTRY=https://registry.npmmirror.com ...
+ARG NPM_REGISTRY=https://registry.npmjs.org
+ENV NPM_CONFIG_REGISTRY=${NPM_REGISTRY}
 COPY package.json package-lock.json ./
 # ci, not install: the lockfile is the build, reproducibly.
 RUN npm ci
