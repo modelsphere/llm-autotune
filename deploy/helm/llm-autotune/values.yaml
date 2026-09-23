@@ -40,6 +40,13 @@ publicUiUrl: ""
 # from this same ingress, which is the default.
 corsOrigins: "*"
 
+# Where every pod of this release may land: the API, worker, UI, datastores
+# and the migrate job. A component's own `nodeSelector` / `tolerations` below
+# overrides these for that component. Runs are placed by the GPU cluster
+# settings (gpuCluster.nodeSelector), not by these.
+nodeSelector: {}
+tolerations: []
+
 api:
   replicas: 1
   resources: {}

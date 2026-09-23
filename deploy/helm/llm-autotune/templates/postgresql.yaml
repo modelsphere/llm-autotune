@@ -60,6 +60,12 @@ spec:
           {{- with .Values.postgresql.resources }}
           resources: {{- toYaml . | nindent 12 }}
           {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations: {{- toYaml . | nindent 8 }}
+      {{- end }}
   volumeClaimTemplates:
     - metadata:
         name: data

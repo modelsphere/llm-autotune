@@ -24,5 +24,14 @@ in the search space like normal engine args, e.g.:
 Crash simulation: `{"mock_fail": "oom"}` (startup OOM),
 `{"mock_fail_after_seconds": 30}` (OOM under load).
 
+Timing knobs, so a benchmark that streams gets a shape to measure:
+`mock_latency_ms` (time to the first token, default 200), `mock_token_ms`
+(gap between streamed tokens, default 5) and `mock_max_output_tokens` (cap on
+a reply, default 256; a request's `max_tokens` decides the length below that).
+`"stream": true` answers server-sent events one token per chunk, with `usage`
+on request — the wire format guidellm and LLMBench's throughput sweeps time —
+so a real LLMBench can benchmark the mock and report numbers. They describe
+the mock's timers, not a model.
+
 On a CPU-only dev box set `AUTOTUNE_DOCKER_GPU_MODE=none` for the worker so the
 driver omits `--gpus/--runtime=nvidia`.
