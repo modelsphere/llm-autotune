@@ -88,16 +88,18 @@ migration that only works on one of those paths is a bug.
 ## Adding a search algorithm
 
 Don't add it to the platform. A search is a container that speaks the
-[policy contract](docs/api/policy-contract.md) — fork
-[autotune-policy-random-search](https://github.com/modelsphere/autotune-policy-random-search)
-and publish your own image. It is a separate repository, checked out here as a
-submodule (`git submodule update --init`); changes to a policy are pull requests
-against that repository, and this one only moves the pointer.
+[policy contract](docs/api/policy-contract.md) — copy `random-search/` from
+[llm-autotune-policies](https://github.com/modelsphere/llm-autotune-policies) into a repository of your own and publish your
+own image. That repository holds the SDK and the reference policies, and is
+checked out here as the `policies/` submodule (`git submodule update --init`).
+Changes to a policy or the SDK are pull requests against it; this repository
+only moves the pointer. A new policy is welcome there when it is a useful
+reference for others.
 
-The SDK under [`policies/autotune_policy/`](policies/autotune_policy/) is the
-copy of record. Each policy repository vendors it verbatim — deliberately, so a
-policy image needs no package index — so a change here has to be mirrored:
-`scripts/sync-policy-sdk.sh` copies it out and CI fails if the copies drift.
+The SDK's copy of record is `autotune_policy/` in
+[llm-autotune-policies](https://github.com/modelsphere/llm-autotune-policies); each policy there vendors it verbatim so a
+policy image needs no package index, and that repository's CI fails if the
+copies drift.
 The platform deliberately has no plugin point for search logic: keeping the
 measurement on one side of an HTTP boundary and the search on the other is what
 makes two policies comparable.

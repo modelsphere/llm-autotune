@@ -18,9 +18,8 @@ jobs:
           fi
 
   no-internal-references:
-    # Checked out without submodules on purpose: each policy repository runs
-    # this same check on its own tree, and their workflow files contain the
-    # pattern itself.
+    # Checked out without submodules on purpose: llm-autotune-policies runs this
+    # same check on its own tree.
     #
     # This repository was extracted from an internal one. Names of internal
     # hosts, registries, clusters and machines are not secrets, but they are

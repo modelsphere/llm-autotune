@@ -18,5 +18,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Notes
 
-- The two reference policies live in their own repositories and are checked out
-  under `policies/` as git submodules: clone with `--recurse-submodules`.
+- The policy SDK and the two reference policies live in
+  [llm-autotune-policies](https://github.com/modelsphere/llm-autotune-policies), checked out under `policies/` as a git
+  submodule: clone with `--recurse-submodules`.

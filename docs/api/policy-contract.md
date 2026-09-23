@@ -519,9 +519,8 @@ from their specs, time permitting. Either way the machine's own guarantees
 - [Machine Lease API](machine-lease.md) — how the machine itself is lent to
   the platform; a policy session always lives inside a lease and a campaign
   window.
-- The SDK in [`policies/autotune_policy/`](../../policies/) implements
-  everything in this document — `run_policy(SearchLoop(your_algorithm))`
-  satisfies every MUST — and
-  [autotune-policy-random-search](https://github.com/modelsphere/autotune-policy-random-search)
-  is both the reference policy and the fork-and-edit starting point. It is its
-  own repository, checked out under `policies/` as a submodule.
+- The SDK in [llm-autotune-policies](https://github.com/modelsphere/llm-autotune-policies) (`autotune_policy/`)
+  implements everything in this document — `run_policy(SearchLoop(your_algorithm))`
+  satisfies every MUST — and its `random-search/` is both the reference policy
+  and the copy-and-edit starting point. That repository is checked out here
+  under `policies/` as a submodule.

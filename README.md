@@ -104,7 +104,7 @@ deploy/
   helm/      the chart — the supported way to install the platform
   docker/    images, and a compose file for local development
   k8s/       RBAC for a GPU cluster the platform does not run inside
-policies/    the policy SDK, and two policies as submodules (reference, chaos)
+policies/    submodule: llm-autotune-policies — the SDK and two policies
 operator/    the optional Kubernetes operator (Go)
 mock-engine/ a fake engine, for running the loop without GPUs
 docs/        architecture, the API contracts, deployment
