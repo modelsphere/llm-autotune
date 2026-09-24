@@ -33,13 +33,10 @@
   <text x="410" y="296" font-size="12" fill="#42556c" text-anchor="middle">wakes every ~10s, advances every run</text>
   <text x="410" y="311" font-size="12" fill="#42556c" text-anchor="middle">one step, then commits</text>
 
-  <!-- Postgres + Redis -->
+  <!-- Postgres -->
   <rect x="258" y="364" width="196" height="66" rx="8" fill="#eae6f6" stroke="#8a76c0"/>
   <text x="356" y="392" font-size="14" font-weight="600" fill="#12233a" text-anchor="middle">Postgres</text>
   <text x="356" y="411" font-size="12" fill="#42556c" text-anchor="middle">all state lives here</text>
-  <rect x="466" y="364" width="96" height="66" rx="8" fill="#eae6f6" stroke="#8a76c0"/>
-  <text x="514" y="392" font-size="14" font-weight="600" fill="#12233a" text-anchor="middle">Redis</text>
-  <text x="514" y="411" font-size="11.5" fill="#42556c" text-anchor="middle">queue</text>
 
   <!-- GPU machine container -->
   <rect x="662" y="95" width="248" height="300" rx="12" fill="#f2f8f4" stroke="#a9cbb6" stroke-dasharray="5 4"/>

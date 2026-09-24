@@ -12,7 +12,7 @@
 ## Running it locally
 
 ```bash
-docker compose -f deploy/docker/docker-compose.dev.yml up -d   # postgres + redis
+docker compose -f deploy/docker/docker-compose.dev.yml up -d   # postgres
 
 cd backend
 uv sync --extra dev

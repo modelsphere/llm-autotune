@@ -125,7 +125,7 @@ docs/        architecture, the API contracts, deployment
 ## What you need to run it for real
 
 - A Kubernetes cluster for the platform itself (it is small: an API, a worker, a
-  UI, Postgres and Redis).
+  UI and Postgres).
 - GPUs, as a node pool in a cluster or as machines reachable over ssh.
 - A benchmark platform to measure runs. The adapter targets LLMBench; the
   `Evaluator` interface in `backend/app/evaluation/base.py` is the seam if you

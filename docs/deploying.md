@@ -1,7 +1,7 @@
 # Deploying LLM AutoTune
 
-One Helm chart brings up everything: the API, the orchestrator worker, the UI,
-Postgres and Redis. Two questions decide the rest of the values — where the GPUs
+One Helm chart brings up everything: the API, the orchestrator worker, the UI
+and Postgres. Two questions decide the rest of the values — where the GPUs
 are, and what measures a run.
 
 ```bash
@@ -176,7 +176,7 @@ start, so neither ever runs against a schema it does not understand. See
 The chart is the supported install. For working on the code:
 
 ```bash
-docker compose -f deploy/docker/docker-compose.dev.yml up -d   # postgres + redis
+docker compose -f deploy/docker/docker-compose.dev.yml up -d   # postgres
 cd backend && uv sync && uv run alembic upgrade head
 uv run uvicorn app.main:app --reload --port 28100
 uv run python -m app.worker

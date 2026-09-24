@@ -15,7 +15,6 @@ Backend (Python)
   bcrypt ............................. Apache-2.0
   cryptography ....................... Apache-2.0 / BSD-3-Clause
   kubernetes (Python client) ......... Apache-2.0
-  redis-py ........................... MIT
 
 Frontend (JavaScript)
   Vue, Vue Router, Pinia ............. MIT
@@ -30,7 +29,7 @@ Operator (Go)
   kubebuilder scaffolding ............ Apache-2.0
 
 Container base images
-  python, node, nginx, postgres, redis — see each image's own license.
+  python, node, nginx, postgres — see each image's own license.
 
 The engines this platform launches (sglang, vLLM) and the benchmark platform it
 measures with are separate projects under their own licenses. Nothing here

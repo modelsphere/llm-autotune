@@ -8,7 +8,6 @@ class Settings(BaseSettings):
 
     database_url: str = "postgresql+asyncpg://autotune:autotune@127.0.0.1:28432/autotune"
     sync_database_url: str = "postgresql+psycopg2://autotune:autotune@127.0.0.1:28432/autotune"
-    redis_url: str = "redis://127.0.0.1:28379/0"
 
     # The first admin, created by the bootstrap when the users table is empty.
     # No default password on purpose: with none set, no user is seeded and the

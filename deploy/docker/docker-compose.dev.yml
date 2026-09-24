@@ -29,15 +29,6 @@ services:
       interval: 5s
       retries: 10
 
-  redis:
-    image: redis:7-alpine
-    ports:
-      - "127.0.0.1:28379:6379"
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      retries: 10
-
   # A fake benchmark platform, so the loop can be exercised without LLMBench.
   # Opt in: `docker compose ... --profile mock up -d`, then point the backend
   # at it with AUTOTUNE_LLMBENCH_BASE_URL=http://127.0.0.1:28101

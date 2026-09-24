@@ -103,11 +103,6 @@ externalDatabase:
   asyncUrl: ""                 # postgresql+asyncpg://user:pass@host:5432/db
   syncUrl: ""                  # postgresql+psycopg2://user:pass@host:5432/db
 
-redis:
-  enabled: true
-  image: redis:7-alpine
-  externalUrl: ""              # used when enabled=false
-
 # The benchmark platform every run is measured by. Point this at your LLMBench
 # deployment. `mock.enabled` (values-mock.yaml) replaces it with a fake for a
 # GPU-free trial.

@@ -5,11 +5,6 @@ metadata:
   name: {{ $fullName }}-config
   labels: {{- include "llm-autotune.labels" . | nindent 4 }}
 data:
-  {{- if .Values.redis.enabled }}
-  AUTOTUNE_REDIS_URL: redis://{{ $fullName }}-redis:6379/0
-  {{- else }}
-  AUTOTUNE_REDIS_URL: {{ .Values.redis.externalUrl | quote }}
-  {{- end }}
   AUTOTUNE_PUBLIC_API_URL: {{ .Values.publicApiUrl | quote }}
   AUTOTUNE_PUBLIC_UI_URL: {{ .Values.publicUiUrl | quote }}
   AUTOTUNE_CORS_ORIGINS: {{ .Values.corsOrigins | quote }}
