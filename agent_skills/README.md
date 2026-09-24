@@ -18,14 +18,11 @@ cp -r agent_skills/perf-report ~/.claude/skills/perf-report
 
 # every session: where the platform is and who you are
 export AUTOTUNE_URL=https://autotune.example.com
-export AUTOTUNE_API_KEY=at_...    # minted on the platform's API keys page, by the `reporter` user
+export AUTOTUNE_API_KEY=at_...    # minted on the platform's API keys page; any account can read and save reports
 
 claude
 > /perf-report  write the report for campaign 42: run 101 is the baseline, runs 103 and 104 are the attempts
 ```
-
-Inside this repository the skill is also reachable as `.claude/skills/perf-report`
-(a symlink), so a Claude Code session started here has it without copying.
 
 A ready-to-paste prompt for a fresh session is in [`docs/perf-report-prompt.md`](../docs/perf-report-prompt.md).
 The report's structure, wording and glossary live in `perf-report/TEMPLATE.md`;

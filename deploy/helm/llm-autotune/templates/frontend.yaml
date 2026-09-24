@@ -40,9 +40,11 @@ spec:
             - containerPort: 80
           env:
             # nginx proxies /api to this, so the SPA and the API are one origin
-            # and the browser needs no CORS at all.
+            # and the browser needs no CORS at all. Fully qualified: nginx
+            # resolves it itself, without resolv.conf's search domains, so the
+            # short service name never resolves.
             - name: API_UPSTREAM
-              value: {{ $fullName }}-api:8000
+              value: {{ $fullName }}-api.{{ .Release.Namespace }}.svc.{{ .Values.clusterDomain | default "cluster.local" }}:8000
           readinessProbe:
             httpGet:
               path: /

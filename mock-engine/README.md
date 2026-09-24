@@ -1,18 +1,35 @@
-# Mock engine image
+# Mock engine
 
-A stdlib-only fake sglang/vllm server for exercising the autotune flow without
-GPUs. The unmodified ssh_docker driver launches it: it answers to both
-`python3 -m sglang.launch_server ...` and `vllm serve ...`.
+A stdlib-only fake sglang/vLLM server, for running the whole tuning loop without
+GPUs. It answers to both `python3 -m sglang.launch_server ...` and
+`vllm serve ...`, so the platform launches it exactly as it would a real engine,
+on Kubernetes or over ssh.
 
-Build on the dev box (or any machine the worker can ssh to):
+No image is published; build it where the platform's runs can use it.
+
+**On a kind cluster** (the README quickstart):
 
 ```bash
-docker build -t autotune-mock-engine:latest mock-engine/
+docker build -t llm-autotune-mock-engine:0.1.0 mock-engine/
+kind load docker-image llm-autotune-mock-engine:0.1.0
 ```
 
-Then create a campaign with `image: autotune-mock-engine:latest` and any
-`model_path` that exists on the machine (content is ignored). Behavior knobs go
-in the search space like normal engine args, e.g.:
+Engine pods use `imagePullPolicy: IfNotPresent`, so the loaded image is used as
+is. On any other cluster, push it to a registry the nodes pull from.
+
+**On an ssh machine**, build it on the machine, or copy it over with
+`docker save llm-autotune-mock-engine:0.1.0 | ssh <host> docker load`. On a box
+without GPUs, set `AUTOTUNE_DOCKER_GPU_MODE=none` for the worker so the driver
+omits `--gpus/--runtime=nvidia`.
+
+Then create a campaign with that image. Its `model_path` must be a directory
+that exists on the node or machine and is not empty: the platform refuses to
+start an engine on an empty weights directory, which would otherwise surface
+as a confusing crash deep inside a real engine. The mock ignores what is in it,
+so one placeholder file is enough (on kind:
+`docker exec kind-control-plane sh -c 'mkdir -p /models/mock && echo {} > /models/mock/config.json'`).
+
+Behavior knobs go in the search space like normal engine args, e.g.:
 
 ```json
 {
@@ -32,6 +49,3 @@ a reply, default 256; a request's `max_tokens` decides the length below that).
 on request — the wire format guidellm and LLMBench's throughput sweeps time —
 so a real LLMBench can benchmark the mock and report numbers. They describe
 the mock's timers, not a model.
-
-On a CPU-only dev box set `AUTOTUNE_DOCKER_GPU_MODE=none` for the worker so the
-driver omits `--gpus/--runtime=nvidia`.

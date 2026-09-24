@@ -30,6 +30,3 @@ runLogs:
 postgresql:
   storage:
     size: 1Gi
-
-llmbench:
-  benchmarkSlug: mock-suite-v1

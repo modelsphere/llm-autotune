@@ -2,8 +2,9 @@
 
 ## How the schema is applied
 
-`helm upgrade` runs `python -m app.db.bootstrap` as a hook before the new API and
-worker start. It is create-or-migrate:
+`helm install` and `helm upgrade` run `python -m app.db.bootstrap` as a Job once
+the release is applied; the new API and worker start alongside it, and the
+worker restarts until the schema is there. The bootstrap is create-or-migrate:
 
 - **No `alembic_version` table** — a fresh database. The current schema is
   created from the models and stamped at head.
@@ -27,5 +28,6 @@ needed.
 
 ## Versions
 
-The chart's `appVersion` is the image tag it deploys. Pin it (`image.tag`) if you
-want upgrades to be a deliberate act rather than whatever `latest` resolves to.
+The chart deploys the images tagged with its `appVersion`, so upgrading the chart
+upgrades the platform. Set `image.tag` to hold the images at one version while
+the chart moves, or to run a release candidate (`0.1.0-rc1`).

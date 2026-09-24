@@ -40,6 +40,11 @@ publicUiUrl: ""
 # from this same ingress, which is the default.
 corsOrigins: "*"
 
+# The cluster's DNS domain. The UI's nginx resolves the API service by its fully
+# qualified name (nginx's resolver ignores resolv.conf search domains), so
+# change this only if your cluster does not use the default.
+clusterDomain: cluster.local
+
 # Where every pod of this release may land: the API, worker, UI, datastores
 # and the migrate job. A component's own `nodeSelector` / `tolerations` below
 # overrides these for that component. Runs are placed by the GPU cluster

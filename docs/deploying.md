@@ -36,9 +36,9 @@ cluster-scoped and is how the platform fills in a machine's card count and type
 without being told. It never writes a node: no cordon, no label, no taint.
 
 On an empty install it also registers that cluster as a machine called
-`local-cluster`, so the Resources page has something in it. Probe it from that
-page to fill in its GPUs, then mark it available. Set
-`gpuCluster.autoRegister=false` to skip this.
+`local-cluster`, so the Resources page has something in it. Use *Refresh
+capacity* there to fill in its GPUs, then **Lease to platform** to let campaigns
+use it. Set `gpuCluster.autoRegister=false` to skip this.
 
 ### A different cluster
 
@@ -167,18 +167,12 @@ Both DSNs, because the API is async and the worker and migrations are not.
 
 ## Upgrading
 
-`helm upgrade` runs the schema bootstrap as a hook before the new API and worker
-start, so neither ever runs against a schema it does not understand. See
-[upgrading.md](upgrading.md).
+`helm install` and `helm upgrade` run the schema bootstrap as a Job once the
+release is applied. The worker exits and is restarted until the schema it needs
+is there, so a few restarts right after an install or a schema change are
+expected. See [upgrading.md](upgrading.md).
 
 ## Local development
 
-The chart is the supported install. For working on the code:
-
-```bash
-docker compose -f deploy/docker/docker-compose.dev.yml up -d   # postgres
-cd backend && uv sync && uv run alembic upgrade head
-uv run uvicorn app.main:app --reload --port 28100
-uv run python -m app.worker
-cd ../frontend && npm install && npm run dev
-```
+The chart is the supported install. Running the code outside it, for working
+on the platform, is in [CONTRIBUTING.md](../CONTRIBUTING.md#running-it-locally).

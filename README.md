@@ -36,6 +36,13 @@ let the entire loop run for real on a laptop cluster.
 git clone --recurse-submodules https://github.com/modelsphere/llm-autotune
 cd llm-autotune
 kind create cluster
+
+# The fake engine is built locally, and runs against a placeholder weights
+# directory on the node (the platform will not start an engine on an empty one).
+docker build -t llm-autotune-mock-engine:0.1.0 mock-engine/
+kind load docker-image llm-autotune-mock-engine:0.1.0
+docker exec kind-control-plane sh -c 'mkdir -p /models/mock && echo {} > /models/mock/config.json'
+
 helm install autotune deploy/helm/llm-autotune \
   -f deploy/helm/llm-autotune/values-mock.yaml \
   --set jwtSecret=$(openssl rand -hex 32) \
@@ -43,10 +50,22 @@ helm install autotune deploy/helm/llm-autotune \
 kubectl port-forward svc/autotune-llm-autotune-frontend 8080:80
 ```
 
-Open <http://localhost:8080>, sign in, and create a campaign. Runs walk
-`pending → launching → waiting_ready → health_check → benching → succeeded`, and
-the leaderboard fills in. Nothing measured this way means anything about
-performance — it proves the machinery, which is the point.
+Open <http://localhost:8080> and sign in as `admin` / `changeme`. On a fresh
+install the worker restarts a few times until the schema job has run; give it a
+minute. Then:
+
+1. **Resources:** on the `local-cluster` machine, click **Lease to platform**.
+2. **New campaign:** image `llm-autotune-mock-engine:0.1.0`, model path
+   `/models/mock`, any served model name, machine `local-cluster`, and a grid
+   over one of the mock's knobs, e.g. `mock_token_ms: [2, 20]`. Leave the
+   benchmark and objective at their defaults.
+3. On the campaign's page, click **Force start**; otherwise a campaign waits for
+   its nightly window.
+
+Each run walks `pending → launching → waiting_ready → health_check → benching →
+succeeded` in about a minute, and the leaderboard ranks the faster config first.
+Nothing measured this way means anything about performance — it proves the
+machinery, which is the point.
 
 ## Installing it for real
 

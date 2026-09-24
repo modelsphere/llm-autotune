@@ -113,15 +113,13 @@ ask — see [`deploy/k8s/remote-cluster/`](../deploy/k8s/remote-cluster/) in thi
 repository (namespace, ServiceAccount, Role, token, and a script that turns them
 into a scoped kubeconfig).
 
-Backend settings that select this path:
+Then tell the platform to submit `TuningRun`s instead of Deployments:
 
-```sh
-AUTOTUNE_K8S_WORKLOAD_KIND=custom            # submit TuningRuns instead of Deployments
-AUTOTUNE_K8S_NAMESPACE=autotune              # where they are created
-AUTOTUNE_K8S_IMAGE_PULL_SECRETS=             # names, if your nodes lack registry creds
-AUTOTUNE_K8S_MODEL_PVC=                      # a shared weights claim, if you have one
-AUTOTUNE_K8S_MODEL_PVC_ROOT=/mnt/disk0/models  # host path that claim's root corresponds to
-```
+- **The platform runs in this cluster** (chart installed with
+  `gpuCluster.inCluster=true`): add `--set operator.enabled=true`.
+- **The platform reaches this cluster from outside:** on the Resources page, set
+  the cluster's *Workload kind* to `custom (TuningRun CRD)`. Its namespace and
+  image pull secrets are set on the same form.
 
 ## Versions
 

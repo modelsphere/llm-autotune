@@ -1,25 +1,20 @@
 #!/usr/bin/env bash
 #
-# Build a SCOPED kubeconfig for the autotune backend's ServiceAccount, so the
-# backend authenticates as that SA (tuningruns + pods only) — never as admin.
+# Build a SCOPED kubeconfig for the platform's ServiceAccount on a GPU cluster
+# it does not run in, so it authenticates with exactly what backend-rbac.yaml
+# grants — never as admin.
 #
-# Run where you have admin/cluster access (e.g. the bastion), AFTER applying
-# deploy/k8s/backend-rbac.yaml. It uses your CURRENT kubectl context to read the
-# cluster CA + server, and reads the SA's NON-EXPIRING token from its Secret; the
-# output kubeconfig contains only that token.
+# Run with an admin context for the GPU cluster, AFTER applying backend-rbac.yaml
+# from this directory. It uses your CURRENT kubectl context to read the cluster
+# CA + server, and reads the SA's NON-EXPIRING token from its Secret; the output
+# kubeconfig contains only that token.
 #
-#   deploy/k8s/make-scoped-kubeconfig.sh [-n namespace] [-s serviceaccount] \
-#       [-k tokensecret] [-o out.kubeconfig]
+#   deploy/k8s/remote-cluster/make-scoped-kubeconfig.sh [-n namespace] \
+#       [-s serviceaccount] [-k tokensecret] [-o out.kubeconfig]
 #
-# Then point the backend at it:
-#   AUTOTUNE_K8S_API_MODE=client
-#   AUTOTUNE_K8S_KUBECONFIG=/abs/path/out.kubeconfig
-#   AUTOTUNE_K8S_NAMESPACE=<namespace>
-#
-# The backend is normally a REMOTE client of the GPU cluster, so this scoped
-# kubeconfig is the usual path regardless of where the backend runs. Only if the
-# backend runs as a pod INSIDE the GPU cluster can you skip this: set
-# serviceAccountName: autotune-backend on the pod and AUTOTUNE_K8S_IN_CLUSTER=true.
+# Then add the cluster on the platform's Resources page and paste the file in.
+# If the platform runs inside the GPU cluster, skip this: install the chart with
+# gpuCluster.inCluster=true and it grants its own ServiceAccount the same access.
 set -euo pipefail
 
 NS=autotune
@@ -58,7 +53,7 @@ for _ in $(seq 1 10); do
 done
 if [ -z "$TOKEN" ]; then
   echo "error: token secret '$SECRET' in namespace '$NS' is empty or missing." >&2
-  echo "       apply deploy/k8s/backend-rbac.yaml first — it creates the Secret." >&2
+  echo "       apply deploy/k8s/remote-cluster/backend-rbac.yaml first — it creates the Secret." >&2
   exit 1
 fi
 

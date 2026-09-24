@@ -33,7 +33,10 @@ docker compose -f deploy/docker/docker-compose.dev.yml --profile mock up -d
 export AUTOTUNE_LLMBENCH_BASE_URL=http://127.0.0.1:28101
 ```
 
-and build `mock-engine/` as the campaign's image.
+Runs still need somewhere to land: a local kind cluster added on the Resources
+page with its kubeconfig, or any machine the worker can ssh into that has Docker.
+Build `mock-engine/` there and use it as the campaign's image;
+[mock-engine/README.md](mock-engine/README.md) has both.
 
 ## Before you open a pull request
 
