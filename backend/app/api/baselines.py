@@ -1,11 +1,11 @@
-"""Production reference configs, managed by hand, picked up from capture, set
-from the Baseline Hub — or mirrored from the deploy repo.
+"""Production reference configs, managed by hand, picked up from capture, or
+mirrored from the deploy repo.
 
 A baseline is keyed by what it serves and on what — (served_model_name, engine,
 card_type) — not by a machine. Campaigns tuning that combination compare their
 candidates against it. It is a whole LaunchConfig (image, weights path, knobs,
-env, volumes), so it converts losslessly to and from a Hub submission, a
-campaign, and the deploy repo's file.
+env, volumes), so it converts losslessly to and from a
+campaign and the deploy repo's file.
 
 The binding endpoints are the repo side: bind a baseline to a file on a
 release branch, sync it (platform-owned differences adopted, the rest recorded

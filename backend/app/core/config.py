@@ -288,7 +288,7 @@ class Settings(BaseSettings):
     # guest cluster that does not will fail every launch with ImagePullBackOff.
     k8s_image_pull_secrets: str = ""
     # Where model weights come from. Empty = a per-node hostPath at the model
-    # path the campaign names, which is how our clusters serve weights today and
+    # path the campaign names, which is how many clusters serve weights, and
     # is why a run must be pinned to nodes that carry the model. Set
     # `k8s_model_pvc` to a ReadOnlyMany/ReadWriteMany claim instead and the
     # weights stop being a property of the node: any node the scheduler picks

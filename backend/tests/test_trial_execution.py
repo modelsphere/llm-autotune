@@ -6,8 +6,7 @@ to end, get a structured result back — without grid search, random search, or
 any planner at all.
 
 The platform does not implement that as a blocking call, because a trial here
-takes ~90 minutes and must survive a worker restart (see
-docs/findings_claude/searcher-architecture-review.md §D.1). It implements the
+takes ~90 minutes and must survive a worker restart. It implements the
 same responsibilities as a resumable state machine over a database row. The
 `execute()` shape is recoverable on top in a few lines — `_execute` below is
 exactly that, and it is what makes this test read like the brief's.

@@ -546,7 +546,7 @@ class HandBack:
     will actually take.
 
     The confirm dialog used to promise "production is restored either way",
-    which was true of neither machine on the dev box: one was cleared from an
+    which was true of neither machine in testing: one was cleared from an
     empty capture, so there was nothing to put back; and with auto-restore off
     a real capture is handed back with production still DOWN and only an event
     to say so. A dialog that describes a different code path than the one about

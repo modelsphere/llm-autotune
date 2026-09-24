@@ -377,7 +377,7 @@ class PolicySessionEngine:
         # container starts. The policy calls GET /session within a second of
         # `docker run`, from the API process; a key that rode only this tick's
         # end-of-commit is invisible to that read until the whole tick commits,
-        # and a warm-cached container (the next entrant on a machine) beats it
+        # and a warm-cached container (the next policy on a machine) beats it
         # and gets 401 "invalid token", exiting before its first heartbeat.
         # Committing here — after the row is durable, before the side effect —
         # closes that window. Safe to commit mid-tick: every step is idempotent

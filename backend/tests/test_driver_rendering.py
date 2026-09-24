@@ -39,8 +39,7 @@ def test_vllm_command_rendering():
 def test_a_declared_volume_beats_the_default_on_the_same_container_path():
     # A prewarmed cache mounted at /root/.cache must REPLACE the platform's
     # per-run cache mount, not sit beside it — docker refuses "Duplicate mount
-    # point", which is a launch failure the user cannot see coming. (Found live
-    # on the first real Baseline Hub run.)
+    # point", which is a launch failure the user cannot see coming.
     spec = _spec(volumes={"/root/deploy/qwen/.cache": "/root/.cache"})
     text = " ".join(render_docker_command(spec))
     assert "-v /root/deploy/qwen/.cache:/root/.cache" in text

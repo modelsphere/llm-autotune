@@ -12,7 +12,7 @@ So the rule lives in code, once:
     no alembic_version table  ->  create_all from models, stamp head
     anything else             ->  alembic upgrade head
 
-Existing deployments (the devbox at revision N) keep upgrading incrementally,
+Existing deployments keep upgrading incrementally,
 untouched. A database that has tables but no alembic_version is treated as
 fresh-shaped: create_all(checkfirst) adds only what is missing and the stamp
 records today — loudly, because if that schema was actually old, hand

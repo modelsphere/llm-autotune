@@ -433,7 +433,7 @@ class MachineGroup(Base):
     """A named, ordered set of machines that can be deployed as ONE gang.
 
     The multi-node resource: the operator leases N boxes, groups them, and picks
-    a master, once. A campaign or a Baseline Hub submission then pins the group
+    a master, once. A campaign then pins the group
     by name and the platform knows the node count, the rank order and the
     interior network without re-deciding any of it at launch time.
 
@@ -788,7 +788,7 @@ class Run(Base):
     #
     # The rendezvous port chosen on the MASTER for a multi-node deployment, so
     # every rank can be told the same `--dist-init-addr`. 0 for a single-node
-    # run, which needs no rendezvous. See docs/findings_claude/multi-node-resources.md.
+    # run, which needs no rendezvous.
     dist_port: Mapped[int] = mapped_column(Integer, default=0)
     # The node group this run was placed from, by name. Empty for a run placed
     # on loose machines. Recorded rather than derived because a group can be
@@ -1076,7 +1076,7 @@ class Baseline(Base):
     notes: Mapped[str] = mapped_column(Text, default="")
     # -- the rest of the LaunchConfig ------------------------------------------
     # A baseline used to be the knobs alone, which made it a lossy copy of
-    # everything else that carries a config (a hub submission, a campaign, the
+    # everything else that carries a config (a campaign, the
     # deploy file). It is the full LaunchConfig now; the knobs are still what
     # the leaderboard and the relaunch read, the rest is what "tune from
     # this" and the merge-request path need.

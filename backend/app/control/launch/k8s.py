@@ -19,14 +19,13 @@ renders is a setting, `k8s_workload_kind`:
   is the right shape for single-node. This is the concrete path we can run
   today (validated against a local k3d cluster).
 - "custom": a `TuningRun` the autotune-operator reconciles (see
-  ../../autotune_operator). We hand it image + argv + port + GPU count + the
+  operator/ in this repository). We hand it image + argv + port + GPU count + the
   model mount; the operator builds the pod, its NodePort Service, and the
   /v1/models readiness probe, then reports `status.phase` and `status.endpoint`,
   which state()/attach() read back. Group/version/kind come from settings.
 
 When the design solidifies, only `render_workload`, the status mapping, and the
-`AUTOTUNE_K8S_*` settings change; nothing above the driver moves. See
-docs/findings_claude/k8s-and-cicd-seams.md.
+`AUTOTUNE_K8S_*` settings change; nothing above the driver moves.
 
 What is NOT here on purpose:
 - No node/device selection: `spec.gpu_indices` becomes a *count*; the cluster
@@ -304,7 +303,7 @@ def _tolerations(gpus: int, settings: Settings) -> list[dict[str, Any]]:
     """Which node taints this pod may ignore.
 
     A GPU taint keeps pods that do not want cards OFF a GPU node; it is not
-    meant to keep GPU work away. Every GPU workload on our cluster — production
+    meant to keep GPU work away. Every GPU workload on a typical cluster — production
     serving, the device plugins, the RDMA daemons — carries the matching
     toleration, so a pod that asks for cards gets it too. Anything else is
     declared explicitly in `k8s_tolerations`.
@@ -593,10 +592,10 @@ def _render_cr(spec: LaunchSpec, settings: Settings) -> dict:
     else:
         # host model dir -> the container path the argv already references.
         cr_spec["modelHostPath"] = spec.model_path
-    # Which node taints this run may ignore. The CRD carried no tolerations
-    # field before operator 0.2.0: against an older operator the API server
-    # prunes this silently and a pod on a tainted GPU pool stays Pending,
-    # naming nothing. INSTALL.md states the version this backend expects.
+    # Which node taints this run may ignore. A CRD that predates the tolerations
+    # field has the API server prune this silently, and a pod on a tainted GPU
+    # pool stays Pending, naming nothing. INSTALL.md states the version this
+    # backend expects.
     tolerations = _tolerations(_gpu_count(spec), settings)
     if tolerations:
         cr_spec["tolerations"] = tolerations

@@ -117,9 +117,9 @@ survives it.
 
 The operator alone is not enough: the autotune backend also needs a credential
 of its own to create `TuningRun` objects. That is a separate, **namespaced**
-ask — see `deploy/k8s/backend-rbac.yaml` in the platform repo (namespace,
-ServiceAccount, Role, token), and `docs/findings_claude/new-cluster-onboarding.md`
-for the whole conversation in one place.
+ask — see [`deploy/k8s/remote-cluster/`](../deploy/k8s/remote-cluster/) in this
+repository (namespace, ServiceAccount, Role, token, and a script that turns them
+into a scoped kubeconfig).
 
 Backend settings that select this path:
 

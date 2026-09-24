@@ -385,7 +385,7 @@ async def test_a_dead_policy_still_gets_its_verdict(night):
 async def test_the_session_token_is_committed_before_the_container_starts(night):
     # Regression: the policy container calls GET /session within a second of
     # launch, from a different process. If its API key rode only the tick's
-    # end-of-commit, a warm-cached container (the next entrant on a machine)
+    # end-of-commit, a warm-cached container (the next policy on a machine)
     # beat the commit and got 401 "invalid token" before its first heartbeat.
     # The key must be durable the instant `docker run` returns.
     supervisor, driver, http = night

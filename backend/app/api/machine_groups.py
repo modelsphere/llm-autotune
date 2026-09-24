@@ -2,7 +2,7 @@
 
 A group is a named, ordered set of leased machines that can be deployed as one
 gang, with a master. Creating one is an operator action on the Resources page;
-pinning one is a campaign or (later) a Baseline Hub submission.
+pinning one is a campaign's.
 
 The distinction this file has to keep straight, because it is the whole reason
 groups are safe: **a group is a topology, not a reservation.** A member is still

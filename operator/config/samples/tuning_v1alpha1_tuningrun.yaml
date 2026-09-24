@@ -1,6 +1,6 @@
-# A realistic TuningRun, modeled on how the cluster already serves `qwen`
-# (sglang, hostPath weights, A100). The autotune platform generates one of these
-# per candidate config it wants to benchmark, then deletes it when done.
+# A realistic TuningRun: sglang, hostPath weights, one A100. The autotune
+# platform generates one of these per candidate config it wants to benchmark,
+# then deletes it when done.
 apiVersion: tuning.llm-autotune.io/v1alpha1
 kind: TuningRun
 metadata:
@@ -34,7 +34,7 @@ spec:
     - key: nvidia.com/gpu
       operator: Exists
       effect: NoSchedule
-  # Weights come off the node, exactly like the live qwen deployment. A shared
+  # Weights come off the node's own disk here. A shared
   # claim is the alternative — `modelPVC` plus `modelSubPath: Qwen3.5-4B` —
   # which frees the run from the nodes someone pre-staged the weights on.
   modelHostPath: /mnt/disk0/models

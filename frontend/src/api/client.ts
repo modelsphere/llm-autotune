@@ -620,7 +620,7 @@ export interface Baseline {
   card_type: string
   engine_args: Record<string, unknown>
   /** The rest of the launch config — a baseline is a whole one, not just the
-   *  knobs, so it converts losslessly to a Hub submission, a campaign and the
+   *  knobs, so it converts losslessly to a campaign and the
    *  deploy repo's file. */
   image: string
   model_path: string

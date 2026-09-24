@@ -489,7 +489,7 @@ async def set_machine_state(
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_async_session),
 ):
-    """The manual borrow/return ritual (poc-scope.md decision 2): a human marks
+    """The manual borrow/return ritual: a human marks
     the machine as handed to the platform (available) or taken back (away)."""
     if body.state not in (MachineState.AWAY.value, MachineState.AVAILABLE.value):
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "state must be away|available")

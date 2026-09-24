@@ -1,5 +1,5 @@
 """LLMBench adapter — routes all expensive benchmarking to the external
-platform (poc-scope.md decision 4).
+platform.
 
 Contract verified against the LLMBench source (2026-07-30):
 

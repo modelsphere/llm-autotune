@@ -500,7 +500,7 @@ def test_baseline_lifecycle_is_a_cluster_managed_noop():
 #
 # A GPU node is commonly tainted so that pods with no use for cards keep off
 # it. The pod that ASKS for cards is exactly what the taint protects the node
-# for — every GPU workload on our cluster carries the matching toleration — and
+# for — every GPU workload on such a cluster carries the matching toleration — and
 # a platform that does not say so sits Pending on a pool with eight free GPUs,
 # reporting only "untolerated taint".
 
@@ -580,10 +580,9 @@ def test_the_gpu_toleration_can_be_turned_off():
 
 
 def test_custom_mode_carries_them_too():
-    """The TuningRun CRD grew a tolerations field in operator 0.2.0. Before
-    that the API server pruned them and the pod sat Pending on a tainted pool
-    naming nothing, which is why every run so far went through deployment
-    mode."""
+    """TuningRun carries tolerations too. A CRD without the field has the API
+    server prune them, and the pod sits Pending on a tainted pool naming
+    nothing."""
     cr = render_workload(_spec(), _clone(k8s_workload_kind="custom"))[0]
     assert cr["spec"]["tolerations"] == [
         {"key": "nvidia.com/gpu", "operator": "Exists", "effect": "NoSchedule"}

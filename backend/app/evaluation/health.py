@@ -1,5 +1,5 @@
-"""Lightweight health/availability gate — the only in-platform evaluation in
-the PoC (poc-scope.md decision 4). Checks that the service is up, answers a
+"""Lightweight health/availability gate — the only evaluation the platform
+runs itself. Checks that the service is up, answers a
 completion, and the output is not obviously broken."""
 
 import json

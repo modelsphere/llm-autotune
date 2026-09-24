@@ -12,7 +12,6 @@ frontend/dist/
 
 # Go
 operator/bin/
-operator/hack/dev-operator.env
 
 # Env / secrets — never commit a credential or a kubeconfig
 .env

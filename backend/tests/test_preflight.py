@@ -183,7 +183,7 @@ def test_no_nvidia_smi_warns_rather_than_blocks():
     assert _by_key(_run(HEALTHY.replace("gpus 8", "gpus none")), "gpus").status == pf.WARN
 
 
-# -- policy images (competitions) ---------------------------------------------
+# -- policy images -----------------------------------------------------------
 
 
 def test_a_present_policy_image_passes():
@@ -194,7 +194,7 @@ def test_a_present_policy_image_passes():
 
 def test_an_absent_local_only_policy_image_blocks():
     """A bare name:tag has no registry to pull from here (policy images are
-    docker-loaded onto the box), so an absent one wedges the entrant at launch —
+    docker-loaded onto the box), so an absent one wedges the policy at launch —
     a hard failure, unlike the engine image from a registry."""
     checks = _run(HEALTHY + "polimg absent autotune-policy-rand:latest\n",
                   policy_images=["autotune-policy-rand:latest"])

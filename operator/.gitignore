@@ -9,10 +9,7 @@ Dockerfile.cross
 
 # dist/install.yaml is deliberately NOT ignored: it is the release artifact — the
 # single file a cluster admin reviews and applies, pinned to an image digest.
-# `hack/dev-operator.sh release` regenerates it; commit the result.
-
-# Local machine-specific config for hack/dev-operator.sh (kubeconfig path etc.)
-hack/dev-operator.env
+# `make build-installer IMG=<image>` regenerates it; commit the result.
 
 # Test binary, built with `go test -c`
 *.test

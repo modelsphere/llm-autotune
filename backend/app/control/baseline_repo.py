@@ -7,7 +7,7 @@ the row, records the rest as divergences for a person to resolve, and stores
 the commit and the text. Nothing is overwritten that the policy does not say
 the platform owns, and every difference it does not adopt is on the record.
 
-GitLab may be unconfigured (a dev box) or unreachable (the office VPN). The
+GitLab may be unconfigured (a dev box) or unreachable (behind a VPN). The
 document stored at the last sync is then the fallback, flagged `offline`, so
 a merge request can still be PREVIEWED against the last known production
 config; only opening one needs the live host.

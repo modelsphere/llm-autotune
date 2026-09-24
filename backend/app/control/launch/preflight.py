@@ -288,15 +288,15 @@ def inspect(
             elif _looks_pullable(ref):
                 checks.append(Check(
                     f"policy_image:{ref}", "Policy image", WARN,
-                    f"{ref} is not on the machine; the first entrant will pull it",
-                    "Pre-pull it to keep the pull out of the entrant's launch clock.",
+                    f"{ref} is not on the machine; the first policy run will pull it",
+                    "Pre-pull it to keep the pull out of the policy's launch clock.",
                 ))
             else:
                 checks.append(Check(
                     f"policy_image:{ref}", "Policy image", FAIL,
                     f"{ref} is not on {machine.name} and has no registry to pull from",
                     "Policy images aren't served from a registry here — load it onto the "
-                    "machine (docker save … | ssh … docker load) before the entrant runs.",
+                    "machine (docker save … | ssh … docker load) before the policy runs.",
                 ))
         elif head == "volume":
             host_path = rest[1] if len(rest) > 1 else "?"
