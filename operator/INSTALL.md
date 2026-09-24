@@ -19,7 +19,7 @@ namespace the platform is granted).
 
 | kind | name | scope |
 |---|---|---|
-| CustomResourceDefinition | `tuningruns.tuning.llm-autotune.io` | cluster (the object itself is **namespaced**) |
+| CustomResourceDefinition | `tuningruns.tuning.modelsphere.dev` | cluster (the object itself is **namespaced**) |
 | Namespace | `autotune-operator-system` | — |
 | ServiceAccount | `autotune-operator-controller-manager` | namespaced |
 | Deployment | `autotune-operator-controller-manager` (1 replica) | namespaced |
@@ -40,7 +40,7 @@ watches all namespaces:
 
 | API group | resources | verbs | why |
 |---|---|---|---|
-| `tuning.llm-autotune.io` | `tuningruns`, `/status`, `/finalizers` | full | its own CRD |
+| `tuning.modelsphere.dev` | `tuningruns`, `/status`, `/finalizers` | full | its own CRD |
 | `apps` | `deployments` | create, delete, get, list, watch, update, patch | a TuningRun *is* a Deployment plus a Service |
 | `""` | `services` | create, delete, get, list, watch, update, patch | the endpoint a benchmark drives |
 | `""` | `pods` | get, list, watch | read phase and failure reason (`OOMKilled`, `ImagePullBackOff`, `Unschedulable`) back into status |
@@ -64,7 +64,7 @@ No operator image is published. Build one into a registry your cluster pulls
 from, render the manifest against it, and apply that:
 
 ```sh
-IMG=<your-registry>/llm-autotune-operator:0.1.0
+IMG=<your-registry>/llm-autotune-operator:0.1.1
 make docker-build docker-push IMG=$IMG   # or `make docker-buildx IMG=$IMG` for several platforms
 make build-installer IMG=$IMG            # writes dist/install.yaml; the Makefile fetches its own tools
 kubectl apply -f dist/install.yaml
@@ -80,7 +80,7 @@ platform runs carry their own (`AUTOTUNE_K8S_IMAGE_PULL_SECRETS`).
 ## Verify
 
 ```sh
-kubectl get crd tuningruns.tuning.llm-autotune.io
+kubectl get crd tuningruns.tuning.modelsphere.dev
 kubectl -n autotune-operator-system get pods          # 1/1 Running
 kubectl -n autotune-operator-system logs deploy/autotune-operator-controller-manager
 ```
@@ -125,4 +125,5 @@ Then tell the platform to submit `TuningRun`s instead of Deployments:
 
 | version | changes | compatibility |
 |---|---|---|
+| 0.1.1 | API group `tuning.modelsphere.dev` (was `tuning.llm-autotune.io`); pods labelled `tuning.modelsphere.dev/run` | **not compatible with 0.1.0**: a CRD group cannot be renamed in place, so uninstall 0.1.0 and install this one |
 | 0.1.0 | first public release: TuningRun → Deployment + Service, phase/endpoint status, TTL teardown, `spec.tolerations` (for tainted GPU pools), `spec.modelSubPath` (one shared weights PVC serving many models) | — |

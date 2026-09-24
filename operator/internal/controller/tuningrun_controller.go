@@ -45,7 +45,7 @@ const (
 	// managerName labels the objects this operator owns and is the controller's field manager.
 	managerName = "autotune-operator"
 	// runNameLabel ties a Deployment/Service/Pod back to its TuningRun.
-	runNameLabel = "tuning.llm-autotune.io/run"
+	runNameLabel = "tuning.modelsphere.dev/run"
 	// engineContainerName is the single serving container in each workload pod.
 	engineContainerName = "engine"
 	// syncPeriod is how often a non-terminal run is re-observed even without a watch event.
@@ -78,9 +78,9 @@ type TuningRunReconciler struct {
 	Scheme *runtime.Scheme
 }
 
-// +kubebuilder:rbac:groups=tuning.llm-autotune.io,resources=tuningruns,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=tuning.llm-autotune.io,resources=tuningruns/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=tuning.llm-autotune.io,resources=tuningruns/finalizers,verbs=update
+// +kubebuilder:rbac:groups=tuning.modelsphere.dev,resources=tuningruns,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=tuning.modelsphere.dev,resources=tuningruns/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=tuning.modelsphere.dev,resources=tuningruns/finalizers,verbs=update
 // +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch

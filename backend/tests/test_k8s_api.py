@@ -29,14 +29,14 @@ def test_get_k8s_api_routes_by_mode():
 def test_client_api_construction_and_resolution_need_no_cluster():
     # Config is loaded lazily, so this must not touch a kubeconfig or apiserver.
     api = ClientApi(_s(
-        k8s_cr_group="tuning.llm-autotune.io",
+        k8s_cr_group="tuning.modelsphere.dev",
         k8s_cr_version="v1alpha1",
         k8s_cr_plural="tuningruns",
         k8s_namespace="autotune",
     ))
     assert api._ns == "autotune"
-    assert api._cr() == ("tuning.llm-autotune.io", "v1alpha1", "tuningruns")
+    assert api._cr() == ("tuning.modelsphere.dev", "v1alpha1", "tuningruns")
     # apply()'s conflict path re-reads via the right resource string per kind.
     assert api._resource_for_kind("Deployment") == "deployment"
     assert api._resource_for_kind("Service") == "service"
-    assert api._resource_for_kind("TuningRun") == "tuningruns.tuning.llm-autotune.io"
+    assert api._resource_for_kind("TuningRun") == "tuningruns.tuning.modelsphere.dev"

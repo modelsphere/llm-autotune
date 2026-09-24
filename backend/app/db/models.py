@@ -314,11 +314,11 @@ class Cluster(Base):
     service_nodeport: Mapped[int] = mapped_column(Integer, default=0)
     run_ttl_seconds: Mapped[int] = mapped_column(Integer, default=0)
     in_cluster: Mapped[bool] = mapped_column(Boolean, default=False)
-    cr_group: Mapped[str] = mapped_column(String(128), default="tuning.llm-autotune.io")
+    cr_group: Mapped[str] = mapped_column(String(128), default="tuning.modelsphere.dev")
     cr_version: Mapped[str] = mapped_column(String(32), default="v1alpha1")
     cr_kind: Mapped[str] = mapped_column(String(64), default="TuningRun")
     cr_plural: Mapped[str] = mapped_column(String(64), default="tuningruns")
-    cr_pod_label: Mapped[str] = mapped_column(String(128), default="tuning.llm-autotune.io/run")
+    cr_pod_label: Mapped[str] = mapped_column(String(128), default="tuning.modelsphere.dev/run")
     # Engine container requests/limits. Empty = omitted (today's behavior); a
     # quota'd namespace or a cluster standard that demands them fills these in.
     engine_cpu_request: Mapped[str] = mapped_column(String(32), default="")

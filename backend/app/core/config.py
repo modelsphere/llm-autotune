@@ -221,7 +221,7 @@ class Settings(BaseSettings):
     # k8s_workload_kind="custom"). Defaults address the autotune-operator's
     # TuningRun CRD; override only if its group/kind changes. apiVersion is
     # "{group}/{version}"; `plural` is the API-path name.
-    k8s_cr_group: str = "tuning.llm-autotune.io"
+    k8s_cr_group: str = "tuning.modelsphere.dev"
     k8s_cr_version: str = "v1alpha1"
     k8s_cr_kind: str = "TuningRun"
     k8s_cr_plural: str = "tuningruns"
@@ -229,7 +229,7 @@ class Settings(BaseSettings):
     # custom mode the driver does not create the pods (the operator does), so
     # logs/environment/exit-info select on this label; the value is the run's
     # object name (autotune-run-<id>).
-    k8s_cr_pod_label: str = "tuning.llm-autotune.io/run"
+    k8s_cr_pod_label: str = "tuning.modelsphere.dev/run"
     # Optional TTL written into the TuningRun (custom mode): a safety net so the
     # operator tears a run down after this many seconds if the platform crashes
     # and never deletes it. 0 = no TTL (the platform owns teardown).

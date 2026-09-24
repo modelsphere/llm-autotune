@@ -32,7 +32,7 @@ metadata:
   namespace: autotune
 rules:
   # Submit and poll experiments.
-  - apiGroups: ["tuning.llm-autotune.io"]
+  - apiGroups: ["tuning.modelsphere.dev"]
     resources: ["tuningruns"]
     verbs: ["create", "get", "list", "watch", "delete"]
   # Read the pods the operator creates (node/provenance, exit info).

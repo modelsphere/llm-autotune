@@ -1,7 +1,7 @@
 # A realistic TuningRun: sglang, hostPath weights, one A100. The autotune
 # platform generates one of these per candidate config it wants to benchmark,
 # then deletes it when done.
-apiVersion: tuning.llm-autotune.io/v1alpha1
+apiVersion: tuning.modelsphere.dev/v1alpha1
 kind: TuningRun
 metadata:
   name: autotune-run-sample

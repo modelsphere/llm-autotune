@@ -39,11 +39,11 @@ class ClusterIn(BaseModel):
     service_nodeport: int = Field(0, ge=0, le=65535)
     run_ttl_seconds: int = Field(0, ge=0)
     in_cluster: bool = False
-    cr_group: str = "tuning.llm-autotune.io"
+    cr_group: str = "tuning.modelsphere.dev"
     cr_version: str = "v1alpha1"
     cr_kind: str = "TuningRun"
     cr_plural: str = "tuningruns"
-    cr_pod_label: str = "tuning.llm-autotune.io/run"
+    cr_pod_label: str = "tuning.modelsphere.dev/run"
     engine_cpu_request: str = ""
     engine_memory_request: str = ""
     engine_cpu_limit: str = ""

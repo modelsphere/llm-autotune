@@ -3,7 +3,7 @@
 # and allow the plugins properly work.
 # More info: https://book.kubebuilder.io/reference/project-config.html
 cliVersion: 4.15.0
-domain: llm-autotune.io
+domain: modelsphere.dev
 layout:
 - go.kubebuilder.io/v4
 projectName: autotune-operator
@@ -13,7 +13,7 @@ resources:
     crdVersion: v1
     namespaced: true
   controller: true
-  domain: llm-autotune.io
+  domain: modelsphere.dev
   group: tuning
   kind: TuningRun
   path: github.com/modelsphere/llm-autotune/operator/api/v1alpha1

@@ -74,11 +74,11 @@ DEFAULT_ENV = {
 # Labels our objects (and, via the pod template, their pods) carry, so
 # logs/state/exit-info find the pieces of one run without knowing any operator's
 # naming scheme.
-RUN_LABEL = "llm-autotune.io/run"
-MANAGED_LABEL = "llm-autotune.io/managed"
+RUN_LABEL = "autotune.modelsphere.dev/run"
+MANAGED_LABEL = "autotune.modelsphere.dev/managed"
 # A policy container's Job and its pod. Distinct from RUN_LABEL: a policy is not
 # a run, and its pods must never be selected by an engine's log or state read.
-POLICY_LABEL = "llm-autotune.io/policy"
+POLICY_LABEL = "autotune.modelsphere.dev/policy"
 
 # TuningRun status.phase values (custom mode) that mean the workload is dead,
 # not still coming up. "failed"/"expired" are the operator's; the rest are
@@ -137,7 +137,7 @@ _TRANSIENT_FAILURE_CLASSES = TRANSIENT_PLACEMENT_FAILURES
 
 def _cr_resource(settings: Settings) -> str:
     """The `plural.group` string that addresses our CR through kubectl/the API
-    (e.g. `tuningruns.tuning.llm-autotune.io`)."""
+    (e.g. `tuningruns.tuning.modelsphere.dev`)."""
     return f"{settings.k8s_cr_plural}.{settings.k8s_cr_group}"
 
 
@@ -555,7 +555,7 @@ def _workload_volumes(spec: WorkloadSpec) -> tuple[list[dict], list[dict]]:
 
 
 def _render_cr(spec: LaunchSpec, settings: Settings) -> dict:
-    """A `TuningRun` (tuning.llm-autotune.io) for the autotune-operator to reconcile.
+    """A `TuningRun` (tuning.modelsphere.dev) for the autotune-operator to reconcile.
 
     The operator is engine-agnostic: the argv is built by the SAME adapter the
     ssh/deployment paths use and passed through as command/args (element 0 the

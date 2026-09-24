@@ -124,11 +124,11 @@ class K8sClusterSettings:
     k8s_kubeconfig: str = ""
     k8s_in_cluster: bool = False
     k8s_workload_kind: str = "deployment"
-    k8s_cr_group: str = "tuning.llm-autotune.io"
+    k8s_cr_group: str = "tuning.modelsphere.dev"
     k8s_cr_version: str = "v1alpha1"
     k8s_cr_kind: str = "TuningRun"
     k8s_cr_plural: str = "tuningruns"
-    k8s_cr_pod_label: str = "tuning.llm-autotune.io/run"
+    k8s_cr_pod_label: str = "tuning.modelsphere.dev/run"
     k8s_run_ttl_seconds: int = 0
     k8s_node_host: str = ""
     k8s_service_nodeport: int = 0

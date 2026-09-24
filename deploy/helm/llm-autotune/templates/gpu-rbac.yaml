@@ -13,7 +13,7 @@ metadata:
   namespace: {{ $ns }}
   labels: {{- include "llm-autotune.labels" . | nindent 4 }}
 rules:
-  - apiGroups: ["tuning.llm-autotune.io"]
+  - apiGroups: ["tuning.modelsphere.dev"]
     resources: ["tuningruns"]
     verbs: ["create", "get", "list", "watch", "delete"]
   # Read the pods a run produced: where it landed, why it will not start.

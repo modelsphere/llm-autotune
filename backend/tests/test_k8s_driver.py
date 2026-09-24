@@ -257,7 +257,7 @@ def test_custom_mode_renders_a_tuningrun():
     objs = render_workload(_spec(), settings)
     assert [o["kind"] for o in objs] == ["TuningRun"]
     cr = objs[0]
-    assert cr["apiVersion"] == "tuning.llm-autotune.io/v1alpha1"
+    assert cr["apiVersion"] == "tuning.modelsphere.dev/v1alpha1"
     assert cr["metadata"]["name"] == "autotune-run-7"
 
     crspec = cr["spec"]
@@ -372,12 +372,12 @@ def test_custom_mode_endpoint_comes_from_operator_status():
 
 def test_custom_mode_finds_pods_by_the_operator_label():
     # Regression (caught driving the live operator): in custom mode the operator
-    # owns the pods and labels them tuning.llm-autotune.io/run=<cr name>, so logs /
+    # owns the pods and labels them tuning.modelsphere.dev/run=<cr name>, so logs /
     # environment / exit-info must select on that label — not the run-id label
     # the driver only puts on objects it creates itself in deployment mode.
     spec = _spec()
     custom = _driver(_clone(k8s_workload_kind="custom"))
-    assert custom._run_selector(spec) == "tuning.llm-autotune.io/run=autotune-run-7"
+    assert custom._run_selector(spec) == "tuning.modelsphere.dev/run=autotune-run-7"
     deployment = _driver(_clone(k8s_workload_kind="deployment"))
     assert deployment._run_selector(spec) == f"{RUN_LABEL}=7"
 

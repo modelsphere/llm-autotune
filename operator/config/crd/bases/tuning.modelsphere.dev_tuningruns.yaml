@@ -4,9 +4,9 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.21.0
-  name: tuningruns.tuning.llm-autotune.io
+  name: tuningruns.tuning.modelsphere.dev
 spec:
-  group: tuning.llm-autotune.io
+  group: tuning.modelsphere.dev
   names:
     kind: TuningRun
     listKind: TuningRunList

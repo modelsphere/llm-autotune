@@ -9,7 +9,7 @@ candidate config without holding `kubectl` against the cluster itself.
 take it off again. No image is published: you build one and render
 `dist/install.yaml` against it with `make build-installer IMG=<image>`.
 
-It introduces a single CRD, **`TuningRun`** (`tuning.llm-autotune.io/v1alpha1`). The
+It introduces a single CRD, **`TuningRun`** (`tuning.modelsphere.dev/v1alpha1`). The
 platform creates a `TuningRun`; the operator launches the workload, waits for it
 to serve, publishes a reachable endpoint, and tears it down — and writes all of
 that back into the object's `status`. That's the whole job.
