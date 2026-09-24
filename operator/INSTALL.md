@@ -12,9 +12,10 @@ create Deployments on your cluster itself.
 
 ## What gets installed
 
-Everything below is in `dist/install.yaml`, one file, applied in one command.
-Nothing else is created, now or later, except the `TuningRun` workloads
-themselves (in whichever namespace the platform is granted).
+Everything below is in `dist/install.yaml`, one file you generate from this
+directory (see [Install](#install)) and apply in one command. Nothing else is
+created, now or later, except the `TuningRun` workloads themselves (in whichever
+namespace the platform is granted).
 
 | kind | name | scope |
 |---|---|---|
@@ -27,8 +28,8 @@ themselves (in whichever namespace the platform is granted).
 | ClusterRole + binding | `autotune-operator-metrics-auth-role` | cluster-wide: `tokenreviews`/`subjectaccessreviews` create, so the metrics endpoint can authenticate callers |
 | Service | `autotune-operator-controller-manager-metrics-service` (:8443) | namespaced |
 
-The manager image is a `FROM scratch` container holding one static Go binary. It
-runs as non-root (uid 65532) with a read-only root filesystem, all capabilities
+The manager image is `gcr.io/distroless/static:nonroot` holding one static Go
+binary. It runs as non-root (uid 65532) with a read-only root filesystem, all capabilities
 dropped, `seccompProfile: RuntimeDefault`, and requests 10m CPU / 64Mi memory
 (limits 500m / 128Mi) — it satisfies the **restricted** Pod Security Standard.
 
@@ -59,31 +60,22 @@ Two honest caveats:
 
 ## Install
 
+No operator image is published. Build one into a registry your cluster pulls
+from, render the manifest against it, and apply that:
+
 ```sh
+IMG=<your-registry>/llm-autotune-operator:0.1.0
+make docker-build docker-push IMG=$IMG   # or `make docker-buildx IMG=$IMG` for several platforms
+make build-installer IMG=$IMG            # writes dist/install.yaml; the Makefile fetches its own tools
 kubectl apply -f dist/install.yaml
 ```
 
 The image is named in that file, so what you review is what runs. Pin it to a
-digest for a reproducible rollout, and if your cluster cannot reach `ghcr.io`,
-mirror it and re-point the image:
-
-```sh
-# on a host that can reach both registries
-docker pull  ghcr.io/modelsphere/llm-autotune-operator:0.2.2
-docker tag   ghcr.io/modelsphere/llm-autotune-operator:0.2.2 <your-registry>/autotune-operator:0.2.2
-docker push  <your-registry>/autotune-operator:0.2.2
-sed -i 's|ghcr.io/modelsphere/llm-autotune-operator:0.2.2|<your-registry>/autotune-operator:0.2.2|' dist/install.yaml
-```
+digest for a reproducible rollout.
 
 If the manager's own image needs a pull secret, add one to the
 `autotune-operator-controller-manager` ServiceAccount; the *engine* images the
 platform runs carry their own (`AUTOTUNE_K8S_IMAGE_PULL_SECRETS`).
-
-To rebuild `dist/install.yaml` from source instead of trusting ours:
-
-```sh
-make build-installer IMG=<your image>      # needs Go + controller-gen; both vendored by the Makefile
-```
 
 ## Verify
 
@@ -135,5 +127,4 @@ AUTOTUNE_K8S_MODEL_PVC_ROOT=/mnt/disk0/models  # host path that claim's root cor
 
 | version | changes | compatibility |
 |---|---|---|
-| 0.2.0 | `spec.tolerations` (a GPU pod on a tainted node pool could not schedule without it); `spec.modelSubPath` (one shared weights PVC can serve many models) | **required** if your GPU nodes are tainted — an older CRD prunes tolerations silently and the pod sits Pending naming nothing |
-| 0.1.0 | first release: TuningRun → Deployment + Service, phase/endpoint status, TTL teardown | — |
+| 0.1.0 | first public release: TuningRun → Deployment + Service, phase/endpoint status, TTL teardown, `spec.tolerations` (for tainted GPU pools), `spec.modelSubPath` (one shared weights PVC serving many models) | — |

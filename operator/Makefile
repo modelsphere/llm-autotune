@@ -1,5 +1,6 @@
 # Image URL to use all building/pushing image targets
-IMG ?= ghcr.io/modelsphere/llm-autotune-operator:0.2.2
+# No image is published; pass IMG=<your-registry>/llm-autotune-operator:<tag>.
+IMG ?= llm-autotune-operator:0.1.0
 export IMG
 # YEAR defines the year value used for substituting the YEAR placeholder in the boilerplate header.
 YEAR ?= $(shell date +%Y)

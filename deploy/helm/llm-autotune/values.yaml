@@ -11,7 +11,7 @@ nameOverride: ""
 fullnameOverride: ""
 
 image:
-  registry: ghcr.io/modelsphere
+  registry: docker.io/4pdosc
   backend: llm-autotune-backend
   frontend: llm-autotune-frontend
   tag: ""                      # empty = the chart's appVersion
@@ -166,4 +166,3 @@ serviceAccount:
 # GPUs. See values-mock.yaml.
 mock:
   enabled: false
-  image: ghcr.io/modelsphere/llm-autotune-mock-engine

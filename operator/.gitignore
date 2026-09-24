@@ -7,9 +7,9 @@
 bin/*
 Dockerfile.cross
 
-# dist/install.yaml is deliberately NOT ignored: it is the release artifact — the
-# single file a cluster admin reviews and applies, pinned to an image digest.
-# `make build-installer IMG=<image>` regenerates it; commit the result.
+# `make build-installer IMG=<image>` renders the install manifest here, against
+# the image you built; it is not committed because no image is published.
+dist/
 
 # Test binary, built with `go test -c`
 *.test

@@ -9,7 +9,9 @@
 ARG NODE_IMAGE=node:22-slim
 ARG NGINX_IMAGE=nginx:1.27-alpine
 
-FROM ${NODE_IMAGE} AS build
+# The build stage only emits static files, so it runs on the builder's own
+# platform even when the image is built for another one.
+FROM --platform=$BUILDPLATFORM ${NODE_IMAGE} AS build
 WORKDIR /app
 # Behind a package mirror, pass it in rather than editing this file:
 #   docker build --build-arg NPM_REGISTRY=https://registry.npmmirror.com ...
