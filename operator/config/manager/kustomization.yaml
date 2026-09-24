@@ -3,6 +3,6 @@ resources:
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 images:
-- newTag: 0.1.0
+- newTag: 0.1.1
   name: controller
   newName: llm-autotune-operator

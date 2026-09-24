@@ -1,6 +1,6 @@
 # Image URL to use all building/pushing image targets
 # No image is published; pass IMG=<your-registry>/llm-autotune-operator:<tag>.
-IMG ?= llm-autotune-operator:0.1.0
+IMG ?= llm-autotune-operator:0.1.1
 export IMG
 # YEAR defines the year value used for substituting the YEAR placeholder in the boilerplate header.
 YEAR ?= $(shell date +%Y)

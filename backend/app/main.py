@@ -107,7 +107,7 @@ class SpaStaticFiles(StaticFiles):
 
 app = FastAPI(
     title="LLM Autotune",
-    version="0.1.0",
+    version="0.1.1",
     description=DESCRIPTION,
     openapi_tags=TAGS,
     # The interactive docs are the integration guide for the lease API, so they

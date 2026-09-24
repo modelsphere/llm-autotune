@@ -10,15 +10,15 @@ No image is published; build it where the platform's runs can use it.
 **On a kind cluster** (the README quickstart):
 
 ```bash
-docker build -t llm-autotune-mock-engine:0.1.0 mock-engine/
-kind load docker-image llm-autotune-mock-engine:0.1.0
+docker build -t llm-autotune-mock-engine:local mock-engine/
+kind load docker-image llm-autotune-mock-engine:local
 ```
 
 Engine pods use `imagePullPolicy: IfNotPresent`, so the loaded image is used as
 is. On any other cluster, push it to a registry the nodes pull from.
 
 **On an ssh machine**, build it on the machine, or copy it over with
-`docker save llm-autotune-mock-engine:0.1.0 | ssh <host> docker load`. On a box
+`docker save llm-autotune-mock-engine:local | ssh <host> docker load`. On a box
 without GPUs, set `AUTOTUNE_DOCKER_GPU_MODE=none` for the worker so the driver
 omits `--gpus/--runtime=nvidia`.
 

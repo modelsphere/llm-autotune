@@ -39,8 +39,8 @@ kind create cluster
 
 # The fake engine is built locally, and runs against a placeholder weights
 # directory on the node (the platform will not start an engine on an empty one).
-docker build -t llm-autotune-mock-engine:0.1.0 mock-engine/
-kind load docker-image llm-autotune-mock-engine:0.1.0
+docker build -t llm-autotune-mock-engine:local mock-engine/
+kind load docker-image llm-autotune-mock-engine:local
 docker exec kind-control-plane sh -c 'mkdir -p /models/mock && echo {} > /models/mock/config.json'
 
 helm install autotune deploy/helm/llm-autotune \
@@ -55,7 +55,7 @@ install the worker restarts a few times until the schema job has run; give it a
 minute. Then:
 
 1. **Resources:** on the `local-cluster` machine, click **Lease to platform**.
-2. **New campaign:** image `llm-autotune-mock-engine:0.1.0`, model path
+2. **New campaign:** image `llm-autotune-mock-engine:local`, model path
    `/models/mock`, any served model name, machine `local-cluster`, and a grid
    over one of the mock's knobs, e.g. `mock_token_ms: [2, 20]`. Leave the
    benchmark and objective at their defaults.
