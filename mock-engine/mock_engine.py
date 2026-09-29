@@ -11,11 +11,11 @@ Unknown flags (tp-size, mem-fraction-static, ...) are accepted and ignored.
 Behavior knobs are ordinary flags, so campaigns control them via
 search_space.base / grid:
 
-    --mock-startup-seconds N    weight-loading delay before the port opens (default 3)
+    --mock-startup-seconds N    weight-loading delay before the port opens (default 1)
     --mock-fail MODE            oom | exit — crash during startup with matching logs
     --mock-fail-after-seconds N crash (OOM) N seconds after becoming ready
-    --mock-latency-ms N         time to the first token (default 200)
-    --mock-token-ms N           time between streamed tokens (default 5)
+    --mock-latency-ms N         time to the first token (default 20)
+    --mock-token-ms N           time between streamed tokens (default 1)
     --mock-max-output-tokens N  cap on tokens per reply (default 256)
 
 Streaming is real: `"stream": true` answers server-sent events, one token per
@@ -45,11 +45,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--served-model-name", default="mock-model")
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=30000)
-    parser.add_argument("--mock-startup-seconds", type=float, default=3.0)
+    parser.add_argument("--mock-startup-seconds", type=float, default=1.0)
     parser.add_argument("--mock-fail", default="")
     parser.add_argument("--mock-fail-after-seconds", type=float, default=0.0)
-    parser.add_argument("--mock-latency-ms", type=float, default=200.0)
-    parser.add_argument("--mock-token-ms", type=float, default=5.0)
+    parser.add_argument("--mock-latency-ms", type=float, default=20.0)
+    parser.add_argument("--mock-token-ms", type=float, default=1.0)
     parser.add_argument("--mock-max-output-tokens", type=int, default=256)
     args, unknown = parser.parse_known_args(argv)
     if unknown:

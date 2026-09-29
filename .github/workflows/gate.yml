@@ -61,10 +61,16 @@ jobs:
       - uses: actions/checkout@v4
       - uses: azure/setup-helm@v4
       - run: helm lint deploy/helm/llm-autotune --set jwtSecret=ci --set adminPassword=ci
-      - name: The chart renders, in both shapes
+      - name: The chart renders, in every shape
         run: |
           helm template t deploy/helm/llm-autotune \
             --set jwtSecret=ci --set adminPassword=ci --set gpuCluster.inCluster=true > /dev/null
           helm template t deploy/helm/llm-autotune \
+            -f deploy/helm/llm-autotune/values-quickstart.yaml \
+            --set jwtSecret=ci --set adminPassword=ci > /dev/null
+          helm template t deploy/helm/llm-autotune \
+            -f deploy/helm/llm-autotune/values-quickstart.yaml \
             -f deploy/helm/llm-autotune/values-mock.yaml \
             --set jwtSecret=ci --set adminPassword=ci > /dev/null
+      - name: The quickstart script passes shellcheck
+        run: shellcheck deploy/quickstart.sh

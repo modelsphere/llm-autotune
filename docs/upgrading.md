@@ -4,7 +4,7 @@
 
 `helm install` and `helm upgrade` run `python -m app.db.bootstrap` as a Job once
 the release is applied; the new API and worker start alongside it, and the
-worker restarts until the schema is there. The bootstrap is create-or-migrate:
+worker waits until the schema is there. The bootstrap is create-or-migrate:
 
 - **No `alembic_version` table** — a fresh database. The current schema is
   created from the models and stamped at head.
@@ -13,6 +13,11 @@ worker restarts until the schema is there. The bootstrap is create-or-migrate:
 A database with tables but no `alembic_version` is treated as current-shaped:
 missing tables are filled in and head is stamped, loudly. If that schema was
 actually old, reconcile it by hand before trusting the stamp.
+
+Then, on every install and upgrade, it adds what is missing and never changes
+what exists: the first admin (only while there are no users), the built-in
+objectives, the `local-cluster` machine (only while there are no machines), and
+the screen benchmark on LLMBench.
 
 ## Migration compatibility
 
