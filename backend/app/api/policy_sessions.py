@@ -648,7 +648,11 @@ async def request_launch(
 
     canonical, dev = _validated(body.engine_args, campaign, machine)
     needed = cards_used(canonical)
-    if needed != len(body.gpu_indices):
+    # A machine with no cards (a CPU-only slice: kind, the quickstart's mock
+    # engine) gives the session none, and its launches ask for none whatever
+    # the config's parallelism, the way a plain campaign runs there. Asking
+    # for a card it does not hold is still refused, as outside the allocation.
+    if session.gpu_indices and needed != len(body.gpu_indices):
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
             f"config uses {needed} card(s) (tp×dp×pp) but {len(body.gpu_indices)} were "
@@ -784,6 +788,11 @@ async def bench_external(
     _mark_activity(session)
     if machine is None:
         raise HTTPException(status.HTTP_409_CONFLICT, "session has no machine")
+    if session.gpu_indices and not body.gpu_indices:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "gpu_indices is empty: name the cards the engine you serve runs on",
+        )
     if body.port not in (session.ports or []):
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_ENTITY,

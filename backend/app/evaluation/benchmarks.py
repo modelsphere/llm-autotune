@@ -22,6 +22,7 @@ from pathlib import Path
 
 import yaml
 
+from app.core.config import get_settings
 from app.evaluation.llmbench import LLMBenchClient
 
 TEMPLATE_DIR = Path(__file__).resolve().parent / "benchmark_templates"
@@ -78,3 +79,14 @@ def ensure_benchmark(
         existing = client.lock_benchmark(existing["id"])
     return Ensured(slug=slug, benchmark_id=existing["id"], created=created,
                    locked=bool(existing.get("is_locked")))
+
+
+def ensure_screen_benchmark(max_attempts: int = 1) -> Ensured | None:
+    """Ensure the default screen benchmark on the configured LLMBench.
+
+    None when there is nothing to do: ensuring is turned off, or no LLMBench
+    is configured. Raises when LLMBench cannot be reached or refuses."""
+    settings = get_settings()
+    if not settings.llmbench_ensure_benchmarks or not settings.llmbench_base_url:
+        return None
+    return ensure_benchmark(LLMBenchClient(max_attempts=max_attempts))

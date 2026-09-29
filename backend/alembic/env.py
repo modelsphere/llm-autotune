@@ -9,7 +9,10 @@ from app.db.base import Base
 
 config = context.config
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    # Keep loggers configured before this: the bootstrap job runs migrations
+    # in-process and reports what it seeded afterwards, and fileConfig's
+    # default would silence it.
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 config.set_main_option("sqlalchemy.url", get_settings().sync_database_url)
 
