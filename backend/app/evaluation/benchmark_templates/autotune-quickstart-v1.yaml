@@ -1,0 +1,40 @@
+# A light screen for trying the platform on a laptop or a CPU-only cluster
+# (deploy/quickstart.sh), where the engine is the mock and the benchmark client
+# shares the machine's CPUs with it.
+#
+# The real screen (autotune-screen-v1) sends 2048-token prompts to 64
+# concurrent streams; on such a machine that measures how fast the client can
+# prepare requests, not the engine, and two mock configs rank by noise. Short
+# requests at low concurrency leave the mock's own timers in charge, so the
+# ranking is the one its settings imply, and a run takes about a minute.
+#
+# Nothing measured with it means anything about a real engine's performance.
+slug: autotune-quickstart-v1
+name: AutoTune quickstart — light throughput sweep
+description: >
+  Output throughput and latency at two low concurrency levels with short
+  requests, for trying LLM AutoTune with its mock engine. Created and locked by
+  LLM AutoTune; edit the template in AutoTune, not this benchmark.
+version: "1"
+status: active
+modules:
+  - module_name: perf_guidellm_sweep
+    order_index: 0
+    weight: 1.0
+    skip_if_prev_failed: false
+    params:
+      search_mode: grid
+      concurrencies: "1,4"
+      input_tokens: 128
+      output_tokens: 64
+      max_seconds: 30
+      warmup_seconds: 2
+      request_timeout: 60
+    metric_configs:
+      - {key: output_tps, role: score, weight: 1.0, formula: ratio_capped, baseline: 5000.0}
+      - {key: uptime, role: redline, min_val: 0.95}
+      - {key: ttft_p50_ms, role: display}
+      - {key: ttft_p99_ms, role: display}
+      - {key: itl_p99_ms, role: display}
+      - {key: request_output_tps, role: display}
+      - {key: reported_concurrency, role: display}

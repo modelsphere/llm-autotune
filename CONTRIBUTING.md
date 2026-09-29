@@ -17,7 +17,7 @@ docker compose -f deploy/docker/docker-compose.dev.yml up -d   # postgres
 cd backend
 uv sync --extra dev
 cp .env.example .env
-uv run alembic upgrade head
+AUTOTUNE_ADMIN_PASSWORD=changeme uv run python -m app.db.bootstrap   # schema, first admin, built-ins
 uv run uvicorn app.main:app --reload --port 28100   # the API
 uv run python -m app.worker                         # the orchestrator
 
@@ -35,8 +35,10 @@ export AUTOTUNE_LLMBENCH_BASE_URL=http://127.0.0.1:28101
 
 Runs still need somewhere to land: a local kind cluster added on the Resources
 page with its kubeconfig, or any machine the worker can ssh into that has Docker.
-Build `mock-engine/` there and use it as the campaign's image;
-[mock-engine/README.md](mock-engine/README.md) has both.
+Use the mock engine as the campaign's image;
+[mock-engine/README.md](mock-engine/README.md) has both. To try a change to the
+chart or the images end to end, `deploy/quickstart.sh --kind` installs this
+checkout's chart next to LLMBench.
 
 ## Before you open a pull request
 

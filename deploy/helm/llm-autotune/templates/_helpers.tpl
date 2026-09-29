@@ -39,6 +39,10 @@ helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" }}
 {{- define "llm-autotune.frontendImage" -}}
 {{- $tag := .Values.image.tag | default .Chart.AppVersion -}}
 {{- printf "%s/%s:%s" .Values.image.registry .Values.image.frontend $tag -}}
+{{- end }}
+
+{{- define "llm-autotune.mockEngineImage" -}}
+{{- .Values.mockModel.image | default (printf "llm-autotune-mock-engine:%s" .Chart.AppVersion) -}}
 {{- end -}}
 
 {{/*
@@ -52,4 +56,7 @@ envFrom:
       name: {{ include "llm-autotune.fullname" . }}-config
   - secretRef:
       name: {{ include "llm-autotune.fullname" . }}-secrets
+{{- with .Values.extraEnv }}
+env: {{- toYaml . | nindent 2 }}
+{{- end }}
 {{- end -}}

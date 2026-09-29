@@ -306,7 +306,9 @@ Idempotency-Key: t14-launch
 
 The platform validates (safety only), launches the campaign's engine image
 with your args on your cards, health-gates it, and holds it **serving** until
-you release it. Poll:
+you release it. `gpu_indices` names as many of the manifest's cards as the
+config uses (tp×dp×pp); on a machine with no cards (`hardware.gpu_indices`
+empty, e.g. a CPU-only test cluster running a mock engine) it is `[]`. Poll:
 
 ```http
 GET /api/policy/v1/launches/31

@@ -25,57 +25,104 @@ benchmarks it, scores it against your objective, and records exactly what ran.
   command, engine version, card type and dataset, so a number six months old is
   still worth something.
 
-## Quickstart — the whole loop, no GPUs
+## Quickstart — both platforms, no GPUs
 
-The fastest way to understand the platform is to watch it run. Two fakes — an
-engine image that answers the same endpoints sglang does, and a benchmark
-platform that really does probe the endpoint before reporting invented numbers —
-let the entire loop run for real on a laptop cluster.
+The fastest way to understand the platform is to watch it run. One script
+installs LLM AutoTune next to [LLMBench](https://github.com/modelsphere/llm-bench),
+the benchmark platform that measures every run, connects the two, and starts a
+demo campaign. The campaign tunes a **mock engine**: an image that answers the
+same endpoints sglang does, with no GPU and no weights. Everything around it is
+real: scheduling, launching, health checks, benchmarking with guidellm, and
+ranking.
+
+You need `kubectl`, `helm`, `docker`, `git` and `openssl`, and either
+[kind](https://kind.sigs.k8s.io/) (the script creates the cluster; give Docker
+about 8 GB of memory) or a Kubernetes cluster your current kubectl context
+points at:
 
 ```bash
-git clone --recurse-submodules https://github.com/modelsphere/llm-autotune
+git clone https://github.com/modelsphere/llm-autotune
 cd llm-autotune
-kind create cluster
-
-# The fake engine is built locally, and runs against a placeholder weights
-# directory on the node (the platform will not start an engine on an empty one).
-docker build -t llm-autotune-mock-engine:local mock-engine/
-kind load docker-image llm-autotune-mock-engine:local
-docker exec kind-control-plane sh -c 'mkdir -p /models/mock && echo {} > /models/mock/config.json'
-
-helm install autotune deploy/helm/llm-autotune \
-  -f deploy/helm/llm-autotune/values-mock.yaml \
-  --set jwtSecret=$(openssl rand -hex 32) \
-  --set adminPassword=changeme
-kubectl port-forward svc/autotune-llm-autotune-frontend 8080:80
+deploy/quickstart.sh --kind      # or, on the cluster kubectl points at: deploy/quickstart.sh
 ```
 
-Open <http://localhost:8080> and sign in as `admin` / `changeme`. On a fresh
-install the worker restarts a few times until the schema job has run; give it a
-minute. Then:
+It builds the mock engine from `mock-engine/` and loads it into the cluster
+(kind, minikube, k3d, Docker Desktop and OrbStack take it directly; for any
+other cluster add `--registry <repo>`, one you can push to and its nodes can
+pull from). It takes a few minutes, most of them pulling images, then prints
+the logins and port-forwards both UIs until you press Ctrl-C:
 
-1. **Resources:** on the `local-cluster` machine, click **Lease to platform**.
-2. **New campaign:** image `llm-autotune-mock-engine:local`, model path
-   `/models/mock`, any served model name, machine `local-cluster`, and a grid
-   over one of the mock's knobs, e.g. `mock_token_ms: [2, 20]`. Leave the
-   benchmark and objective at their defaults.
-3. On the campaign's page, click **Force start**; otherwise a campaign waits for
-   its nightly window.
+| | | sign in as |
+|---|---|---|
+| LLM AutoTune | <http://localhost:8080> | `admin` and the printed password |
+| LLMBench | <http://localhost:8081> | `admin@example.com` and the printed password |
 
-Each run walks `pending → launching → waiting_ready → health_check → benching →
-succeeded` in about a minute, and the leaderboard ranks the faster config first.
-Nothing measured this way means anything about performance — it proves the
-machinery, which is the point.
+In LLM AutoTune, open **Campaigns ▸ Quickstart: mock engine**. It tries the mock
+at two speeds. Each run goes `pending → launching → waiting_ready →
+health_check → benching → succeeded` in a minute or two, and the leaderboard
+ranks the faster one first. Every run is also a submission on LLMBench, with
+its sweep results. Nothing measured this way means anything about performance;
+it proves the machinery, which is the point.
+
+- `deploy/quickstart.sh ui` opens the UIs again, and `deploy/quickstart.sh down`
+  removes both platforms and their data (`down --kind` also deletes the kind
+  cluster). Running the script again upgrades the same install; its passwords
+  and keys are in `.quickstart/secrets.env`, and your own values for either
+  release go in `.quickstart/llm-autotune.custom.yaml` and
+  `.quickstart/llm-bench.custom.yaml`.
+- To make a campaign of your own, first add a search space on **Search spaces**
+  (engine `sglang`, a grid over the mock's knobs such as `mock_token_ms` or
+  `mock_latency_ms`; see [mock-engine/](mock-engine/README.md)). Then, under
+  **New campaign**, use image `llm-autotune-mock-engine:0.1.2` (the one the
+  script built), model path `/var/lib/llm-autotune/mock-model`, machine `local-cluster`, and
+  benchmark `autotune-quickstart-v1` (the default screen is sized for real
+  engines, and on a laptop it measures the benchmark client instead of the
+  mock). A campaign runs in its nightly window; **Force start** runs it now.
+
+**What the script does**, if you would rather do it by hand or adapt it
+([deploy/quickstart.sh](deploy/quickstart.sh)):
+
+1. Generates the secrets both platforms need, among them one service key
+   (`llmb_…`) that LLMBench is installed with and AutoTune authenticates with.
+2. Builds the mock engine image and loads it into the cluster (or pushes it).
+3. Installs LLMBench from its chart (the release this version was tested with),
+   which creates a `service` account holding that key.
+4. Installs AutoTune with `-f deploy/helm/llm-autotune/values-quickstart.yaml`
+   and `llmbench.url` / `llmbench.apiKey` pointing at LLMBench. The values file
+   is for a cluster without GPUs: runs request no cards, and a DaemonSet puts a
+   placeholder model directory on every node for the mock.
+5. Through AutoTune's API, leases the `local-cluster` machine to the platform,
+   then creates and force-starts the demo campaign.
+
+### Next steps
+
+[docs/after-the-quickstart.md](docs/after-the-quickstart.md) takes the same
+install further, one piece at a time:
+
+- **Search policies**: `deploy/quickstart.sh policy policies/random-search`
+  builds a policy, loads it into the cluster and registers it; then pick it as
+  a campaign's Strategy. The same command installs your own.
+- **Real GPUs**: GPU nodes in this cluster, another cluster, or bare-metal
+  machines over ssh.
+- **Any setting** of either release, through the two `.custom.yaml` files:
+  ingress, datasets for LLMBench, promotion to GitLab, the operator, and every
+  platform setting.
 
 ## Installing it for real
+
+Install LLMBench from its own chart with a service key
+(`scripts/gen-prod-secrets.sh --service-key` makes one; see LLMBench's
+[deploying guide](https://github.com/modelsphere/llm-bench/blob/main/docs/deploying.md#connecting-llm-autotune)),
+and AutoTune with the same key. Either can go first: AutoTune keeps trying to
+reach LLMBench until it can.
 
 ```bash
 helm install autotune deploy/helm/llm-autotune \
   --set jwtSecret=$(openssl rand -hex 32) \
   --set adminPassword=... \
-  --set llmbench.url=http://llmbench.your-cluster \
-  --set gpuCluster.inCluster=true \
-  --set publicApiUrl=https://autotune.example.com
+  --set llmbench.url=http://llm-bench-backend.llm-bench:8000 \
+  --set llmbench.apiKey=llmb_... \
+  --set gpuCluster.inCluster=true
 ```
 
 [docs/deploying.md](docs/deploying.md) covers the values that matter: where GPUs
@@ -135,7 +182,10 @@ docs/        architecture, the API contracts, deployment
   that decide the rest. 中文：[架构概览](docs/architecture.zh.md)
 - [How it works](docs/workflow.md) — the product walkthrough, no code.
   中文：[产品视角](docs/workflow.zh.md)
-- [Deploying](docs/deploying.md) — the chart, GPU access, and the benchmark platform
+- [After the quickstart](docs/after-the-quickstart.md) — policies, real GPUs
+  and your own settings on the quickstart install
+- [Deploying](docs/deploying.md) — the chart, GPU access, the benchmark
+  platform, and every other setting
 - [Policy contract](docs/api/policy-contract.md) — writing a search that plugs in
 - [Machine lease API](docs/api/machine-lease.md) — handing machines to the platform
   from another system

@@ -3000,6 +3000,16 @@ class Supervisor:
             _stage_max_run_minutes(campaign, stage, self.settings.default_max_run_minutes),
         )
 
+    def _not_planned_yet(self, session: Session, campaign: Campaign) -> bool:
+        """A campaign _plan will enumerate that has no candidate at all yet."""
+        if campaign.policy_id is not None or not (campaign.search_space or {}):
+            return False
+        if next(iter(expand(campaign.search_space)), None) is None:
+            return False
+        return session.scalars(
+            select(Candidate.id).where(Candidate.campaign_id == campaign.id).limit(1)
+        ).first() is None
+
     def _maybe_finish_campaign(self, session: Session, campaign: Campaign) -> None:
         pending = session.scalars(
             select(Candidate).where(
@@ -3015,6 +3025,13 @@ class Supervisor:
                 Run.status.not_in([s.value for s in TERMINAL_RUN_STATES]),
             ).limit(1)
         ).first()
+        if pending is None and live is None and self._not_planned_yet(session, campaign):
+            # It became active after this tick's _plan ran (the API commits
+            # between the two steps): nothing is pending because nothing has
+            # been enumerated yet, not because the search is over. The next
+            # tick plans it. Finishing it here ended a campaign that had never
+            # run anything.
+            return
         if pending is None and live is None:
             # The search is out of ideas — but the leader may only be leading
             # by noise. Queue repeats of the best candidates before calling it.

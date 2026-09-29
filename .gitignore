@@ -34,3 +34,4 @@ deploy/helm/**/*.tgz
 .DS_Store
 .vscode/
 .idea/
+.quickstart/

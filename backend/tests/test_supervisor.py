@@ -233,6 +233,24 @@ def test_happy_path_to_succeeded():
         assert campaign.status == CampaignStatus.DONE.value
 
 
+def test_a_campaign_activated_mid_tick_is_planned_not_finished(monkeypatch):
+    """The API can make a campaign active after a tick's _plan has run and
+    before its _schedule does. Regression: _schedule then saw no candidates and
+    marked it DONE without ever running it (the quickstart's demo, force-started
+    the moment the worker came up)."""
+    supervisor, factory = make_supervisor()
+    real_plan = supervisor._plan
+    monkeypatch.setattr(supervisor, "_plan", lambda session: None)  # not active yet at _plan
+
+    supervisor.tick()
+    with factory() as session:
+        assert session.get(Campaign, 1).status == CampaignStatus.ACTIVE.value
+
+    monkeypatch.setattr(supervisor, "_plan", real_plan)
+    supervisor.tick()
+    assert _run_status(factory) == RunStatus.LAUNCHING.value
+
+
 def test_instantly_ready_service_skips_waiting_state():
     # Regression: a service READY on the first poll (no-load mock engine)
     # crashed the supervisor with "illegal transition launching -> health_check".

@@ -1,8 +1,10 @@
 {{- $fullName := include "llm-autotune.fullname" . -}}
 # create-or-migrate (app/db/bootstrap.py): a fresh database gets the current
-# schema and a stamp; an existing one is upgraded. Runs before the API and the
-# worker on every install and upgrade, so neither ever starts against a schema
-# it does not understand.
+# schema and a stamp; an existing one is upgraded. Then it seeds what a fresh
+# install needs (the first admin, the built-in objectives, the local cluster)
+# and creates the screen benchmark on LLMBench. Runs once the release's
+# objects exist, on every install and upgrade; the worker waits for the schema
+# rather than starting against one it does not understand.
 apiVersion: batch/v1
 kind: Job
 metadata:

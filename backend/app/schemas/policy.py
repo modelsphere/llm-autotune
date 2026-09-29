@@ -296,7 +296,9 @@ class LaunchIn(BaseModel):
     model_config = _lenient
 
     engine_args: dict[str, Any]
-    gpu_indices: list[int] = Field(min_length=1)
+    # The cards the config runs on, as many as it uses (tp×dp×pp). Empty only
+    # on a machine with no cards, whose session holds none.
+    gpu_indices: list[int] = Field(default_factory=list)
     port: int | None = None
 
 
@@ -321,7 +323,8 @@ class ExternalBenchmarkIn(BaseModel):
 
     port: int
     engine_args: dict[str, Any]
-    gpu_indices: list[int] = Field(min_length=1)
+    # Empty only on a machine with no cards (see LaunchIn).
+    gpu_indices: list[int] = Field(default_factory=list)
     suite: str = "screen"
 
 

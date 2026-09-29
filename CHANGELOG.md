@@ -5,6 +5,61 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.2] - 2026-09-29
+
+### Added
+
+- `deploy/quickstart.sh`: one command installs LLM AutoTune next to LLMBench
+  0.1.2 on any Kubernetes cluster (or a kind cluster it creates), connects the
+  two with a service key, builds the mock engine and loads it into the cluster
+  (or pushes it with `--registry`), and starts a demo campaign. No GPUs needed.
+  `policy DIR` builds, loads and registers a search policy; `ui` reopens the
+  UIs; `down` removes everything. Two `.custom.yaml` files of the user's are
+  applied last on every run, so the same install can be taken further.
+- `docs/after-the-quickstart.md`: from the demo install to policies, real GPUs
+  (in the cluster, another cluster, ssh machines), ingress, datasets,
+  promotion and the operator.
+- `extraEnv` in the chart, for any platform setting it has no value for;
+  `docs/deploying.md` lists the ones installs usually need.
+- `values-quickstart.yaml`, for a cluster without GPUs: runs request no cards,
+  and a DaemonSet (`mockModel.enabled`) writes the placeholder model directory
+  the mock engine needs on every node.
+- A second benchmark template, `autotune-quickstart-v1`: a light sweep (short
+  requests, concurrency 1 and 4) that the demo screens with. On a laptop the
+  default screen measures the benchmark client rather than the mock.
+- Four built-in objectives, seeded on install and upgrade. A fresh install had
+  none, so the campaign form could not preselect one.
+
+### Changed
+
+- The mock engine is fast by default: 1 s startup, 20 ms to the first token,
+  1 ms per token.
+- `values-mock.yaml` (the fake LLMBench) now only switches the fake on; layer it
+  on `values-quickstart.yaml`.
+- With `gpuCluster.inCluster`, `publicApiUrl` defaults to the API's in-cluster
+  address, so policy campaigns work on the cluster the platform runs in without
+  setting it.
+
+### Fixed
+
+- The worker waits for the database and the schema instead of crash-looping
+  until the migrate job has run; `helm install --wait` no longer times out.
+  The migrate job waits for Postgres instead of failing its first attempt.
+- The screen benchmark is created on LLMBench even when LLMBench comes up after
+  AutoTune: the worker retries until it succeeds. On upgrades the install job
+  also skipped it, and the `local-cluster` registration, whenever a user
+  existed.
+- The install job's log shows what it seeded; running migrations had silenced
+  it.
+- A campaign made active while a worker tick was between planning and
+  scheduling was marked done without running anything: the scheduler saw no
+  candidates and took the search for finished. It now waits for the next tick
+  to plan it. The quickstart's demo, started the moment the worker comes up,
+  hit this.
+- A policy on a machine with no GPUs could not launch anything (every launch
+  was refused as a card-count mismatch), so it reported its space exhausted at
+  once. Launches there now ask for no cards.
+
 ## [0.1.1] - 2026-09-24
 
 ### Changed
@@ -42,5 +97,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   [llm-autotune-policies](https://github.com/modelsphere/llm-autotune-policies), checked out under `policies/` as a git
   submodule: clone with `--recurse-submodules`.
 
+[0.1.2]: https://github.com/modelsphere/llm-autotune/releases/tag/v0.1.2
 [0.1.1]: https://github.com/modelsphere/llm-autotune/releases/tag/v0.1.1
 [0.1.0]: https://github.com/modelsphere/llm-autotune/releases/tag/v0.1.0

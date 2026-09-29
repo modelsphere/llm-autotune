@@ -5,7 +5,13 @@ metadata:
   name: {{ $fullName }}-config
   labels: {{- include "llm-autotune.labels" . | nindent 4 }}
 data:
+  {{- if and (not .Values.publicApiUrl) .Values.gpuCluster.inCluster }}
+  # Runs, and so policy containers, land in this cluster: they can reach the
+  # API by its service name.
+  AUTOTUNE_PUBLIC_API_URL: {{ printf "http://%s-api.%s.svc.%s:8000" $fullName .Release.Namespace (.Values.clusterDomain | default "cluster.local") | quote }}
+  {{- else }}
   AUTOTUNE_PUBLIC_API_URL: {{ .Values.publicApiUrl | quote }}
+  {{- end }}
   AUTOTUNE_PUBLIC_UI_URL: {{ .Values.publicUiUrl | quote }}
   AUTOTUNE_CORS_ORIGINS: {{ .Values.corsOrigins | quote }}
   AUTOTUNE_RUN_LOG_DIR: /app/runs

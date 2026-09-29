@@ -9,7 +9,10 @@ Start here:
 
 Running it:
 
-- [Deploying](deploying.md) — the Helm chart, GPU access, the benchmark platform
+- [After the quickstart](after-the-quickstart.md) — from the demo install to
+  policies, real GPUs and your own settings, without starting over
+- [Deploying](deploying.md) — the Helm chart, GPU access, the benchmark
+  platform, and every other setting
 - [Upgrading](upgrading.md) — how the schema is applied, and what is not
   upgradeable
 

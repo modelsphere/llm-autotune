@@ -20,9 +20,11 @@ reconciliation is owed and pretending otherwise would hide it.
 """
 
 import logging
+import time
 
 from alembic.config import Config
-from sqlalchemy import create_engine, inspect
+from sqlalchemy import create_engine, inspect, text
+from sqlalchemy.exc import OperationalError
 
 from alembic import command
 from app.core.config import get_settings
@@ -30,6 +32,46 @@ from app.db import models  # noqa: F401  — register every table on Base.metada
 from app.db.base import Base
 
 logger = logging.getLogger("bootstrap")
+# Its own level, not the root's: running migrations applies alembic.ini's
+# logging config, which drops the root to WARN, and what this job seeded
+# afterwards is exactly what an operator reads its log for.
+logger.setLevel(logging.INFO)
+
+
+# Built-in objectives, so the campaign form has a sensible default on day one
+# and the shapes an objective can take are visible by example. Every metric
+# here is one the default screen benchmark (autotune-screen-v1, a throughput
+# sweep) reports, so each of them can rank a campaign without further setup.
+BUILTIN_OBJECTIVES = [
+    {
+        "name": "Throughput per GPU",
+        "description": "Default. Output tokens per minute per GPU — fair across tp/dp variants.",
+        "target_metric": "perf_guidellm_sweep.output_tpm_card_norm",
+        "direction": "maximize",
+        "redlines": [],
+    },
+    {
+        "name": "Throughput per GPU under a 5s TTFT SLO",
+        "description": "Same, but a config whose p99 time to first token passes 5s does not count.",
+        "target_metric": "perf_guidellm_sweep.output_tpm_card_norm",
+        "direction": "maximize",
+        "redlines": [{"metric": "perf_guidellm_sweep.ttft_p99_ms", "op": "<=", "value": 5000}],
+    },
+    {
+        "name": "Absolute throughput (one service)",
+        "description": "Most output tokens per second from one service, GPU count ignored.",
+        "target_metric": "perf_guidellm_sweep.output_tps",
+        "direction": "maximize",
+        "redlines": [],
+    },
+    {
+        "name": "Lowest time to first token",
+        "description": "Latency first: the lowest p99 time to first token.",
+        "target_metric": "perf_guidellm_sweep.ttft_p99_ms",
+        "direction": "minimize",
+        "redlines": [],
+    },
+]
 
 
 def main() -> None:
@@ -37,6 +79,7 @@ def main() -> None:
     settings = get_settings()
     engine = create_engine(settings.sync_database_url)
     config = Config("alembic.ini")
+    _wait_for_database(engine)
 
     inspector = inspect(engine)
     if inspector.has_table("alembic_version"):
@@ -60,13 +103,48 @@ def main() -> None:
     _seed(engine)
 
 
+def _wait_for_database(engine, timeout_seconds: float = 600, poll_seconds: float = 3) -> None:
+    """Wait for Postgres to accept connections.
+
+    On a first install the database starts alongside this job, and failing
+    the attempt only to be retried by the Job controller leaves an Error pod
+    behind that looks like a broken install. Waiting says what is going on."""
+    deadline = time.monotonic() + timeout_seconds
+    waiting = False
+    while True:
+        try:
+            with engine.connect() as connection:
+                connection.execute(text("SELECT 1"))
+            if waiting:
+                logger.info("database is up")
+            return
+        except OperationalError as exc:
+            if time.monotonic() >= deadline:
+                raise
+            if not waiting:
+                logger.info("waiting for the database (%s)", str(exc).splitlines()[0])
+                waiting = True
+            time.sleep(poll_seconds)
+
+
 def _seed(engine) -> None:
+    """What a fresh install needs to be usable, re-checked on every deploy.
+
+    Each step is independent and only ever ADDITIVE: one that has nothing to
+    do, or fails, never stops the others, and none of them overwrites a row
+    someone may have edited.
+    """
+    _seed_admin(engine)
+    _seed_objectives(engine)
+    _register_local_cluster(engine)
+    _ensure_screen_benchmark()
+
+
+def _seed_admin(engine) -> None:
     """The first admin, so a fresh install has someone who can log in.
 
-    Only ever ADDITIVE, and only when the users table is EMPTY: seeding runs
-    on every deploy, so anything it overwrote would silently undo an admin's
-    own edit — including a changed password. A deployment that already has
-    users is left alone entirely.
+    Only when the users table is EMPTY: anything this overwrote would silently
+    undo an admin's own edit — including a changed password.
 
     Credentials come from AUTOTUNE_ADMIN_USERNAME / AUTOTUNE_ADMIN_PASSWORD.
     With no password set nothing is created and the log says so, because a
@@ -79,16 +157,16 @@ def _seed(engine) -> None:
     from app.db.models import User, UserRole
 
     settings = get_settings()
-    if not settings.admin_password:
-        logger.info(
-            "no AUTOTUNE_ADMIN_PASSWORD set — no admin seeded. Set one and redeploy, "
-            "or create the first user another way."
-        )
-        return
     try:
         with Session(engine) as session:
             if session.query(User.id).first() is not None:
                 return  # somebody already has an account; never touch it
+            if not settings.admin_password:
+                logger.info(
+                    "no AUTOTUNE_ADMIN_PASSWORD set — no admin seeded. Set one and "
+                    "redeploy, or create the first user another way."
+                )
+                return
             session.add(
                 User(
                     username=settings.admin_username,
@@ -100,28 +178,46 @@ def _seed(engine) -> None:
         logger.info("seeded the first admin user %r", settings.admin_username)
     except Exception:  # noqa: BLE001 — a seed must never block a deploy
         logger.exception("admin seeding failed — no user was created")
-    _register_local_cluster(engine)
-    _ensure_screen_benchmark()
+
+
+def _seed_objectives(engine) -> None:
+    """The built-in objectives, each added only if no objective has its name.
+
+    Built-ins cannot be edited or deleted from the API, so a missing one was
+    never there; a user objective that happens to share a name is theirs and
+    is left alone."""
+    from sqlalchemy.orm import Session
+
+    from app.db.models import Objective
+
+    try:
+        with Session(engine) as session:
+            existing = {name for (name,) in session.query(Objective.name)}
+            added = [spec["name"] for spec in BUILTIN_OBJECTIVES if spec["name"] not in existing]
+            for spec in BUILTIN_OBJECTIVES:
+                if spec["name"] in added:
+                    session.add(Objective(owner_id=None, is_builtin=True, **spec))
+            session.commit()
+        if added:
+            logger.info("added built-in objectives: %s", ", ".join(added))
+    except Exception:  # noqa: BLE001 — never block a deploy
+        logger.exception("could not seed the built-in objectives")
 
 
 def _ensure_screen_benchmark() -> None:
     """Create and lock AutoTune's screening benchmark on LLMBench, if it can be
     reached. Never fatal: LLMBench is a separate install that may come up after
-    this one, and the same thing can be done later from the campaign form or
-    POST /api/benchmarks/ensure."""
-    settings = get_settings()
-    if not settings.llmbench_ensure_benchmarks or not settings.llmbench_base_url:
-        return
-    from app.evaluation.benchmarks import ensure_benchmark
-    from app.evaluation.llmbench import LLMBenchClient
+    this one, and the worker keeps trying until it succeeds."""
+    from app.evaluation.benchmarks import ensure_screen_benchmark
 
     try:
-        ensured = ensure_benchmark(LLMBenchClient(max_attempts=1))
+        ensured = ensure_screen_benchmark()
     except Exception as exc:  # unreachable, no service key yet, refused
-        logger.info("screening benchmark not ensured now (%s); ensure it later from the UI", exc)
+        logger.info("screening benchmark not ensured yet (%s); the worker will retry", exc)
         return
-    logger.info("screening benchmark %s %s and locked", ensured.slug,
-                "created" if ensured.created else "present")
+    if ensured is not None:
+        logger.info("screening benchmark %s %s and locked", ensured.slug,
+                    "created" if ensured.created else "present")
 
 
 def _register_local_cluster(engine) -> None:

@@ -17,7 +17,13 @@ No admin account was created: set adminPassword and upgrade, or create the
 first user yourself. Nothing can be done in the UI until one exists.
 {{- end }}
 
-{{ if not .Values.publicApiUrl -}}
+{{ if .Values.mockModel.enabled -}}
+No GPUs: campaigns run the mock engine. Use image
+  {{ include "llm-autotune.mockEngineImage" . }}
+and model path {{ .Values.mockModel.path }} (a placeholder on every node).
+{{- end }}
+
+{{ if and (not .Values.publicApiUrl) (not .Values.gpuCluster.inCluster) -}}
 NOTE: publicApiUrl is empty. Policy campaigns need it — it is how a policy
 container on a GPU machine calls the platform back. Set it to an address that
 machine can reach and upgrade.
@@ -25,6 +31,6 @@ machine can reach and upgrade.
 
 {{ if and (not .Values.llmbench.url) (not .Values.mock.enabled) -}}
 NOTE: no benchmark platform configured (llmbench.url). Runs will launch and
-then have nothing to measure them. Point it at your LLMBench, or try the
-GPU-free path first with -f values-mock.yaml.
+then have nothing to measure them. Point it at your LLMBench (deploy/quickstart.sh
+installs one and wires the two together).
 {{- end }}
