@@ -6,30 +6,62 @@ Licensed under the Apache License, Version 2.0. See LICENSE.
 This product includes software developed by third parties. Their licenses apply
 to their own code, not to this project's.
 
-Backend (Python)
-  FastAPI, Starlette, Uvicorn ........ MIT
+Backend (Python, installed into the backend image)
+  FastAPI ............................ MIT
+  Starlette, Uvicorn ................. BSD-3-Clause
   SQLAlchemy, Alembic ................ MIT
-  Pydantic ........................... MIT
+  asyncpg ............................ Apache-2.0
+  psycopg2-binary .................... LGPL-3.0-or-later, with an OpenSSL
+                                       linking exception; unmodified, as
+                                       published on PyPI
+  Pydantic, pydantic-settings ........ MIT
   httpx .............................. BSD-3-Clause
   PyJWT .............................. MIT
   bcrypt ............................. Apache-2.0
   cryptography ....................... Apache-2.0 / BSD-3-Clause
   kubernetes (Python client) ......... Apache-2.0
+  uv (binary copied into the image) .. MIT / Apache-2.0
 
-Frontend (JavaScript)
+Frontend (JavaScript, bundled into the frontend image)
   Vue, Vue Router, Pinia ............. MIT
   Element Plus ....................... MIT
   ECharts ............................ Apache-2.0
+  ZRender (ECharts' renderer) ........ BSD-3-Clause
   axios .............................. MIT
   js-yaml ............................ MIT
-  Vite, vue-tsc ...................... MIT
+  highlight.js ....................... BSD-3-Clause
+  markdown-it ........................ MIT
 
-Operator (Go)
+Report renderer (backend/app/agent/static/report-renderer.js)
+  A build of frontend/src/report/, committed to this repository and shipped in
+  the backend image. Besides this project's code it contains:
+  ECharts ............................ Apache-2.0
+  ZRender ............................ BSD-3-Clause
+  tslib .............................. 0BSD
+  highlight.js ....................... BSD-3-Clause
+  markdown-it, linkify-it, mdurl,
+  uc.micro, punycode.js .............. MIT
+  entities ........................... BSD-2-Clause
+
+  Apache ECharts carries this notice:
+    Apache ECharts
+    Copyright 2017-2024 The Apache Software Foundation
+
+    This product includes software developed at
+    The Apache Software Foundation (https://www.apache.org/).
+
+Operator (Go, compiled into the operator image)
   Kubernetes controller-runtime ...... Apache-2.0
+  Kubernetes client-go, api,
+  apimachinery ....................... Apache-2.0
   kubebuilder scaffolding ............ Apache-2.0
 
+Build tools (not shipped)
+  Vite, vue-tsc ...................... MIT
+
 Container base images
-  python, node, nginx, postgres — see each image's own license.
+  python, node, nginx, postgres, golang, gcr.io/distroless/static — see each
+  image's own license.
 
 The engines this platform launches (sglang, vLLM) and the benchmark platform it
 measures with are separate projects under their own licenses. Nothing here

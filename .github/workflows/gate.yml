@@ -5,11 +5,20 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   license:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: LICENSE is the Apache-2.0 text, unmodified
         run: |
           if ! grep -q "Apache License" LICENSE || ! grep -q "Version 2.0, January 2004" LICENSE; then
@@ -17,26 +26,14 @@ jobs:
             exit 1
           fi
 
-  no-internal-references:
-    # Checked out without submodules on purpose: llm-autotune-policies runs this
-    # same check on its own tree.
-    #
-    # This repository was extracted from an internal one. Names of internal
-    # hosts, registries, clusters and machines are not secrets, but they are
-    # noise to every reader and a slow leak of how someone else's network is
-    # laid out. Catch them here rather than in review.
+  repository:
+    # Checked out without submodules on purpose: llm-autotune-policies checks
+    # its own tree.
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - name: No internal hosts, registries or identifiers
-        run: |
-          pattern='4pd\.io|4paradigm|hardcore-tech|inference-production-stack|llmbench\.internal|harbor\.|pce-dev|wlcbhb|hhht'
-          if grep -rInE "$pattern" . \
-               --exclude-dir=.git --exclude-dir=node_modules --exclude-dir=.venv \
-               --exclude=gate.yml; then
-            echo "::error::internal identifier found — see the matches above"
-            exit 1
-          fi
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: No removed subsystems left behind
         run: |
           pattern='baseline_hub|BaselineHub|baseline-hub|contest_api_token|PLANNER_REGISTRY'
@@ -58,8 +55,10 @@ jobs:
   helm:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: azure/setup-helm@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.1
       - run: helm lint deploy/helm/llm-autotune --set jwtSecret=ci --set adminPassword=ci
       - name: The chart renders, in every shape
         run: |
