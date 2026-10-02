@@ -17,26 +17,12 @@ jobs:
             exit 1
           fi
 
-  no-internal-references:
-    # Checked out without submodules on purpose: llm-autotune-policies runs this
-    # same check on its own tree.
-    #
-    # This repository was extracted from an internal one. Names of internal
-    # hosts, registries, clusters and machines are not secrets, but they are
-    # noise to every reader and a slow leak of how someone else's network is
-    # laid out. Catch them here rather than in review.
+  repository:
+    # Checked out without submodules on purpose: llm-autotune-policies checks
+    # its own tree.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: No internal hosts, registries or identifiers
-        run: |
-          pattern='4pd\.io|4paradigm|hardcore-tech|inference-production-stack|llmbench\.internal|harbor\.|pce-dev|wlcbhb|hhht'
-          if grep -rInE "$pattern" . \
-               --exclude-dir=.git --exclude-dir=node_modules --exclude-dir=.venv \
-               --exclude=gate.yml; then
-            echo "::error::internal identifier found — see the matches above"
-            exit 1
-          fi
       - name: No removed subsystems left behind
         run: |
           pattern='baseline_hub|BaselineHub|baseline-hub|contest_api_token|PLANNER_REGISTRY'

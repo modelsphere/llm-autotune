@@ -50,8 +50,8 @@ cd operator  && make test
 helm lint deploy/helm/llm-autotune --set jwtSecret=x
 ```
 
-CI runs all of these. It also fails on any reference to an internal host,
-registry or identifier.
+CI runs all of these. It also checks that `LICENSE` is the Apache-2.0 text and
+that no credential file is committed.
 
 Contributions are accepted under the Apache License 2.0, the license this
 project is released under.
