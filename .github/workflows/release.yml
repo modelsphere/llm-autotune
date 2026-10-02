@@ -26,6 +26,8 @@ jobs:
       latest: ${{ steps.check.outputs.latest }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       # The chart installs its appVersion when image.tag is empty, so a tag that
       # disagrees would publish one build and install another. Fail here, before
       # anything is pushed. A prerelease is compared by its version core, so
@@ -60,6 +62,8 @@ jobs:
             dockerfile: deploy/docker/Dockerfile.frontend
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - id: tags
         name: Image tags
         run: |
