@@ -194,7 +194,10 @@ async def _session_row(http) -> PolicySession:
 
 
 async def _boot(supervisor, driver, http) -> FakePolicy:
-    """tick → container launched; first heartbeat; tick → SEARCHING."""
+    """tick → the machine queue reserves a machine; tick → container launched;
+    first heartbeat; tick → SEARCHING."""
+    supervisor.tick()
+    assert not driver.workloads, "reserved in the queue, launched next tick"
     supervisor.tick()
     assert driver.workloads, "the policy container was not launched"
     policy = FakePolicy(http, driver.workloads[0])
@@ -405,7 +408,8 @@ async def test_the_session_token_is_committed_before_the_container_starts(night)
         return real_launch(spec)
 
     driver.launch_workload = spy
-    supervisor.tick()
+    supervisor.tick()  # the machine queue reserves
+    supervisor.tick()  # the pending step launches
     assert seen["visible"] == 1
 
 
@@ -458,6 +462,7 @@ async def test_a_container_death_before_heartbeat_captures_its_logs(night):
     # destroyed the container's stdout before anyone read it. The tail must be
     # captured first, so the crash is diagnosable in the morning.
     supervisor, driver, http = night
+    supervisor.tick()  # reserved in the machine queue
     supervisor.tick()  # container launched; STARTING, no heartbeat yet
     row = await _session_row(http)
     assert row.status == PolicySessionStatus.STARTING.value

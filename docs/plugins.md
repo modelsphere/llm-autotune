@@ -54,6 +54,9 @@ Every hook is optional:
 | `propose_candidates(ctx)` | plans a campaign in-process, in place of the default enumeration of its space. See [Planning](#planning) |
 | `on_campaign_created(session, campaign, data)` | receives `extensions[<plugin name>]` of a new campaign, in the same transaction; raising `ExtensionRefused` refuses the campaign with that message. See [Campaign extensions](#campaign-extensions) |
 | `campaign_extensions(session, campaigns)` | returns `{campaign_id: data}`, shown on the campaign as `extensions[<plugin name>]` |
+| `queue_waiters(supervisor, session)` | the plugin's waiters (`QueueWaiter`) in the machine queue, served in arrival order with the platform's own. See [The machine queue](#the-machine-queue) |
+| `reservations(session, machine)` | machines the plugin holds (`Reservation`) for a campaign whose run is not placed yet; everyone else treats them as taken |
+| `queue_arrival(session, campaign)` | when a campaign joined the queue, for one that stands for an older request |
 
 `name` is lowercase letters, digits and underscores, and must equal the
 entry-point name.
@@ -110,6 +113,28 @@ POST /api/campaigns
 - **Copying:** `GET /api/campaigns/{id}/spec`, YAML export and clone carry
   the extensions, so a copy is created with them again. A clone can override
   them like any other field.
+
+## The machine queue
+
+The worker hands machines out through one queue, oldest waiter first, one
+run per turn: campaigns with a run ready, policy sessions without a machine,
+and whatever plugins add. A campaign that places a run goes to the back, so
+two campaigns on one machine alternate. A waiter that cannot fit a machine it
+could use holds that machine for the rest of the pass, so a wide request is
+not starved by a stream of narrow ones.
+
+A plugin joins the queue with `queue_waiters`. Each `QueueWaiter` has an
+`arrival` time and a `try_admit(session, blocked, busy)`:
+- `blocked` holds the machines older waiters are holding;
+- return True once the waiter took what it needed;
+- otherwise add to `busy` the machines it could use once they free up, and
+  return False.
+
+A waiter that admits a campaign to a machine usually reports that machine
+through `reservations` until the campaign's first run is placed. Placement,
+policy sessions and every other waiter count a reservation as taken.
+`busy_reason(session, machine, cards=, share=)` answers "why can't a run of
+this width go here right now" from the same accounting.
 
 ## Turning one on
 

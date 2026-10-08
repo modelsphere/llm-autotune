@@ -23,6 +23,7 @@ import logging
 import re
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
+from datetime import datetime
 from functools import lru_cache
 from importlib.metadata import EntryPoint, entry_points
 from typing import TYPE_CHECKING, Any
@@ -34,10 +35,11 @@ if TYPE_CHECKING:
     from sqlalchemy import Engine, MetaData
     from sqlalchemy.orm import Session
 
+    from app.control.orchestrator.occupancy import Reservation
     from app.control.orchestrator.supervisor import Supervisor
     from app.control.search import CandidateConfig
     from app.control.search.history import RunRecord
-    from app.db.models import Campaign
+    from app.db.models import Campaign, Machine
 
 logger = logging.getLogger(__name__)
 
@@ -108,6 +110,29 @@ CampaignCreated = Callable[["Session", "Campaign", dict[str, Any]], None]
 CampaignExtensions = Callable[["Session", "Sequence[Campaign]"], dict[int, dict[str, Any]]]
 
 
+@dataclass(frozen=True)
+class QueueWaiter:
+    """Something of a plugin's waiting for a machine in the machine queue.
+
+    It takes its turn in arrival order among the platform's own waiters
+    (campaigns with a run ready, policy sessions without a machine). On its
+    turn the platform calls `try_admit(session, blocked, busy)`: `blocked`
+    are machines an older waiter holds; return True once it took what it
+    needed (typically admitting a campaign to a machine, which then holds it
+    through `Plugin.reservations` until its run is placed), or False after
+    adding to `busy` the machines it could use once they free up, so nobody
+    behind it takes them. It runs in a savepoint; one that raises is logged
+    and counts as not admitted."""
+
+    arrival: datetime
+    try_admit: Callable[[Session, set[int], set[int]], bool]
+    label: str
+    # Breaks ties at the same instant, lowest first: a plugin's waiter 0 by
+    # default, a campaign 1, a policy session 2.
+    rank: int = 0
+    ident: int = 0
+
+
 class ExtensionRefused(ValueError):
     """Raised by `on_campaign_created` to refuse what it was given; the
     campaign is not created, and the message is the API's 422 answer."""
@@ -150,6 +175,16 @@ class Plugin:
         `extensions[<plugin name>]`, and a spec or clone carries it back into
         `on_campaign_created`. One that raises is logged and left out: a
         plugin must not stop campaigns from being read.
+    queue_waiters: `(supervisor, session) -> [QueueWaiter]`, the plugin's
+        waiters in this tick's machine queue (see QueueWaiter).
+    reservations: `(session, machine) -> [Reservation]`, the machines the
+        plugin holds for campaigns whose run is not placed yet. Placement,
+        policy sessions and every waiter read them, so a held machine is held
+        for everyone.
+    queue_arrival: `(session, campaign) -> datetime | None`, when a campaign
+        joined the machine queue, for a campaign that represents something
+        older than itself (a request made before its campaign existed). None
+        leaves the platform's own answer.
     """
 
     name: str
@@ -161,6 +196,9 @@ class Plugin:
     propose_candidates: Proposer | None = None
     on_campaign_created: CampaignCreated | None = None
     campaign_extensions: CampaignExtensions | None = None
+    queue_waiters: Callable[[Supervisor, Session], Iterable[QueueWaiter]] | None = None
+    reservations: Callable[[Session, Machine], Iterable[Reservation]] | None = None
+    queue_arrival: Callable[[Session, Campaign], datetime | None] | None = None
 
     @property
     def version_table(self) -> str:

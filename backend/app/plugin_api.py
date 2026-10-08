@@ -11,6 +11,7 @@ Names are added here when a plugin needs them, not ahead of time: each one
 is something the platform can no longer change freely.
 """
 
+from app.control.orchestrator.occupancy import Reservation, busy_reason
 from app.control.orchestrator.supervisor import Supervisor
 from app.control.search import CandidateConfig
 from app.control.search.history import RunRecord
@@ -50,6 +51,7 @@ from app.plugins import (
     PlanContext,
     Plugin,
     Proposer,
+    QueueWaiter,
     TickStep,
     migration_env,
 )
@@ -72,7 +74,9 @@ __all__ = [
     "Plugin",
     "PolicySession",
     "Proposer",
+    "QueueWaiter",
     "RangeSpec",
+    "Reservation",
     "Run",
     "RunRecord",
     "RunStatus",
@@ -81,6 +85,7 @@ __all__ = [
     "User",
     "UserRole",
     "axes",
+    "busy_reason",
     "direction",
     "expand",
     "get_async_session",
