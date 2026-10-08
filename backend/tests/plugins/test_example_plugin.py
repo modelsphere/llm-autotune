@@ -213,3 +213,26 @@ def test_its_planner_plans_only_the_campaigns_it_labels(tmp_path, monkeypatch):
         }
 
     assert planned == {1: [4, 2, 1], 2: [1, 2, 4]}, "labelled: reversed; the other: enumerated"
+
+
+async def test_a_campaign_is_created_and_read_with_its_label(client):
+    body = {
+        "name": "labelled", "engine": "sglang", "image": "img", "model_path": "/m",
+        "served_model_name": "m", "search_space": {"grid": {"tp": [1]}},
+        "extensions": {"example": {"label": "plan:reverse"}},
+    }
+    created = await client.post("/api/campaigns", json=body)
+    assert created.status_code == 200, created.text
+    campaign_id = created.json()["id"]
+    assert created.json()["extensions"] == {"example": {"label": "plan:reverse"}}
+    async with client.db() as session:
+        assert (await session.get(CampaignLabel, campaign_id)).label == "plan:reverse"
+
+    spec = (await client.get(f"/api/campaigns/{campaign_id}/spec")).json()
+    assert spec["extensions"] == {"example": {"label": "plan:reverse"}}
+
+    refused = await client.post(
+        "/api/campaigns", json={**body, "extensions": {"example": {"label": ""}}}
+    )
+    assert refused.status_code == 422
+    assert "label must be 1 to 64 characters" in refused.text

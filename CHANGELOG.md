@@ -19,11 +19,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Version 1. Hooks: `routers`, `tick_steps`, `migrations`, `on_bootstrap`,
   `propose_candidates` (in-process planning, with a `PlanContext` holding the
-  campaign's history with the objective applied). The importable surface is
-  `app.plugin_api`.
+  campaign's history with the objective applied), `on_campaign_created` and
+  `campaign_extensions` (a plugin's own fields about a campaign, as
+  `extensions` on the campaign API, its spec and clones). The importable
+  surface is `app.plugin_api`.
 
 ### Changed
 
+- Every campaign endpoint that returns a campaign (create, read, list, clone,
+  status, schedule, force start and stop) now returns it the same way, with
+  its machine warnings and `extensions`.
 - CI: every GitHub Action is pinned to a commit SHA, workflows run with a
   read-only token and do not keep it after checkout, and a new push to a pull
   request cancels the runs for the previous one. Dependabot now proposes
