@@ -8,11 +8,11 @@
  */
 import { ElMessage } from 'element-plus'
 import { computed, nextTick, ref, watch } from 'vue'
-import { useRouter } from 'vue-router'
 import { api, type MergeRequestPreview, type Promotion } from '../api/client'
 import { useI18n } from '../i18n'
 import { copyText } from '../utils/clipboard'
 import DeployBranchSelect from './DeployBranchSelect.vue'
+import LinkButton from './LinkButton.vue'
 
 const props = defineProps<{
   modelValue: boolean
@@ -26,7 +26,6 @@ const emit = defineEmits<{
 }>()
 
 const { t } = useI18n()
-const router = useRouter()
 
 const loading = ref(false)
 const busy = ref(false)
@@ -194,9 +193,9 @@ function mrUrl(p: Promotion | null): string {
       <el-alert v-if="!preview.ready" type="info" :closable="false" show-icon
         :title="preview.reason || t('promotion.nothingToChange')">
         <template v-if="!preview.baseline_id || (preview.reason && preview.reason.includes('not bound'))">
-          <el-button size="small" link type="primary" @click="router.push('/baselines')">
+          <LinkButton size="small" link type="primary" to="/baselines">
             {{ t('promotion.goBaselines') }}
-          </el-button>
+          </LinkButton>
         </template>
       </el-alert>
 
@@ -214,9 +213,9 @@ function mrUrl(p: Promotion | null): string {
         </el-alert>
         <el-alert v-if="preview.unresolved" type="warning" :closable="false" show-icon class="note"
           :title="t('promotion.unresolved', { n: preview.unresolved })">
-          <el-button size="small" link type="primary" @click="router.push('/baselines')">
+          <LinkButton size="small" link type="primary" to="/baselines">
             {{ t('promotion.goBaselines') }}
-          </el-button>
+          </LinkButton>
         </el-alert>
 
         <h4>{{ t('promotion.changes') }}</h4>

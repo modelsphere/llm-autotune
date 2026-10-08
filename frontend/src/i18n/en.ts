@@ -18,7 +18,7 @@ export default {
       + '(POST /api/agent/v1/reports); see docs/api/agent-api.md.',
     baseline: 'Baseline run',
     attempts: 'Attempts',
-    campaign: 'Track',
+    campaign: 'Campaign',
     by: 'Saved by',
     when: 'Saved',
     notComparable: 'not comparable',

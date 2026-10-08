@@ -24,20 +24,28 @@ function current(): LogSource | undefined {
   return props.sources.find((s) => s.key === selected.value)
 }
 
+/** Bumped per load: on a slow network a log picked earlier must not land
+ *  after — and over — the one picked since. */
+let loadSeq = 0
 async function load() {
+  const seq = ++loadSeq
   const src = current()
   if (!src) {
     text.value = ''
+    loading.value = false
     return
   }
   loading.value = true
   try {
-    text.value = await src.fetch()
+    const body = await src.fetch()
+    if (seq === loadSeq) text.value = body
   } catch {
-    text.value = ''
-    ElMessage.error('Could not load the log')
+    if (seq === loadSeq) {
+      text.value = ''
+      ElMessage.error('Could not load the log')
+    }
   } finally {
-    loading.value = false
+    if (seq === loadSeq) loading.value = false
   }
 }
 

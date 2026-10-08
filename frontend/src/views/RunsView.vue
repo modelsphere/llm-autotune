@@ -1,16 +1,16 @@
 <script setup lang="ts">
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { onMounted, onUnmounted, ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { onMounted, ref } from 'vue'
 import { api, type Run } from '../api/client'
 import { useI18n } from '../i18n'
+import { useRowLink } from '../utils/nav'
+import { usePoll } from '../utils/poll'
 import { isLive, runLabel, runStatus } from '../utils/status'
 import { duration, exactTime, relativeTime } from '../utils/time'
 
-const router = useRouter()
 const { t } = useI18n()
 const runs = ref<Run[]>([])
-let timer: number | undefined
+const runRows = useRowLink((row: Run) => `/campaigns/${row.campaign_id}`)
 
 async function load() {
   runs.value = (await api.get('/runs')).data
@@ -39,21 +39,24 @@ async function stopRun(run: Run) {
   }
 }
 
+const poll = usePoll(load, 10000)
 onMounted(() => {
   load()
-  timer = window.setInterval(load, 10000)
+  poll.start()
 })
-onUnmounted(() => window.clearInterval(timer))
 </script>
 
 <template>
   <div class="page">
     <h1 class="page-title">{{ t('runs.title') }}</h1>
-    <el-table :data="runs"
-      @row-click="(row: Run) => router.push(`/campaigns/${row.campaign_id}`)"
-      style="cursor: pointer">
+    <el-table :data="runs" v-bind="runRows" style="cursor: pointer">
       <el-table-column prop="id" :label="t('common.id')" width="70" />
-      <el-table-column prop="campaign_id" :label="t('runs.campaign')" width="100" />
+      <el-table-column :label="t('runs.campaign')" width="100">
+        <template #default="{ row }">
+          <router-link :to="`/campaigns/${row.campaign_id}`" class="nav-link">
+            {{ row.campaign_id }}</router-link>
+        </template>
+      </el-table-column>
       <el-table-column :label="t('common.status')" width="140">
         <template #default="{ row }">
           <el-tag :type="runStatus(row.status).type" size="small">

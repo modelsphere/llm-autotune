@@ -24,7 +24,7 @@ const zh: typeof en = {
       + '见 docs/api/agent-api.md。',
     baseline: 'Baseline 运行',
     attempts: '优化尝试',
-    campaign: 'Track',
+    campaign: 'Campaign',
     by: '保存者',
     when: '保存时间',
     notComparable: '不可比',

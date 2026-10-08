@@ -1,12 +1,12 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
-import { useRouter } from 'vue-router'
 import { api, type AgentReport } from '../api/client'
 import { useI18n } from '../i18n'
+import { useRowLink } from '../utils/nav'
 import { exactTime, relativeTime } from '../utils/time'
 
 const { t } = useI18n()
-const router = useRouter()
+const reportRows = useRowLink((row: AgentReport) => `/reports/${row.id}`)
 const reports = ref<AgentReport[]>([])
 const loading = ref(true)
 
@@ -32,7 +32,7 @@ onMounted(load)
     </div>
 
     <el-table :data="reports" v-loading="loading" :empty-text="t('reports.empty')"
-      @row-click="(row: AgentReport) => router.push(`/reports/${row.id}`)" class="clickable">
+      v-bind="reportRows" class="clickable">
       <el-table-column :label="t('reports.title')" min-width="280">
         <template #default="{ row }">
           <router-link :to="`/reports/${row.id}`">{{ row.title }}</router-link>
