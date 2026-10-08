@@ -17,8 +17,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Plugin API
 
-- Version 1. Hooks: `routers`, `tick_steps`, `migrations`, `on_bootstrap`.
-  The importable surface is `app.plugin_api`.
+- Version 1. Hooks: `routers`, `tick_steps`, `migrations`, `on_bootstrap`,
+  `propose_candidates` (in-process planning, with a `PlanContext` holding the
+  campaign's history with the objective applied). The importable surface is
+  `app.plugin_api`.
 
 ### Changed
 

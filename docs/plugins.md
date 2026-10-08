@@ -1,14 +1,17 @@
 # Plugins
 
 A plugin adds to LLM AutoTune without changing it: its own API routes, work
-the worker does every tick, and tables of its own. It is a Python package
-installed into the platform's environment, kept in its own repository, and
-upgraded independently of the platform.
+the worker does every tick, tables of its own, and planners. It is a Python
+package installed into the platform's environment, kept in its own
+repository, and upgraded independently of the platform.
 
-For a different search strategy, write a [policy](api/policy-contract.md)
-instead: a policy is a container the platform talks to over HTTP, and needs
-no Python inside the platform at all. A plugin is for things a policy cannot
-be, such as new pages and their API, new tables, or new work in the worker.
+For a new search strategy, a [policy](api/policy-contract.md) is usually
+the better fit. A policy is a container the platform talks to over HTTP: it
+needs no Python inside the platform, can be written in any language, and
+can be registered without a redeploy. A plugin planner runs in the worker's
+own process and reads the campaign's history directly. It's the right
+choice when the strategy needs no container at all, or must be there for
+every campaign of a deployment.
 
 The [example plugin](../backend/tests/plugins/example) uses every hook. It is
 the place to start: copy it and rename it.
@@ -48,9 +51,41 @@ Every hook is optional:
 | `tick_steps` | calls each `step(supervisor, session)` at the start of every worker tick, so whatever a step starts is planned, scheduled and advanced in the same tick. Each step runs in a savepoint: one that raises is logged and its writes rolled back, and the tick goes on |
 | `migrations` | upgrades the plugin's own Alembic directory to head on every deploy, after the platform's schema and before seeding. The worker waits for it as it waits for the platform's |
 | `on_bootstrap(engine)` | runs after the platform's own seeding on every deploy. Like that seeding, it should only add what is missing; if it fails, the failure is logged and the deploy goes on |
+| `propose_candidates(ctx)` | plans a campaign in-process, in place of the default enumeration of its space. See [Planning](#planning) |
 
 `name` is lowercase letters, digits and underscores, and must equal the
 entry-point name.
+
+## Planning
+
+Each tick, for every ACTIVE campaign that has no policy container, the
+platform asks each plugin's `propose_candidates` in turn. The first to
+return something other than `None` plans that campaign; if none does, the
+platform enumerates the campaign's space as usual. A plugin returns `None`
+for a campaign it does not plan, so it decides which campaigns are its own,
+typically from its own side table.
+
+The `PlanContext` it receives carries:
+- `session` and `campaign`;
+- `history()`: every run and queued or rejected candidate as a `RunRecord`,
+  with the campaign's objective already applied (its value, whether it was
+  feasible, and redline slacks), so every planner ranks on the number the
+  report shows;
+- `queued()` and `startable_slots()`, to size a batch: an adaptive planner
+  should ask for about as many points as can start, not commit to a hundred
+  guesses before any result has come back;
+- `batch_cap`, the cap for a space whose points do not depend on results.
+
+What it returns is validated and deduplicated by the platform exactly like
+an enumerated point: a duplicate is dropped, and a configuration that cannot
+fit is recorded as rejected. A planner that raises is logged, and the
+campaign gets no new candidates that tick. It does not fall back to
+enumeration, which would queue every point of a space meant to be searched
+selectively.
+
+The search-space helpers (`expand`, `axes`, `grid_values`, `range_specs`,
+`tied_groups`, `prune_inactive`) and the objective's `direction` are in
+`app.plugin_api` too.
 
 ## Turning one on
 

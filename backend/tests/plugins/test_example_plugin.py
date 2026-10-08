@@ -164,3 +164,52 @@ async def test_its_routes_are_mounted_under_api_and_behind_login(client):
 
 async def test_the_platforms_routes_are_untouched(client):
     assert (await client.get("/api/health")).json() == {"status": "ok"}
+
+
+def test_its_planner_plans_only_the_campaigns_it_labels(tmp_path, monkeypatch):
+    from app.db.models import BaselineStatus, CampaignStatus, Candidate, Machine, MachineState
+
+    url, engine = _database(tmp_path)
+    plugins.upgrade(example_plugin.plugin, url)
+    factory = sessionmaker(engine, expire_on_commit=False)
+    with factory() as session:
+        session.add(User(id=1, username="u", password_hash="x"))
+        session.add(
+            Machine(
+                id=1, name="gpu-01", host="10.0.0.1", gpu_count=8,
+                state=MachineState.AVAILABLE.value,
+                baseline_status=BaselineStatus.CLEARED.value,
+            )
+        )
+        for campaign_id in (1, 2):
+            session.add(
+                Campaign(
+                    id=campaign_id, owner_id=1, name=f"c{campaign_id}", engine="sglang",
+                    image="img", model_path="/m", served_model_name="m",
+                    search_space={"grid": {"tp": [1, 2, 4]}},
+                    status=CampaignStatus.ACTIVE.value, run_baseline_canary=False,
+                )
+            )
+        session.flush()
+        session.add(CampaignLabel(campaign_id=1, label="plan:reverse"))
+        session.commit()
+    supervisor = Supervisor(session_factory=factory)
+    supervisor.driver = NullDriver()
+    monkeypatch.setattr(plugins, "enabled", lambda: (example_plugin.plugin,))
+
+    with factory() as session:
+        supervisor._plan(session)
+        session.commit()
+        planned = {
+            campaign_id: [
+                c.config["tp"]
+                for c in session.scalars(
+                    select(Candidate)
+                    .where(Candidate.campaign_id == campaign_id)
+                    .order_by(Candidate.id)
+                )
+            ]
+            for campaign_id in (1, 2)
+        }
+
+    assert planned == {1: [4, 2, 1], 2: [1, 2, 4]}, "labelled: reversed; the other: enumerated"
