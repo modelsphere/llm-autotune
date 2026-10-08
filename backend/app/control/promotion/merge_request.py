@@ -44,13 +44,23 @@ class Origin:
     campaign_id: int = 0
     campaign_name: str = ""
     run_id: int = 0
+    # A plugin's origin (Plugin.promotion_origin) names its own page and says
+    # in its own words what the config came from.
+    page_path: str = ""
+    description: str = ""
+    # Whether a branch named on the request sticks to the campaign for its
+    # next winner. Not for a campaign nobody reads (one a plugin runs for a
+    # request of its own).
+    remember_branch: bool = True
 
     @property
     def page(self) -> str:
-        return f"/campaigns/{self.campaign_id}"
+        return self.page_path or f"/campaigns/{self.campaign_id}"
 
     def describe(self) -> str:
-        return f"campaign **{self.campaign_name}** (#{self.campaign_id}), run #{self.run_id}"
+        return self.description or (
+            f"campaign **{self.campaign_name}** (#{self.campaign_id}), run #{self.run_id}"
+        )
 
 
 @dataclass

@@ -21,6 +21,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
+from app import plugins
 from app.control.launch_config import LaunchConfig
 from app.control.promotion.base import PromotionError, PromotionRequest, PromotionState
 from app.control.promotion.config import build_promotion_config
@@ -43,9 +44,9 @@ from app.schemas.core import LeaderboardEntry
 
 def evidence_of(config: dict[str, Any], **extra: Any) -> dict[str, Any]:
     """What the merge request cites: the measurement, and the exact image and
-    card it was taken on. Shared by every origin — a campaign winner, a
-    a campaign winner — so the description of a proposal
-    never depends on which button opened it."""
+    card it was taken on. Shared by every way a winner is proposed — a
+    button or the unattended path — so the description of a proposal never
+    depends on which one opened it."""
     image = config.get("image") or {}
     snapshot = config.get("env_snapshot") or {}
     out = {
@@ -67,17 +68,25 @@ def baseline_lookup_order(card_type: str) -> list[str]:
     return [card_type, ""] if card_type else [""]
 
 
-def origin_of(campaign: Campaign, run_id: int) -> Origin:
-    """Where a config came from, for the title and the link back."""
+def origin_of(campaign: Campaign, run_id: int, told=None) -> Origin:
+    """Where a config came from, for the title and the link back: the
+    campaign, or what a plugin says it stands for (Plugin.promotion_origin)."""
+    if told is not None:
+        return Origin(
+            kind=told.kind, campaign_id=campaign.id, campaign_name=campaign.name,
+            run_id=run_id, page_path=told.page, description=told.description,
+            remember_branch=told.remember_branch,
+        )
     return Origin(
         kind="campaign", campaign_id=campaign.id, campaign_name=campaign.name, run_id=run_id
     )
 
 
-def deploy_branch_of(campaign: Campaign) -> str:
-    """The release branch this campaign's winner goes onto, or empty — which
-    leaves the choice to the bound baseline's binding."""
-    return (campaign.deploy_branch or "").strip()
+def deploy_branch_of(campaign: Campaign, told=None) -> str:
+    """The release branch this campaign's winner goes onto: the campaign's,
+    else the one a plugin names for it, else empty — which leaves the choice
+    to the bound baseline's binding."""
+    return (campaign.deploy_branch or (told.deploy_branch if told else "") or "").strip()
 
 
 # ---------------------------------------------------------------------------
@@ -118,6 +127,7 @@ def resolve(session: Session, campaign: Campaign) -> Winner | None:
     run, candidate, result = next(r for r in rows if r[0].id == entry.run_id)
     config = build_promotion_config(campaign, candidate, run, result)
     card = card_type_of(run)
+    told = plugins.promotion_origin_of(session, campaign, run.id)
     baseline = None
     for card_key in baseline_lookup_order(card):
         baseline = session.scalars(
@@ -138,7 +148,7 @@ def resolve(session: Session, campaign: Campaign) -> Winner | None:
         config=config,
         target=LaunchConfig.from_promotion_config(config, gpu_type=card),
         baseline=baseline,
-        origin=origin_of(campaign, run.id),
+        origin=origin_of(campaign, run.id, told),
         evidence=evidence_of(
             config,
             vs_baseline=entry.vs_baseline,
@@ -152,7 +162,7 @@ def resolve(session: Session, campaign: Campaign) -> Winner | None:
             target_metric=entry.target_metric or None,
             score=entry.score,
         ),
-        deploy_branch=deploy_branch_of(campaign),
+        deploy_branch=deploy_branch_of(campaign, told),
         holds_redlines=entry.holds_redlines,
     )
 
