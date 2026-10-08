@@ -25,7 +25,7 @@ _counter = count()
 
 IMAGE = "registry.example.com/sglang:v0.5.15-cu129"
 SWEEP = "perf_guidellm_sweep"
-SLUG = "bh-glm-h100"
+SLUG = "glm-h100-screen"
 
 SWEEP_PARAMS = {
     "input_tokens": 8000, "output_tokens": 1000, "concurrencies": "1,2,4,8",

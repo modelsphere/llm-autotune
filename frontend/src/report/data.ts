@@ -61,7 +61,8 @@ export interface Attempt extends Run {
   deltas: { scenarios: ScenarioDeltas[]; quality: Record<string, Delta> }
 }
 export interface Comparison {
-  track: { model_name: string; precision: string; gpu_type: string } | null
+  /** The group the compared runs belong to (a plugin's), when there is one. */
+  group?: { model_name: string; precision: string; gpu_type: string } | null
   benchmark: {
     modules: { key: string; module_name: string; is_scenario: boolean; params: Record<string, unknown> }[]
     platform: { slo: { ttft_ms?: number; ttft_percentile?: string; min_request_output_tps?: number } }
@@ -174,7 +175,7 @@ export const MACHINE_GPUS = 8
 
 /** The machine the numbers are normalized to, as captions name it: "8 × H100". */
 export function hardwareText(doc: Comparison): string {
-  const card = doc.track?.gpu_type
+  const card = doc.group?.gpu_type
   return card ? `${MACHINE_GPUS} × ${card}` : `${MACHINE_GPUS} GPUs`
 }
 

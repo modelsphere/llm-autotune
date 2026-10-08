@@ -282,17 +282,28 @@ def comparability(baseline: RunBundle, attempts: list[RunBundle]) -> list[NotCom
         ))
     for att in attempts:
         rid = att.run.id
-        b_cfg, a_cfg = launch_part(baseline).config, launch_part(att).config
-        if b_cfg.served_model_name != a_cfg.served_model_name:
-            reasons.append(NotComparableReason(
-                code="model_differs", run_id=rid, field="served_model_name",
-                baseline=b_cfg.served_model_name, attempt=a_cfg.served_model_name,
-            ))
-        if b_cfg.gpu_type and a_cfg.gpu_type and b_cfg.gpu_type != a_cfg.gpu_type:
-            reasons.append(NotComparableReason(
-                code="gpu_type_differs", run_id=rid, field="gpu_type",
-                baseline=b_cfg.gpu_type, attempt=a_cfg.gpu_type,
-            ))
+        b_group = baseline.overlay.group if baseline.overlay is not None else None
+        a_group = att.overlay.group if att.overlay is not None else None
+        if b_group is not None and a_group is not None:
+            # Runs a plugin keeps in groups compare by the group's rules: two
+            # runs of one group are comparable whatever else differs.
+            if (b_group.kind, b_group.slug) != (a_group.kind, a_group.slug):
+                reasons.append(NotComparableReason(
+                    code="group_differs", run_id=rid, field=b_group.kind,
+                    baseline=b_group.slug, attempt=a_group.slug,
+                ))
+        else:
+            b_cfg, a_cfg = launch_part(baseline).config, launch_part(att).config
+            if b_cfg.served_model_name != a_cfg.served_model_name:
+                reasons.append(NotComparableReason(
+                    code="model_differs", run_id=rid, field="served_model_name",
+                    baseline=b_cfg.served_model_name, attempt=a_cfg.served_model_name,
+                ))
+            if b_cfg.gpu_type and a_cfg.gpu_type and b_cfg.gpu_type != a_cfg.gpu_type:
+                reasons.append(NotComparableReason(
+                    code="gpu_type_differs", run_id=rid, field="gpu_type",
+                    baseline=b_cfg.gpu_type, attempt=a_cfg.gpu_type,
+                ))
         att_bench = benchmark_part(att)
         if base_bench.llmbench.slug != att_bench.llmbench.slug:
             reasons.append(NotComparableReason(
@@ -468,6 +479,7 @@ def build_comparison(
     return ComparisonDocument(
         comparable=not reasons,
         reasons=reasons,
+        group=baseline.overlay.group if baseline.overlay is not None else None,
         benchmark=benchmark_part(baseline),
         baseline=base,
         attempts=rows,

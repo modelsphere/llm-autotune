@@ -35,11 +35,12 @@ if TYPE_CHECKING:
     from sqlalchemy import Engine, MetaData
     from sqlalchemy.orm import Session
 
+    from app.agent.overlay import RunOverlay
     from app.control.orchestrator.occupancy import Reservation
     from app.control.orchestrator.supervisor import Supervisor
     from app.control.search import CandidateConfig
     from app.control.search.history import RunRecord
-    from app.db.models import Campaign, Machine
+    from app.db.models import Campaign, Machine, Run
 
 logger = logging.getLogger(__name__)
 
@@ -133,6 +134,15 @@ class QueueWaiter:
     ident: int = 0
 
 
+class SelectorRefused(ValueError):
+    """Raised by a run_selector to answer the agent API with this error:
+    `code` (machine-readable), `status` (HTTP), `detail`."""
+
+    def __init__(self, code: str, status: int = 404, detail: str = "") -> None:
+        super().__init__(detail or code)
+        self.code, self.status, self.detail = code, status, detail
+
+
 class ExtensionRefused(ValueError):
     """Raised by `on_campaign_created` to refuse what it was given; the
     campaign is not created, and the message is the API's 422 answer."""
@@ -146,6 +156,8 @@ class Plugin:
         lists, and the suffix of the plugin's migration version table.
     api_version: the PLUGIN_API_VERSION the plugin was written for.
     routers: FastAPI routers, mounted under /api after the platform's own.
+    openapi_tags: descriptions for the tags those routers use, as FastAPI's
+        `openapi_tags` entries, shown in the API docs with the platform's.
     tick_steps: functions the worker calls at the START of every tick, each
         as `step(supervisor, session)`, inside a savepoint: a step that raises
         is logged and rolled back, and the rest of the tick goes on. Running
@@ -181,6 +193,21 @@ class Plugin:
         plugin holds for campaigns whose run is not placed yet. Placement,
         policy sessions and every waiter read them, so a held machine is held
         for everyone.
+    submission_extras: `(session, run, context) -> dict`, fields for the
+        run's LLMBench submission, given what the platform will send
+        (`context`: benchmark_slug, hardware, contributor, source_url…).
+        `contributor` and `source_url` replace the platform's; anything else
+        is added to the submission body as is. One that raises is logged and
+        the submission goes out without it.
+    run_overlay: `(session, run, campaign) -> RunOverlay | None`, what the
+        plugin knows about a run it started on behalf of something of its own,
+        for the run's agent documents (app/agent/overlay.py). The first plugin
+        to answer anything but None describes it; one that raises is logged
+        and left out.
+    run_selector: `(session, token) -> run id | None`, for a run selector
+        the agent API does not know (`?baseline=` and friends take run ids;
+        a plugin may accept its own spelling, e.g. a request id). Raise
+        SelectorRefused to answer with a specific error.
     queue_arrival: `(session, campaign) -> datetime | None`, when a campaign
         joined the machine queue, for a campaign that represents something
         older than itself (a request made before its campaign existed). None
@@ -190,6 +217,7 @@ class Plugin:
     name: str
     api_version: int
     routers: Sequence[APIRouter] = ()
+    openapi_tags: Sequence[dict[str, Any]] = ()
     tick_steps: Sequence[TickStep] = ()
     migrations: str | None = None
     on_bootstrap: Callable[[Engine], None] | None = None
@@ -199,6 +227,9 @@ class Plugin:
     queue_waiters: Callable[[Supervisor, Session], Iterable[QueueWaiter]] | None = None
     reservations: Callable[[Session, Machine], Iterable[Reservation]] | None = None
     queue_arrival: Callable[[Session, Campaign], datetime | None] | None = None
+    submission_extras: Callable[[Session, Run, dict[str, Any]], dict[str, Any]] | None = None
+    run_overlay: Callable[[Session, Run, Campaign | None], RunOverlay | None] | None = None
+    run_selector: Callable[[Session, str], int | None] | None = None
 
     @property
     def version_table(self) -> str:
@@ -302,6 +333,42 @@ def read_campaign_extensions(
             if data and campaign_id in out:
                 out[campaign_id][plugin.name] = data
     return out
+
+
+def run_overlay(session: Session, run: Any, campaign: Any) -> RunOverlay | None:
+    """What the first plugin that knows this run says about it, or None."""
+    for plugin in enabled():
+        if plugin.run_overlay is None:
+            continue
+        try:
+            overlay = plugin.run_overlay(session, run, campaign)
+        except Exception:
+            logger.exception("plugin %s: describing run %s failed", plugin.name, run.id)
+            continue
+        if overlay is not None:
+            return overlay
+    return None
+
+
+def resolve_run_selector(session: Session, token: str) -> int | None:
+    """A run id for a selector only a plugin knows, or None. SelectorRefused
+    propagates: the plugin knew the selector and refused it."""
+    for plugin in enabled():
+        if plugin.run_selector is None:
+            continue
+        run_id = plugin.run_selector(session, token)
+        if run_id is not None:
+            return run_id
+    return None
+
+
+def mount(app: Any, mounted: Iterable[Plugin], prefix: str) -> None:
+    """Each plugin's routers under `prefix`, and its tag descriptions in the
+    API docs next to the platform's."""
+    for plugin in mounted:
+        for router in plugin.routers:
+            app.include_router(router, prefix=prefix)
+        app.openapi_tags = [*(app.openapi_tags or []), *plugin.openapi_tags]
 
 
 def migration_env(metadata: MetaData, plugin_name: str) -> None:

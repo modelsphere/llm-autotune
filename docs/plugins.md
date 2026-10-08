@@ -57,6 +57,10 @@ Every hook is optional:
 | `queue_waiters(supervisor, session)` | the plugin's waiters (`QueueWaiter`) in the machine queue, served in arrival order with the platform's own. See [The machine queue](#the-machine-queue) |
 | `reservations(session, machine)` | machines the plugin holds (`Reservation`) for a campaign whose run is not placed yet; everyone else treats them as taken |
 | `queue_arrival(session, campaign)` | when a campaign joined the queue, for one that stands for an older request |
+| `submission_extras(session, run, context)` | fields for the run's LLMBench submission; `contributor` and `source_url` replace the platform's, anything else is added to the body |
+| `run_overlay(session, run, campaign)` | what the plugin knows about a run it started for a request of its own, for the run's agent documents (`RunOverlay`, see [Runs in the agent API](#runs-in-the-agent-api)) |
+| `run_selector(session, token)` | a run id for an agent API run selector of the plugin's own spelling; raise `SelectorRefused` to answer with a specific error |
+| `openapi_tags` | descriptions of the plugin's API tags, shown in the API docs with the platform's |
 
 `name` is lowercase letters, digits and underscores, and must equal the
 entry-point name.
@@ -135,6 +139,26 @@ through `reservations` until the campaign's first run is placed. Placement,
 policy sessions and every other waiter count a reservation as taken.
 `busy_reason(session, machine, cards=, share=)` answers "why can't a run of
 this width go here right now" from the same accounting.
+
+## Runs in the agent API
+
+A plugin that starts runs for requests of its own describes them with
+`run_overlay`: a `RunOverlay` whose every field is optional, and whatever it
+says replaces what the platform would build from its own rows. That covers:
+- the launch configuration and how the run is named in a comparison;
+- where it came from (`source`, plus `origin` details under
+  `launch.origin.extensions`);
+- the module verdicts and metrics the plugin froze when it harvested the
+  result;
+- the SLO, quality floors and ranking metric it holds the run to;
+- the benchmark's recorded config hash, so a document says when the
+  benchmark has `drifted` since;
+- the `group` the run belongs to.
+
+Runs of one group compare by the group's rules: two runs of the same group
+are comparable whatever else differs, and runs of two groups are not
+(`group_differs`). A saved report records the group of the runs it compares,
+and `GET /api/agent/v1/reports?group=<slug>` lists by it.
 
 ## Frontend
 

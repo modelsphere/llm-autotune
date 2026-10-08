@@ -246,10 +246,10 @@ export function sloTable(doc: Comparison, lang: Lang): string {
 export function setupTable(doc: Comparison, lang: Lang, labels: Map<number, string>): string {
   const slo = doc.benchmark.platform.slo ?? {}
   const rows: string[][] = []
-  const track = doc.track
-  if (track?.model_name) rows.push([esc(tr(lang, 'model')), esc(track.model_name)])
-  if (track?.precision) rows.push([esc(tr(lang, 'precision')), esc(track.precision)])
-  const card = track?.gpu_type ?? ''
+  const group = doc.group
+  if (group?.model_name) rows.push([esc(tr(lang, 'model')), esc(group.model_name)])
+  if (group?.precision) rows.push([esc(tr(lang, 'precision')), esc(group.precision)])
+  const card = group?.gpu_type ?? ''
   const hardware = sameCards(doc)
     ? tr(lang, 'hardwareValue', { n: cardsOf(doc.baseline), card })
     : runsOf(doc).map((r) => `${labels.get(r.run_id) ?? r.label}: ${cardsOf(r)}× ${card}`).join(' · ')

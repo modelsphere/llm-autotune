@@ -2449,6 +2449,21 @@ class Supervisor:
         ui = self.settings.public_ui_url.rstrip("/")
         if ui:
             context["source_url"] = f"{ui}/campaigns/{campaign.id}"
+        # What plugins add to the submission (`Plugin.submission_extras`): a
+        # different listing name or way back, or fields of their own.
+        if session is not None:
+            for plugin in plugins.enabled():
+                if plugin.submission_extras is None:
+                    continue
+                try:
+                    extra = dict(plugin.submission_extras(session, run, dict(context)) or {})
+                except Exception:
+                    logger.exception("plugin %s: submission extras failed", plugin.name)
+                    continue
+                for key in ("contributor", "source_url"):
+                    if key in extra:
+                        context[key] = extra.pop(key)
+                context.setdefault("extra_body", {}).update(extra)
         return context
 
     def _node_assignments(self, session: Session, run: Run) -> list[NodeAssignment]:

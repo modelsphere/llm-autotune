@@ -146,9 +146,7 @@ app.include_router(policies.router, prefix=api_prefix)
 app.include_router(policy_sessions.router, prefix=api_prefix)
 app.include_router(agent.router, prefix=api_prefix)
 # After the platform's own, so a plugin cannot shadow a platform route.
-for plugin in plugins.enabled():
-    for router in plugin.routers:
-        app.include_router(router, prefix=api_prefix)
+plugins.mount(app, plugins.enabled(), api_prefix)
 
 
 @app.get("/api/health")
