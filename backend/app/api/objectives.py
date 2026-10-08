@@ -6,7 +6,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.auth import get_current_user
 from app.db.base import get_async_session
 from app.db.models import Event, Objective, User
-from app.metrics_catalog import DEFAULT_TARGET_METRIC, METRICS, default_direction
+from app.metrics_catalog import (
+    DEFAULT_TARGET_METRIC,
+    DEFAULT_VERIFY_TARGET_METRIC,
+    METRICS,
+    default_direction,
+)
 from app.objective import OPERATORS
 from app.schemas.core import ObjectiveCreate, ObjectiveOut
 
@@ -21,6 +26,7 @@ async def metrics(_: User = Depends(get_current_user)):
         "metrics": METRICS,
         "operators": sorted(OPERATORS),
         "default_target_metric": DEFAULT_TARGET_METRIC,
+        "default_verify_target_metric": DEFAULT_VERIFY_TARGET_METRIC,
     }
 
 

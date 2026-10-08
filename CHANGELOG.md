@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `AUTOTUNE_LLMBENCH_REPLAY_MODULE` (default `replay`): the name LLMBench's
+  traffic replay module reports its metrics under. The metric catalog, the
+  default second-stage objective and dataset pinning all follow it, for a
+  build of LLMBench that names the module otherwise.
 - `POST /api/machines/{id}/smoke-test[?pod=true]`: whether the platform can
   reach a machine at all, by walking the path a launch takes and stopping at
   the first step a launch could not get past. Over ssh: login, the docker

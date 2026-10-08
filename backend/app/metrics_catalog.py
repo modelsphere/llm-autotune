@@ -21,6 +21,8 @@ keys a real campaign actually produced.
 
 from typing import Any, Literal
 
+from app.core.config import get_settings
+
 Better = Literal["higher", "lower"]
 
 # The benchmark a metric comes from, as an operator would name it.
@@ -56,7 +58,9 @@ def _m(
 
 PERF = "perf_guidellm_sweep"
 FUNC = "functional_acceptance"
-REPLAY = "replay"
+# LLMBench names its replay module "replay"; a deployment whose LLMBench
+# names it otherwise says so in AUTOTUNE_LLMBENCH_REPLAY_MODULE.
+REPLAY = get_settings().llmbench_replay_module or "replay"
 
 METRICS: list[dict[str, Any]] = [
     # -- throughput, card-normalized -----------------------------------------

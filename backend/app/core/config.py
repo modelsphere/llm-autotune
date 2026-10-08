@@ -40,6 +40,10 @@ class Settings(BaseSettings):
     # reach it (inside a cluster, a service address no browser can open).
     # Empty = derive from llmbench_base_url by dropping a trailing /api.
     llmbench_web_url: str = ""
+    # The name LLMBench's traffic replay module reports its metrics under
+    # (`<module>.score_card_norm`, `<module>.dataset_id`…). "replay" in
+    # LLMBench; set it only for a build of LLMBench that names it otherwise.
+    llmbench_replay_module: str = "replay"
 
     # The window a drafted campaign runs in when its author names none
     # (POST /campaigns/draft). Empty = no clock: the draft starts when started.
