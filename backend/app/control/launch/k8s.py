@@ -41,7 +41,10 @@ from __future__ import annotations
 
 import json
 import logging
+import secrets
 import shlex
+import socket
+import time
 from typing import Any
 
 from app.control.engines import MODEL_MOUNT, get_adapter
@@ -54,6 +57,8 @@ from app.control.launch.base import (
     WorkloadSpec,
     WorkloadState,
     merge_volumes,
+    smoke_check,
+    smoke_result,
 )
 from app.control.launch.clusters import K8sClusterSettings, as_cluster, resolve_cluster
 from app.control.launch.failures import TRANSIENT_PLACEMENT_FAILURES
@@ -652,6 +657,53 @@ def _endpoint_from_cr(cr: dict | None, spec: LaunchSpec) -> str:
 _GPU_PRODUCT_LABEL = "nvidia.com/gpu.product"
 _GPU_RESOURCE = "nvidia.com/gpu"
 
+# The smoke test's probe pod only has to be SCHEDULED — placement is the
+# question, and it is answered before any image is pulled — so the image is
+# never waited on and an air-gapped node that cannot fetch it still answers.
+SMOKE_POD_IMAGE = "registry.k8s.io/pause:3.9"
+SMOKE_LABEL = "autotune.4paradigm.com/smoke"
+_SMOKE_POD_WAIT_SECONDS = 40
+# The kubelet listens on every node, so a connect to it says whether the
+# platform can route to the node's address at all — which a NodePort needs.
+_KUBELET_PORT = 10250
+
+
+def _credential_problem(exc: Exception) -> str:
+    """A cluster error as the thing to go and fix."""
+    text = str(exc)
+    if "Unauthorized" in text:
+        return (
+            "the API server rejected the credential (401). A ServiceAccount token "
+            "stops working when the account or its secret is deleted or rotated on "
+            "the cluster's side — paste a fresh kubeconfig on the cluster"
+        )
+    if "Forbidden" in text:
+        return f"authenticated, but not allowed: {text[:300]}"
+    return f"cannot reach the API server: {text[:300]}"
+
+
+def _node_addresses(node: dict) -> list[str]:
+    return [
+        str(addr.get("address") or "")
+        for addr in (node.get("status") or {}).get("addresses") or []
+        if addr.get("type") == "InternalIP"
+    ]
+
+
+def _node_ready(node: dict) -> bool:
+    for cond in (node.get("status") or {}).get("conditions") or []:
+        if cond.get("type") == "Ready":
+            return cond.get("status") == "True"
+    return False
+
+
+def _tcp_reachable(host: str, port: int, timeout: float = 3.0) -> bool:
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
 
 def _pod_gpu_request(pod: dict, resource: str) -> int:
     """GPUs this pod asks the scheduler for, summed over its containers and read
@@ -1227,6 +1279,211 @@ class K8sDriver(DeploymentDriver):
             "nodes": detail,
             "warnings": warnings,
         }
+
+    # -- smoke test ----------------------------------------------------------
+
+    def smoke_test(self, machine: MachineInfo, probe_pod: bool = False) -> dict[str, Any]:
+        """Walk what a launch on this machine needs from the cluster: a
+        transport, a credential the API server accepts, the RBAC to create the
+        workload, the node(s) the selector names, an address to reach a
+        NodePort on — and, with `probe_pod`, a pod actually placed there."""
+        s = self.settings
+        checks: list[dict] = []
+        where = f"cluster {s.cluster_name}, namespace {s.k8s_namespace}"
+
+        if not s.k8s_api_mode or s.k8s_api_mode == "unavailable":
+            checks.append(smoke_check(
+                "cluster", "fail",
+                f"{where}: api_mode is 'unavailable' — the platform has no way to "
+                "talk to it; set api_mode and a kubeconfig on the cluster",
+            ))
+            return smoke_result(checks)
+        try:
+            api = self.api
+        except Exception as exc:  # noqa: BLE001 — a smoke test reports, never raises
+            checks.append(smoke_check("cluster", "fail", f"{where}: transport unavailable: {exc}"))
+            return smoke_result(checks)
+        checks.append(smoke_check(
+            "cluster", "pass", f"{where} ({s.k8s_api_mode}, {s.k8s_workload_kind} workloads)"
+        ))
+
+        try:
+            pods = api.list("pods")
+        except Exception as exc:  # noqa: BLE001
+            checks.append(smoke_check("credential", "fail", _credential_problem(exc)))
+            return smoke_result(checks)
+        checks.append(smoke_check(
+            "credential", "pass",
+            f"accepted; {len(pods)} pod(s) visible in {s.k8s_namespace}",
+        ))
+
+        checks.append(self._smoke_permissions(api, probe_pod))
+        nodes, node_check = self._smoke_nodes(api, machine)
+        checks.append(node_check)
+        checks.append(self._smoke_endpoint_host(nodes))
+        if probe_pod:
+            checks.append(self._smoke_probe_pod(api, machine))
+        return smoke_result(checks)
+
+    def _smoke_permissions(self, api: K8sApi, probe_pod: bool) -> dict:
+        s = self.settings
+        if s.k8s_workload_kind == "custom":
+            needs = [("create", s.k8s_cr_plural, s.k8s_cr_group),
+                     ("delete", s.k8s_cr_plural, s.k8s_cr_group)]
+        else:
+            needs = [("create", "deployments", "apps"), ("delete", "deployments", "apps"),
+                     ("create", "services", ""), ("delete", "services", "")]
+        needs.append(("get", "pods/log", ""))
+        if probe_pod:
+            needs += [("create", "pods", ""), ("delete", "pods", "")]
+        missing, unknown = [], 0
+        for verb, resource, group in needs:
+            try:
+                allowed = api.can_i(verb, resource, group)
+            except Exception as exc:  # noqa: BLE001
+                return smoke_check("permissions", "warn", f"could not ask the API server: {exc}")
+            if allowed is None:
+                unknown += 1
+            elif not allowed:
+                missing.append(f"{verb} {resource}{'.' + group if group else ''}")
+        if missing:
+            return smoke_check(
+                "permissions", "fail",
+                f"this credential may not: {', '.join(missing)} (in {s.k8s_namespace})",
+            )
+        if unknown == len(needs):
+            return smoke_check("permissions", "skip", "this transport cannot ask the API server")
+        granted = ", ".join(f"{verb} {resource}" for verb, resource, _ in needs)
+        return smoke_check("permissions", "pass", f"may {granted}")
+
+    def _smoke_nodes(self, api: K8sApi, machine: MachineInfo) -> tuple[list[dict], dict]:
+        selector = (machine.node_selector or self.settings.k8s_node_selector).strip()
+        if not selector:
+            return [], smoke_check(
+                "node", "warn",
+                "no node selector: pods may land on any node; pin a hostname or a GPU-type label",
+            )
+        try:
+            nodes = api.list("nodes", label_selector=selector)
+        except Exception as exc:  # noqa: BLE001
+            return [], smoke_check(
+                "node", "skip",
+                f"this credential cannot read nodes ({str(exc)[:120]}) — normal on a "
+                f"cluster we are a guest on, but {selector!r} cannot be confirmed from "
+                "here; run again with the probe pod",
+            )
+        if not nodes:
+            return [], smoke_check("node", "fail", f"selector {selector!r} matches no node")
+        parts, worst = [], "pass"
+        for node in nodes:
+            spec = node.get("spec") or {}
+            gpus = f"{_node_gpu_count(node)} × {_node_gpu_type(node) or 'GPU'} allocatable"
+            if not _node_ready(node):
+                parts.append(f"{_node_name(node)}: NotReady")
+                worst = "fail"
+            elif spec.get("unschedulable"):
+                parts.append(f"{_node_name(node)}: cordoned, {gpus}")
+                worst = "fail" if worst == "fail" else "warn"
+            else:
+                parts.append(f"{_node_name(node)}: Ready, {gpus}")
+        return nodes, smoke_check("node", worst, "; ".join(parts))
+
+    def _smoke_endpoint_host(self, nodes: list[dict]) -> dict:
+        """A deployment-mode run is reached at <host>:<nodePort>. The host is
+        the cluster's node_host, or a node IP read off the cluster."""
+        s = self.settings
+        if s.k8s_workload_kind == "custom":
+            return smoke_check("endpoint", "skip", "custom workloads publish their own URL")
+        host = s.k8s_node_host or self._first_node_ip()
+        if not host:
+            return smoke_check(
+                "endpoint", "fail",
+                "no node_host set and nodes are unreadable: a run cannot build its "
+                "endpoint URL — set node_host on the cluster",
+            )
+        source = "the cluster's node_host" if s.k8s_node_host else "the first node's IP"
+        if not _tcp_reachable(host, _KUBELET_PORT):
+            return smoke_check(
+                "endpoint", "warn",
+                f"runs are reached at {host} ({source}), but the platform cannot open "
+                f"a connection to {host}:{_KUBELET_PORT} (kubelet) — its NodePorts "
+                "may be unreachable too",
+            )
+        detail = f"runs are reached at {host} ({source}); it answers"
+        ips = {ip for node in nodes for ip in _node_addresses(node)}
+        if ips and host not in ips:
+            detail += (
+                f" — not this machine's node ({', '.join(sorted(ips))}); a NodePort "
+                f"is served on every node, so this holds only while {host} stays in the cluster"
+            )
+        return smoke_check("endpoint", "pass", detail)
+
+    def _smoke_probe_pod(self, api: K8sApi, machine: MachineInfo) -> dict:
+        """Place a pod that asks for nothing, with the engine's node selector
+        and tolerations, and see where the scheduler puts it. Always deleted."""
+        s = self.settings
+        name = f"autotune-smoke-{secrets.token_hex(4)}"
+        pod_spec: dict[str, Any] = {
+            "restartPolicy": "Never",
+            "automountServiceAccountToken": False,
+            "terminationGracePeriodSeconds": 0,
+            "containers": [{
+                "name": "smoke",
+                "image": SMOKE_POD_IMAGE,
+                # Requests AND limits: a namespace quota may demand either.
+                "resources": {
+                    "requests": {"cpu": "10m", "memory": "16Mi"},
+                    "limits": {"cpu": "100m", "memory": "64Mi"},
+                },
+            }],
+        }
+        selector = _node_selector_pairs(machine.node_selector, s)
+        if selector:
+            pod_spec["nodeSelector"] = selector
+        # The tolerations an ENGINE pod would carry (it asks for cards), so the
+        # answer is about where a run would go, not where this pod may go.
+        tolerations = _tolerations(1, s)
+        if tolerations:
+            pod_spec["tolerations"] = tolerations
+        pull_secrets = _image_pull_secrets(s)
+        if pull_secrets:
+            pod_spec["imagePullSecrets"] = pull_secrets
+        manifest = {
+            "apiVersion": "v1",
+            "kind": "Pod",
+            "metadata": {"name": name, "labels": {MANAGED_LABEL: "true", SMOKE_LABEL: "true"}},
+            "spec": pod_spec,
+        }
+        try:
+            api.apply(manifest)
+        except Exception as exc:  # noqa: BLE001
+            return smoke_check("probe pod", "fail", f"could not create a pod: {str(exc)[:400]}")
+        try:
+            deadline = time.monotonic() + _SMOKE_POD_WAIT_SECONDS
+            unschedulable = ""
+            while True:
+                pod = api.get("pod", name) or {}
+                node = (pod.get("spec") or {}).get("nodeName")
+                if node:
+                    host_ip = (pod.get("status") or {}).get("hostIP") or ""
+                    at = f" ({host_ip})" if host_ip else ""
+                    return smoke_check("probe pod", "pass", f"scheduled onto {node}{at}")
+                for cond in (pod.get("status") or {}).get("conditions") or []:
+                    if cond.get("type") == "PodScheduled" and cond.get("status") == "False":
+                        unschedulable = cond.get("message") or cond.get("reason") or ""
+                if time.monotonic() >= deadline:
+                    break
+                time.sleep(2)
+            return smoke_check(
+                "probe pod", "fail",
+                f"not scheduled within {_SMOKE_POD_WAIT_SECONDS}s"
+                + (f": {unschedulable[:400]}" if unschedulable else ""),
+            )
+        finally:
+            try:
+                api.delete("pod", name)
+            except Exception:  # noqa: BLE001 — labelled; findable by SMOKE_LABEL
+                logger.warning("could not delete smoke pod %s", name)
 
     def _node_card_type(self, node_name: str) -> str:
         """The canonical card type of one node by name, for run provenance."""

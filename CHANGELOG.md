@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `POST /api/machines/{id}/smoke-test[?pod=true]`: whether the platform can
+  reach a machine at all, by walking the path a launch takes and stopping at
+  the first step a launch could not get past. Over ssh: login, the docker
+  daemon, and the GPUs `nvidia-smi` sees against those recorded. On
+  Kubernetes: the cluster config, the credential, RBAC, the node(s) the
+  selector names and the endpoint host, and optionally a throwaway probe pod
+  scheduled like the engine's (always deleted). It also warns when a machine
+  has no GPU type recorded.
 - Plugins: an installed Python package can add API routes, steps in the
   worker's tick, tables with their own migration history, and bootstrap
   seeding, enabled by name with `AUTOTUNE_PLUGINS`. See `docs/plugins.md`;

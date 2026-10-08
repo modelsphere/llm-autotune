@@ -331,6 +331,52 @@ async def update_machine(
     return await _one_out(session, machine)
 
 
+@router.post("/{machine_id}/smoke-test")
+async def smoke_test(
+    machine_id: int,
+    pod: bool = False,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_async_session),
+):
+    """Can the platform reach this machine at all? The driver walks the path a
+    launch takes (ssh → docker → GPUs, or credential → RBAC → node → endpoint)
+    and reports each step. Changes nothing on the machine row; `pod=true` lets a
+    k8s machine place (and delete) a throwaway pod on its node."""
+    machine = await _get_machine(machine_id, session)
+    driver = _driver_for(machine)
+    try:
+        result = await anyio.to_thread.run_sync(
+            lambda: driver.smoke_test(_machine_info(machine), probe_pod=pod)
+        )
+    except Exception as exc:  # noqa: BLE001 — the test is the report, never a 500
+        result = {"supported": True, "ok": False, "checks": [
+            {"name": "driver", "status": "fail", "detail": f"smoke test crashed: {exc}"},
+        ]}
+    if not result.get("supported"):
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"the {machine.driver or 'ssh_docker'} substrate has no smoke test",
+        )
+    # Not a reachability question, but the reason a machine that works can
+    # still not be picked: whatever matches machines by card type skips it.
+    if not machine.gpu_type:
+        result["checks"].append({
+            "name": "card type", "status": "warn",
+            "detail": "no GPU type recorded on the platform — anything that matches "
+                      "machines by card type passes this one by; set it on Edit "
+                      "(or Refresh capacity)",
+        })
+    session.add(
+        Event(
+            actor=user.username,
+            kind="machine_smoke_tested",
+            payload={"machine": machine.name, "pod": pod, **result},
+        )
+    )
+    await session.commit()
+    return {"machine": machine.name, "driver": machine.driver or "ssh_docker", **result}
+
+
 @router.delete("/{machine_id}")
 async def delete_machine(
     machine_id: int,

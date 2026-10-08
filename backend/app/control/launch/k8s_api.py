@@ -88,6 +88,12 @@ class K8sApi(ABC):
     def list(self, resource: str, label_selector: str = "") -> list[dict]:
         """Objects of a kind, optionally narrowed by label selector."""
 
+    def can_i(self, verb: str, resource: str, group: str = "") -> bool | None:
+        """Whether this credential may `verb` `resource` in the namespace (a
+        SelfSubjectAccessReview — asks the API server, creates nothing). None
+        when the transport cannot ask, which a caller reads as "unknown"."""
+        return None
+
     @abstractmethod
     def logs(self, label_selector: str, tail: int = 200) -> str:
         """Recent logs from the pods matching a selector (the operator labels a
@@ -226,6 +232,18 @@ class KubectlApi(K8sApi):
         except (json.JSONDecodeError, AttributeError):
             return []
 
+    def can_i(self, verb: str, resource: str, group: str = "") -> bool | None:
+        target = f"{resource}.{group}" if group else resource
+        result = self._run(["auth", "can-i", verb, target])
+        answer = result.stdout.strip().lower()
+        # Exit 1 with "no" is an answer, not an error; anything else on a
+        # non-zero exit is the API server refusing to say.
+        if answer.startswith("yes"):
+            return True
+        if answer.startswith("no"):
+            return False
+        raise K8sError(f"kubectl auth can-i failed: {result.stderr.strip()[:500]}")
+
     def logs(self, label_selector: str, tail: int = 200) -> str:
         # --all-containers so the engine's log is captured even when the pod
         # runs a sidecar; --prefix so multi-pod output stays attributable.
@@ -275,6 +293,8 @@ class ClientApi(K8sApi):
             return "service"
         if kind == "Job":
             return "job"
+        if kind == "Pod":
+            return "pod"
         return f"{self.cluster.k8s_cr_plural}.{self.cluster.k8s_cr_group}"
 
     def _ensure(self) -> None:
@@ -322,6 +342,8 @@ class ClientApi(K8sApi):
         self._apps = client.AppsV1Api(self._api_client)
         self._batch = client.BatchV1Api(self._api_client)
         self._custom = client.CustomObjectsApi(self._api_client)
+        self._authz = client.AuthorizationV1Api(self._api_client)
+        self._client_models = client
 
     def _sanitize(self, obj) -> dict:
         """Typed model -> the camelCase JSON dict the driver reads."""
@@ -343,6 +365,11 @@ class ClientApi(K8sApi):
             return (
                 lambda item: self._batch.create_namespaced_job(self._ns, item),
                 lambda name, item: self._batch.replace_namespaced_job(name, self._ns, item),
+            )
+        if kind == "Pod":
+            return (
+                lambda item: self._core.create_namespaced_pod(self._ns, item),
+                lambda name, item: self._core.replace_namespaced_pod(name, self._ns, item),
             )
         g, v, plural = self._cr()
         return (
@@ -384,6 +411,8 @@ class ClientApi(K8sApi):
                 return self._sanitize(self._core.read_namespaced_service(name, self._ns))
             if resource == "job":
                 return self._sanitize(self._batch.read_namespaced_job(name, self._ns))
+            if resource == "pod":
+                return self._sanitize(self._core.read_namespaced_pod(name, self._ns))
             g, v, plural = self._cr()
             return self._custom.get_namespaced_custom_object(g, v, self._ns, plural, name)
         except self._ApiException as exc:
@@ -405,6 +434,8 @@ class ClientApi(K8sApi):
                 self._batch.delete_namespaced_job(
                     name, self._ns, propagation_policy="Background"
                 )
+            elif resource == "pod":
+                self._core.delete_namespaced_pod(name, self._ns, grace_period_seconds=0)
             else:
                 g, v, plural = self._cr()
                 self._custom.delete_namespaced_custom_object(g, v, self._ns, plural, name)
@@ -438,6 +469,22 @@ class ClientApi(K8sApi):
         except self._ApiException as exc:
             raise K8sError(f"client list {resource} failed: {exc.reason}") from exc
         return [self._sanitize(item) for item in resp.items]
+
+    def can_i(self, verb: str, resource: str, group: str = "") -> bool | None:
+        self._ensure()
+        c = self._client_models
+        review = c.V1SelfSubjectAccessReview(
+            spec=c.V1SelfSubjectAccessReviewSpec(
+                resource_attributes=c.V1ResourceAttributes(
+                    namespace=self._ns, verb=verb, resource=resource, group=group
+                )
+            )
+        )
+        try:
+            resp = self._authz.create_self_subject_access_review(review)
+        except self._ApiException as exc:
+            raise K8sError(f"client access review failed: {exc.reason}") from exc
+        return bool(resp.status and resp.status.allowed)
 
     def logs(self, label_selector: str, tail: int = 200) -> str:
         self._ensure()

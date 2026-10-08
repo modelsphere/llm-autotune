@@ -37,9 +37,12 @@ from app.control.launch.base import (
     WorkloadSpec,
     WorkloadState,
     merge_volumes,
+    smoke_check,
+    smoke_result,
 )
 from app.control.launch.failures import classify_exit, classify_failure
 from app.core.config import get_settings
+from app.hardware import normalize_gpu_type
 
 logger = logging.getLogger(__name__)
 
@@ -896,6 +899,50 @@ class SshDockerDriver(DeploymentDriver):
         return {k: v for k, v in snapshot.items() if v}
 
     # -- helpers -------------------------------------------------------------
+
+    def smoke_test(self, machine, probe_pod: bool = False) -> dict:
+        """ssh in, then ask docker and the driver what a launch would ask them.
+        Each step needs the one before it, so the first failure ends the test."""
+        checks: list[dict] = []
+        target = f"{machine.ssh_user}@{machine.host}:{machine.ssh_port}"
+
+        def run(cmd: str) -> tuple[bool, str]:
+            """(ok, stdout) — or (False, why) when it failed or timed out."""
+            try:
+                result = self._ssh(machine, cmd, timeout=45)
+            except RuntimeError as exc:  # timed out
+                return False, str(exc)[:400]
+            if result.returncode != 0:
+                return False, (result.stderr.strip() or f"exit {result.returncode}")[:400]
+            return True, result.stdout
+
+        ok, out = run("true")
+        if not ok:
+            checks.append(smoke_check("ssh", "fail", f"cannot log in as {target}: {out}"))
+            return smoke_result(checks)
+        checks.append(smoke_check("ssh", "pass", f"logged in as {target}"))
+
+        ok, out = run("docker info --format '{{.ServerVersion}}'")
+        if not ok:
+            checks.append(smoke_check("docker", "fail", f"docker daemon not usable: {out}"))
+            return smoke_result(checks)
+        checks.append(smoke_check("docker", "pass", f"docker {out.strip()}"))
+
+        ok, out = run("nvidia-smi --query-gpu=name --format=csv,noheader")
+        if not ok:
+            checks.append(smoke_check("gpus", "fail", f"nvidia-smi failed: {out}"))
+            return smoke_result(checks)
+        names = [line.strip() for line in out.splitlines() if line.strip()]
+        kinds = sorted({normalize_gpu_type(name) or name for name in names})
+        seen = f"{len(names)} × {', '.join(kinds) or 'GPU'}"
+        if len(names) != machine.gpu_count:
+            checks.append(smoke_check(
+                "gpus", "warn",
+                f"{seen} visible, but the platform records {machine.gpu_count}",
+            ))
+        else:
+            checks.append(smoke_check("gpus", "pass", f"{seen} visible"))
+        return smoke_result(checks)
 
     def _check_port_free(self, machine, port: int) -> None:
         result = self._ssh(
