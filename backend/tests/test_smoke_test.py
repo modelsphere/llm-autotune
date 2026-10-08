@@ -242,7 +242,7 @@ def _ssh_driver(monkeypatch, answers: dict[str, tuple[int, str, str]]):
 
 
 def _box(**over) -> MachineInfo:
-    return MachineInfo(**{"name": "nv-50", "host": "10.0.0.50", "gpu_count": 8, **over})
+    return MachineInfo(**{"name": "node-50", "host": "10.0.0.50", "gpu_count": 8, **over})
 
 
 def test_ssh_failure_stops_the_test(monkeypatch):

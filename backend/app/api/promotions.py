@@ -331,8 +331,7 @@ async def _promote(
             raise HTTPException(status.HTTP_409_CONFLICT, draft.reason)
         # A branch named on the request sticks to the campaign: the next winner
         # of the same tuning goes to the same release branch without anyone
-        # having to remember which one it was. Not for a Hub measurement — its
-        # campaign is a hidden one-config row nobody reads.
+        # having to remember which one it was.
         if branch:
             resolved.campaign.deploy_branch = branch.strip()
 

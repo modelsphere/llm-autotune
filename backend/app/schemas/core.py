@@ -759,14 +759,6 @@ class PromoteRequest(BaseModel):
     promote_fields: list[str] = Field(default_factory=list)
 
 
-class SubmissionPromoteRequest(BaseModel):
-    """Propose a measured Baseline Hub submission to production."""
-
-    target: str = ""
-    notes: str = ""
-    branch: str = ""
-    apply_removals: bool = False
-    promote_fields: list[str] = Field(default_factory=list)
 
 
 class DeployBranchIn(BaseModel):

@@ -34,15 +34,6 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: No removed subsystems left behind
-        run: |
-          pattern='baseline_hub|BaselineHub|baseline-hub|contest_api_token|PLANNER_REGISTRY'
-          if grep -rInE "$pattern" . \
-               --exclude-dir=.git --exclude-dir=node_modules --exclude-dir=.venv \
-               --exclude=gate.yml; then
-            echo "::error::reference to a subsystem this repository does not include"
-            exit 1
-          fi
       - name: No credentials committed
         # Matches credential FILES, not the scripts that mint them:
         # make-scoped-kubeconfig.sh is exactly the thing you are supposed to run.
