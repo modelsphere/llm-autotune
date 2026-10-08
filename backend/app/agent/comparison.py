@@ -73,7 +73,7 @@ DEFAULT_SERIES_METRICS = (
 
 _LOWER_HINTS = (
     "_ms", "latency", "ttft", "tpot", "itl", "fail", "error", "http_status_4", "http_status_5",
-    "unfinished", "wall_time",
+    "unfinished", "wall_time", "elapsed",
 )
 # Moved, but not better or worse: how much was sent, how many landed in a
 # bucket, which dataset it was. A replay reports dozens of these.
@@ -182,10 +182,27 @@ def deltas_between(base: ResultsPart, att: ResultsPart) -> Deltas:
 # -- config diff -----------------------------------------------------------------
 
 
+def _same(a: Any, b: Any) -> bool:
+    """Equal as a launch setting: `2` and `"2"`, `0.9` and `"0.90"`, `True`
+    and `"true"` are the same flag value, whichever way the form stored it."""
+    if a == b:
+        return True
+    if isinstance(a, dict | list) or isinstance(b, dict | list):
+        return False
+    sa, sb = str(a).strip().lower(), str(b).strip().lower()
+    if sa == sb:
+        return True
+    try:
+        return float(sa) == float(sb)
+    except ValueError:
+        return False
+
+
 def _dict_diff(base: dict[str, Any], att: dict[str, Any]) -> dict[str, Any]:
     added = {k: att[k] for k in att if k not in base}
     removed = {k: base[k] for k in base if k not in att}
-    changed = {k: {"from": base[k], "to": att[k]} for k in base if k in att and base[k] != att[k]}
+    changed = {k: {"from": base[k], "to": att[k]}
+               for k in base if k in att and not _same(base[k], att[k])}
     return {"added": added, "removed": removed, "changed": changed}
 
 

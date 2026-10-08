@@ -5,17 +5,15 @@ object whether served alone or embedded in a document — that is the whole
 point of having parts.
 
 Sources, so nobody has to rediscover them:
-- launch: the measurement (frozen config) when the run was harvested, else
-  the submission, else the campaign + candidate. The docker line is the one
-  stored on the run; the engine command comes from the same adapter that
-  produced it.
+- launch: the campaign + candidate. The docker line is the one stored on the
+  run; the engine command comes from the same adapter that produced it.
 - environment: `Run.env_snapshot` (the in-container version probe) plus the
   machine row.
-- benchmark: the measurement's `module_reports` for frozen params, the raw
-  LLMBench submission for the full metric_configs, the track for the
-  platform's overlay.
-- results: the latest llmbench `Result` (metrics + raw), the board's own
-  scenario summary, the measurement's verdicts.
+- benchmark: the module verdicts recomputed from the raw LLMBench submission
+  for frozen params and the full metric_configs, the campaign's objective for
+  the platform's overlay.
+- results: the latest llmbench `Result` (metrics + raw), its scenario
+  summary and module verdicts.
 """
 
 from __future__ import annotations
@@ -424,6 +422,22 @@ def _meets(level: dict[str, Any], gate: Gate | None, pct: str) -> bool:
     return not (gate.min_request_output_tps and (tps is None or tps < gate.min_request_output_tps))
 
 
+# The machine every throughput is normalized to: LLMBench's card-norm metrics
+# are "as if on 8 cards" (a replay's tpm_card_norm / 480 = per GPU per second),
+# and a report compares configs on one such machine, whatever cards each used.
+MACHINE_GPUS = 8
+
+
+def _per_machine(level: dict[str, Any]) -> dict[str, Any]:
+    """Add each per-GPU rate scaled to one MACHINE_GPUS-GPU machine — the
+    number a report quotes as total serving throughput, so the agent never
+    multiplies anything itself."""
+    for kind in ("total", "output", "input"):
+        v = level.get(f"{kind}_tps_per_gpu")
+        level[f"{kind}_tps_per_machine"] = v * MACHINE_GPUS if v is not None else None
+    return level
+
+
 def best_level_of(
     scenario: ScenarioOut, *, cards: int, ttft_percentile: str, gate: Gate | None
 ) -> dict[str, Any]:
@@ -439,14 +453,14 @@ def best_level_of(
         output = _number(scenario.summary.get("output_tpm_card_norm"))
         if total is None:
             return {}
-        return {
+        return _per_machine({
             "concurrency": _number(scenario.summary.get("concurrency")),
             "total_tps_per_gpu": total / 480.0,
             "output_tps_per_gpu": output / 480.0 if output is not None else None,
             "input_tps_per_gpu": (total - output) / 480.0 if output is not None else None,
             "ttft_ms": _number(scenario.summary.get("ttft_ms")),
             "request_output_tps": _number(scenario.summary.get("request_output_tps")),
-        }
+        })
     passing = [
         lv for lv in scenario.levels
         if _meets(lv.metrics, gate, ttft_percentile)
@@ -460,14 +474,14 @@ def best_level_of(
     output = _number(m.get("output_tps_mean"))  # the guidellm sweep's name
     if output is None:
         output = _number(m.get("output_tps"))
-    return {
+    return _per_machine({
         "concurrency": best.concurrency,
         "total_tps_per_gpu": total / per_gpu,
         "output_tps_per_gpu": output / per_gpu if output is not None else None,
         "input_tps_per_gpu": (total - output) / per_gpu if output is not None else None,
         "ttft_ms": _number(m.get(f"ttft_{ttft_percentile}_ms")),
         "request_output_tps": _number(m.get("request_output_tps")),
-    }
+    })
 
 
 def _levels(metrics_json: dict[str, Any]) -> list[ScenarioLevel]:

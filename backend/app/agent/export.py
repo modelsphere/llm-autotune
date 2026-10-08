@@ -42,6 +42,7 @@ def _payload(r: AgentReport) -> dict[str, Any]:
         "markdown": r.markdown,
         "comparison": r.comparison or {},
         "labels": list(r.labels or []),
+        "scenarioLabels": dict(r.scenario_labels or {}),
         "assets": {
             a["name"]: f"data:{a.get('content_type') or 'application/octet-stream'};base64,"
             f"{a.get('data_base64', '')}"
@@ -110,8 +111,9 @@ type: summary
 ````
 
 `chart` takes `type: summary | sweep | agentic` (the last two with a
-`scenario:`), `table` takes `type: setup | summary | quality | scenarios | diff`
-(`diff` with an `attempt:`), and `command` takes `config: baseline | <attempt>`.
+`scenario:`), `table` takes
+`type: setup | slo | summary | quality | scenarios | diff` (`diff` with an
+`attempt:`), and `command` takes `config: baseline | <attempt>`.
 A plain markdown viewer shows them as code blocks; the renderer draws them.
 
 ## Rendering it on another site
@@ -124,11 +126,12 @@ A plain markdown viewer shows them as code blocks; the renderer draws them.
                fetch('comparison.json').then(r => r.json())])
     .then(([markdown, comparison]) => AutotuneReport.renderReport(
       document.getElementById('report'),
-      {{ markdown, comparison, lang: 'en', labels: [], resolveAsset: (name) => name }}))
+      {{ markdown, comparison, lang: 'en', labels: [], scenarioLabels: {{}},
+         resolveAsset: (name) => name }}))
 </script>
 ```
 
-Take `lang`, `labels` and the file names from `report.json`. Images the
+Take `lang`, `labels`, `scenarioLabels` and the file names from `report.json`. Images the
 markdown references by bare name sit next to it in this folder.
 """
 
@@ -176,6 +179,7 @@ def render_zip(report: AgentReport, translations: list[AgentReport]) -> bytes:
             manifest["reports"].append({
                 "id": r.id, "lang": lang, "title": r.title, "markdown": md,
                 "comparison": cmp_name, "labels": list(r.labels or []),
+                "scenarioLabels": dict(r.scenario_labels or {}),
             })
         put("report.json", json.dumps(manifest, indent=2, ensure_ascii=False))
         if RENDERER.is_file():

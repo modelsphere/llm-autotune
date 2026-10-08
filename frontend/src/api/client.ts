@@ -852,6 +852,8 @@ export interface AgentReport {
   lang: string
   translation_of: number | null
   labels: string[]
+  /** What this report calls its scenarios, per scenario key. */
+  scenario_labels: Record<string, { name?: string; description?: string }>
 }
 
 export interface AgentReportDetail extends AgentReport {

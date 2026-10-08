@@ -63,6 +63,7 @@ async function load() {
     comparison: detail.comparison as unknown as Comparison,
     lang: detail.lang === 'zh' ? 'zh' : 'en',
     labels: detail.labels,
+    scenarioLabels: detail.scenario_labels ?? {},
     resolveAsset: (name) => urls[name] ?? name,
   })
 }

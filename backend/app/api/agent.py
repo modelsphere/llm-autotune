@@ -50,6 +50,7 @@ from app.schemas.agent import (
     ReportTranslation,
     ResultsPart,
     RunDocument,
+    ScenarioLabel,
 )
 
 router = APIRouter(prefix="/agent/v1", tags=["agent"])
@@ -370,6 +371,10 @@ def _report_out(r: AgentReport) -> ReportOut:
         lang=r.lang or "en",
         translation_of=r.translation_of,
         labels=list(r.labels or []),
+        scenario_labels={
+            k: ScenarioLabel(**v) if isinstance(v, dict) else ScenarioLabel(name=str(v))
+            for k, v in (r.scenario_labels or {}).items()
+        },
     )
 
 
@@ -470,6 +475,13 @@ async def create_report(
             status.HTTP_422_UNPROCESSABLE_ENTITY, "bad_labels",
             detail=f"labels needs {1 + len(body.attempt_run_ids)} names, baseline first",
         )
+    keys = {s.key for s in doc.baseline.results.scenarios}
+    unknown = sorted(set(body.scenario_labels) - keys)
+    if unknown:
+        raise _error(
+            status.HTTP_422_UNPROCESSABLE_ENTITY, "bad_scenario_labels", unknown,
+            detail=f"no such scenario: {', '.join(unknown)}; have {', '.join(sorted(keys))}",
+        )
     translation_of = None
     if body.translation_of is not None:
         original = await session.get(AgentReport, body.translation_of)
@@ -493,6 +505,7 @@ async def create_report(
         lang=body.lang,
         translation_of=translation_of,
         labels=list(body.labels),
+        scenario_labels={k: v.model_dump() for k, v in body.scenario_labels.items()},
         baseline_run_id=body.baseline_run_id,
         attempt_run_ids=list(body.attempt_run_ids),
         campaign_id=_campaign_of(doc),

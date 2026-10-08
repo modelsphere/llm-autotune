@@ -122,17 +122,13 @@ ran, produced by the same renderer, so it is copy-pasteable.
   },
   "origin": {
     "source": "campaign",
-    "submission_id": 91, "submission_name": "kv fp8", "version": 1,
-    "supersedes_submission_id": 88, "notes": "same as #88 but kv cache fp8",
-    "campaign_id": 402, "candidate_id": 1190, "submitted_by": "alice"
+    "campaign_id": 402, "campaign_name": "glm-5.2 kv fp8", "candidate_id": 1190
   }
 }
 ```
 
 `engine_flags` maps each canonical arg to the engine's real flag, so an agent
 can write "`--kv-cache-dtype fp8_e4m3`" in prose without knowing the engine.
-`notes` is the human's stated intent for this attempt; the comparison document
-relies on it for the narrative.
 
 ### EnvironmentPart
 
@@ -162,11 +158,9 @@ The benchmark settings, from both owners, with frozen and live kept apart.
   and the `metric_configs` that say which metrics are redlines, display
   thresholds or score inputs.
 - **The platform owns** the campaign's overlay: the ranking metric, the SLO its
-  objective implies,
-  reference, ranking metric, board columns, pricing, the template it was
-  created from and the config hash it recorded.
+  objective implies, the gate and the run's time limit.
 - **Frozen** is what the run actually measured against: each module run's
-  locked params and thresholds, as stored on the measurement at harvest time.
+  locked params and thresholds, as LLMBench recorded them for this run.
   This is authoritative for the report. **Live** is what the benchmark says
   today, which may have been edited since; it is included so the agent can
   say "the benchmark has since changed" and for `drifted`.
@@ -200,11 +194,9 @@ The benchmark settings, from both owners, with frozen and live kept apart.
   "platform": {
     "ranking_metric": "perf_guidellm_sweep.output_tpm_card_norm",
     "slo": {"ttft_percentile": "p50", "max_ttft_ms": 60000, "min_request_output_tps": 15},
-    "gate": {"metric": "perf_guidellm_sweep.reported_level_meets_slo", "…": "…"},
-    "quality_floors": {"opencompass.gsm8k": 0.92},
-    "reference": {"run_id": 790, "submission_id": 80},
-    "board_columns": [{"key": "perf_guidellm_sweep.ttft_p50_ms", "label": "TTFT p50"}],
-    "pricing": {"display": "usd", "usd": {"input_per_m": 0.6, "output_per_m": 2.2}}
+    "gate_text": "TTFT p50 ≤ 60 s and ≥ 15 output tok/s per request",
+    "max_run_minutes": 150,
+    "objective": {"target_metric": "perf_guidellm_sweep.output_tpm_card_norm", "…": "…"}
   }
 }
 ```
@@ -217,7 +209,7 @@ results without guessing.
 ### ResultsPart
 
 What was measured, at four resolutions, all from the one stored LLMBench
-submission and the one stored measurement row. Nothing is recomputed.
+submission. Nothing is recomputed.
 
 ```json
 {
@@ -451,6 +443,20 @@ years later even if the benchmark drifted. `GET /api/agent/v1/reports/{id}`
 returns all of it. The frontend renders markdown at `/reports/{id}` and
 serves the assets by relative name.
 
+A report may also carry `scenario_labels`: for each scenario key of its
+comparison, `{name, description}` in the report's language, used by every
+chart and table in place of the token shape ("Input 50k / output 1.5k").
+A key the comparison does not have is refused (`422 bad_scenario_labels`).
+
+The renderer leads with whole-server throughput, not per GPU: the summary
+chart and the sweep throughput panels plot the measured server totals, and
+the `summary` table has one row per scenario and config (best concurrency
+within SLO, total, per GPU). A `table` block of `type: slo` defines the SLO
+metrics and the objective; `quality` gives both scores with the absolute
+(percentage points) and relative change. Captions are the renderer's: every
+chart and the `summary` and `quality` tables get a numbered caption in fixed
+words, and a caption line the agent wrote itself is refused (`bad_blocks`).
+
 ---
 
 ## Conventions the agent must follow
@@ -503,8 +509,7 @@ preferred to discouraged:
 2. **Existing platform API** (`/api/campaigns/*`,
    `/api/runs/*`, `/api/openapi.json`). Same `X-API-Key` works. A strong agent
    may use it when the agent API lacks a field. The skill file lists these
-   routes as "allowed, not preferred" and forbids the mutating ones except
-   entry submission.
+   routes as "allowed, not preferred" and forbids the mutating ones.
 3. **Direct database queries.** Possible, not recommended, and
    never from a container we ship. If a human wants it for a one-off, use a
    read-only Postgres role (`agent_ro`, SELECT only). Schemas are internal
@@ -537,10 +542,10 @@ artifact.
 - `LaunchPart` is `LaunchConfig.from_run` plus the existing renderers in
   `backend/app/control/launch/ssh_docker.py` and `engines/flags.py`.
 - `EnvironmentPart` is `Run.env_snapshot` plus the machine row.
-- `BenchmarkPart.modules[].params` come from the measurement's
+- `BenchmarkPart.modules[].params` come from the run's
   `module_reports[].params` (frozen); live comes from the existing
 - `ResultsPart.scenarios[].levels[]` come from `Result.raw` (the `cN` groups
-  per module run), `summary` from `board.scenarios_of`, `verdicts` from
+  per module run), `summary` from `scenarios_of`, `verdicts` from
   `module_reports` plus `quality_of`.
 - `ComparisonDocument.catalog` is `metrics_catalog`.
 - New table: `agent_reports` (id, title, baseline_run_id, attempt_run_ids,

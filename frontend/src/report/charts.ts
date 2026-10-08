@@ -16,13 +16,18 @@ import { SVGRenderer } from 'echarts/renderers'
 import {
   cardsOf,
   concurrencyText,
+  hardwareText,
   num,
+  pctText,
+  MACHINE_GPUS,
+  perMachine,
   runsOf,
   scenarioDeltas,
   scenarioName,
   scenarioOf,
   type Comparison,
   type Delta,
+  type ScenarioLabels,
 } from './data'
 import { tr, type Lang } from './strings'
 
@@ -38,7 +43,7 @@ type Option = echarts.EChartsCoreOption
 
 function pctLabel(d: Delta | undefined): string {
   if (!d || d.pct == null) return ''
-  return `${d.pct > 0 ? '+' : ''}${d.pct.toFixed(1)}%`
+  return pctText(d.pct)
 }
 
 const axisNumber = (v: number) => num(v)
@@ -56,26 +61,29 @@ function base(lang: Lang): Option {
   }
 }
 
-export function summaryChart(doc: Comparison, lang: Lang, labels: Map<number, string>): Option {
+export function summaryChart(doc: Comparison, lang: Lang, labels: Map<number, string>,
+  names: ScenarioLabels = {}): Option {
   const scenarios = doc.baseline.results.scenarios
   const runs = runsOf(doc)
+  const hardware = ` (${hardwareText(doc)})`
   return {
     ...base(lang),
-    title: { text: tr(lang, 'summaryTitle'), left: 'center', textStyle: { fontSize: 14, fontWeight: 600 } },
+    title: { text: tr(lang, 'summaryTitle') + hardware, left: 'center',
+      textStyle: { fontSize: 14, fontWeight: 600 } },
     legend: { bottom: 0 },
-    grid: { left: 64, right: 24, top: 56, bottom: 64 },
+    grid: { left: 72, right: 24, top: 56, bottom: 64 },
     tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' }, confine: true,
-      valueFormatter: (v: number) => `${num(v)} ${tr(lang, 'tpsPerGpu')}` },
-    xAxis: { type: 'category', data: scenarios.map((s) => scenarioName(s, lang)),
+      valueFormatter: (v: number) => `${num(v)} ${tr(lang, 'tps')}` },
+    xAxis: { type: 'category', data: scenarios.map((s) => scenarioName(s, lang, names)),
       axisLabel: { interval: 0, width: 140, overflow: 'break' } },
-    yAxis: { type: 'value', name: tr(lang, 'totalPerGpu'), nameLocation: 'middle', nameGap: 52,
+    yAxis: { type: 'value', name: tr(lang, 'totalPerGpu'), nameLocation: 'middle', nameGap: 58,
       axisLabel: { formatter: axisNumber } },
     series: runs.map((r, i) => ({
       type: 'bar',
       name: labels.get(r.run_id) ?? r.label,
       barMaxWidth: 56,
       data: scenarios.map((s) => {
-        const value = scenarioOf(r, s.key)?.best_level?.total_tps_per_gpu ?? null
+        const value = perMachine(scenarioOf(r, s.key)?.best_level?.total_tps_per_gpu)
         const d = i ? scenarioDeltas(doc, r.run_id, s.key)?.best_level?.total_tps_per_gpu : undefined
         return { value, label: { show: i > 0 && !!d, formatter: pctLabel(d) } }
       }),
@@ -109,7 +117,7 @@ function sweepPair(doc: Comparison, lang: Lang, labels: Map<number, string>, key
   const slo = doc.benchmark.platform.slo ?? {}
   const sloPct = slo.ttft_percentile ?? 'p50'
   const narrow = width < 720
-  const top = 76
+  const top = 76 + (bestMarks ? 14 * Math.max(0, runs.length - 1) : 0)
   const grids = narrow
     ? [{ left: 64, right: 20, top, height: 200 }, { left: 64, right: 20, top: top + 270, height: 200 }]
     : [{ left: 64, right: '53%', top, bottom: 64 }, { left: '57%', right: 20, top, bottom: 64 }]
@@ -124,7 +132,11 @@ function sweepPair(doc: Comparison, lang: Lang, labels: Map<number, string>, key
     panels.forEach((panel, axis) => {
       const marks: object[] = []
       if (bestMarks && best != null) {
-        marks.push({ xAxis: best, label: { show: false }, lineStyle: { color, type: 'dashed', width: 1.5 } })
+        marks.push({
+          xAxis: best, lineStyle: { color, type: 'dashed', width: 1.5 },
+          label: { show: true, position: 'end', color, fontSize: 11, fontWeight: 600,
+            distance: [0, 2 + 14 * i], formatter: tr(lang, 'bestMark', { c: concurrencyText(best) }) },
+        })
       }
       if (panel.slo && i === 0 && slo.ttft_ms && panel.latency?.shown === sloPct) {
         marks.push({ yAxis: slo.ttft_ms, lineStyle: { color: '#d1495b', type: 'dashed' },
@@ -164,7 +176,9 @@ function sweepPair(doc: Comparison, lang: Lang, labels: Map<number, string>, key
         const panel = panels[p.seriesIndex % 2]
         const [c, v] = p.data.value
         const head = `${p.seriesName}<br>${tr(lang, 'concurrency')} ${concurrencyText(c)}`
-        if (!panel.latency || !p.data.all) return `${head}: <b>${num(v)}</b> ${panel.unit}`
+        if (!panel.latency || !p.data.all) {
+          return `${head}: <b>${num(v)}</b> ${panel.unit}`
+        }
         const shown = panel.latency.shown
         return head + PERCENTILES.map((q) => {
           const text = `${q}: ${num(p.data.all![q])} ${panel.unit}`
@@ -179,21 +193,24 @@ function sweepPair(doc: Comparison, lang: Lang, labels: Map<number, string>, key
   }
 }
 
-const perGpu = (name: string) => (lv: Level, cards: number) => Number(lv.metrics[name] ?? NaN) / cards
 const metric = (name: string) => (lv: Level) => Number(lv.metrics[name] ?? NaN)
+/** A measured rate normalized to MACHINE_GPUS GPUs: × 8 / the GPUs it ran on. */
+const onMachine = (name: string) => (lv: Level, cards: number) =>
+  Number(lv.metrics[name] ?? NaN) / cards * MACHINE_GPUS
 
-function sweepTitle(doc: Comparison, lang: Lang, key: string): string {
+function sweepTitle(doc: Comparison, lang: Lang, key: string, names: ScenarioLabels): string {
   const scenario = scenarioOf(doc.baseline, key)
-  return scenario ? scenarioName(scenario, lang) : key
+  return scenario ? scenarioName(scenario, lang, names) : key
 }
 
-/** A sweep's first figure: total and output throughput per GPU by concurrency. */
+/** A sweep's first figure: total and output throughput by concurrency, on one
+ *  8-GPU machine like every throughput in a report. */
 export function sweepThroughputChart(doc: Comparison, lang: Lang, labels: Map<number, string>,
-  key: string, width: number): Option {
+  key: string, width: number, names: ScenarioLabels = {}): Option {
   return sweepPair(doc, lang, labels, key, width,
-    tr(lang, 'sweepThroughput', { name: sweepTitle(doc, lang, key) }), tr(lang, 'bestMarks'), [
-      { title: tr(lang, 'totalPanel'), unit: tr(lang, 'tpsPerGpu'), value: perGpu('total_tps_mean') },
-      { title: tr(lang, 'outputPanel'), unit: tr(lang, 'tpsPerGpu'), value: perGpu('output_tps_mean') },
+    tr(lang, 'sweepThroughput', { name: sweepTitle(doc, lang, key, names) }), tr(lang, 'bestMarks'), [
+      { title: tr(lang, 'totalPanel'), unit: tr(lang, 'tps'), value: onMachine('total_tps_mean') },
+      { title: tr(lang, 'outputPanel'), unit: tr(lang, 'tps'), value: onMachine('output_tps_mean') },
     ], true)
 }
 
@@ -206,18 +223,18 @@ export function sloPercentile(doc: Comparison): Percentile {
 /** A sweep's second figure: TTFT (with the SLO) and TPOT at one percentile,
  *  switched by the buttons the renderer puts over it. */
 export function sweepLatencyChart(doc: Comparison, lang: Lang, labels: Map<number, string>,
-  key: string, width: number, pct: Percentile): Option {
+  key: string, width: number, pct: Percentile, names: ScenarioLabels = {}): Option {
   return sweepPair(doc, lang, labels, key, width,
-    tr(lang, 'sweepLatency', { name: sweepTitle(doc, lang, key) }), '', [
+    tr(lang, 'sweepLatency', { name: sweepTitle(doc, lang, key, names) }), '', [
       { title: tr(lang, 'ttftAxis', { pct }), unit: 'ms', value: metric(`ttft_${pct}_ms`),
         latency: { prefix: 'ttft', shown: pct }, slo: true },
       { title: tr(lang, 'tpotAxis', { pct }), unit: 'ms', value: metric(`tpot_${pct}_ms`),
         latency: { prefix: 'tpot', shown: pct } },
-    ], false)
+    ], true)
 }
 
 export function agenticChart(doc: Comparison, lang: Lang, labels: Map<number, string>,
-  key: string, width: number): Option {
+  key: string, width: number, names: ScenarioLabels = {}): Option {
   const runs = runsOf(doc)
   const narrow = width < 720
   const tput: [string, string][] = [
@@ -244,12 +261,13 @@ export function agenticChart(doc: Comparison, lang: Lang, labels: Map<number, st
       }),
       label: { position: 'top', fontWeight: 600, fontSize: 11 },
     })
-    series.push(bar(tput, 60 * cardsOf(r), 0), bar(ttft, 1, 1))
+    // tokens/min → tokens/s, normalized to 8 GPUs
+    series.push(bar(tput, (60 * cardsOf(r)) / MACHINE_GPUS, 0), bar(ttft, 1, 1))
   })
   return {
     ...base(lang),
     title: [
-      { text: scenario ? scenarioName(scenario, lang) : key, left: 'center', textStyle: { fontSize: 14, fontWeight: 600 } },
+      { text: scenario ? scenarioName(scenario, lang, names) : key, left: 'center', textStyle: { fontSize: 14, fontWeight: 600 } },
     ],
     legend: { bottom: 0, data: runs.map((r) => labels.get(r.run_id) ?? r.label) },
     tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' }, confine: true, valueFormatter: (v: number) => num(v) },
@@ -259,7 +277,7 @@ export function agenticChart(doc: Comparison, lang: Lang, labels: Map<number, st
       { type: 'category', gridIndex: 1, data: ttft.map(([, l]) => `TTFT ${l}`) },
     ],
     yAxis: [
-      { type: 'value', gridIndex: 0, name: tr(lang, 'throughputPanel') + ` (${tr(lang, 'tpsPerGpu')})`,
+      { type: 'value', gridIndex: 0, name: tr(lang, 'throughputPanel'),
         nameLocation: 'middle', nameGap: 52, axisLabel: { formatter: axisNumber } },
       { type: 'value', gridIndex: 1, name: tr(lang, 'ttftPanel'), nameLocation: 'middle', nameGap: 52,
         axisLabel: { formatter: axisNumber } },
