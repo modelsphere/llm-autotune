@@ -11,6 +11,7 @@ import time
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.exc import OperationalError
 
+from app import plugins
 from app.control.orchestrator.singleton import WorkerLock, WorkerLockError
 from app.control.orchestrator.supervisor import Supervisor
 from app.core.config import get_settings
@@ -32,19 +33,23 @@ def wait_for_schema(url: str, poll_seconds: float = 5.0) -> None:
     pod until then, and under `helm install --wait` the install would never
     finish, since the hook only runs once this pod is up. Waiting says what is
     going on instead."""
+    # The platform's version table, and each enabled plugin's that has a
+    # schema of its own: a plugin's tick steps read its tables too.
+    tables = ["alembic_version"] + [
+        p.version_table for p in plugins.enabled() if p.migrations
+    ]
     engine = create_engine(url)
     reason = ""
     try:
         while True:
             try:
                 with engine.connect() as connection:
-                    if inspect(connection).has_table("alembic_version") and connection.execute(
-                        text("SELECT version_num FROM alembic_version")
-                    ).first():
+                    missing = [t for t in tables if not _stamped(connection, t)]
+                    if not missing:
                         if reason:
                             logger.info("schema is ready")
                         return
-                now = "the schema (the migrate job creates it)"
+                now = f"the schema (the migrate job creates it; no {missing[0]} yet)"
             except OperationalError as exc:
                 now = f"the database ({str(exc).splitlines()[0]})"
             if now != reason:
@@ -53,6 +58,13 @@ def wait_for_schema(url: str, poll_seconds: float = 5.0) -> None:
             time.sleep(poll_seconds)
     finally:
         engine.dispose()
+
+
+def _stamped(connection, table: str) -> bool:
+    """Whether a migration history's version table exists and has a row."""
+    return inspect(connection).has_table(table) and bool(
+        connection.execute(text(f'SELECT version_num FROM "{table}"')).first()
+    )
 
 
 class ScreenBenchmarkEnsurer:

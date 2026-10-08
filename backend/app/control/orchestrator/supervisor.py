@@ -17,6 +17,7 @@ from datetime import datetime, timedelta
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app import plugins
 from app.control.baseline import resolve_baseline, same_config
 from app.control.engine_command import baseline_engine_args, engine_of_command
 from app.control.launch import (
@@ -273,7 +274,10 @@ class Supervisor:
 
     def tick(self) -> None:
         with self.session_factory() as session:
-            # Clocks first. Both of these decide whether work may start at all
+            # Plugins' steps before everything else: a campaign a step starts
+            # is planned, scheduled and advanced by the rest of this same tick.
+            self._run_plugin_steps(session)
+            # Then the clocks. Both of these decide whether work may start at all
             # this tick — a campaign whose window just opened, a machine whose
             # lease just ended — and running them after planning would spend a
             # tick placing runs the very next step tears down.
@@ -306,6 +310,22 @@ class Supervisor:
             # in the same tick it becomes DONE.
             self._advance_auto_promotions(session)
             session.commit()
+
+    def _run_plugin_steps(self, session: Session) -> None:
+        """Each enabled plugin's tick steps, each in a savepoint: a step that
+        raises is logged and its writes rolled back, and the tick goes on —
+        a broken plugin must not stop the platform's own work."""
+        for plugin in plugins.enabled():
+            for step in plugin.tick_steps:
+                try:
+                    with session.begin_nested():
+                        step(self, session)
+                except Exception:
+                    logger.exception(
+                        "plugin %s: tick step %s failed",
+                        plugin.name,
+                        getattr(step, "__name__", repr(step)),
+                    )
 
     # ---------------------------------------------------- unattended promotion
 

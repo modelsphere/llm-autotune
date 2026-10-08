@@ -1,0 +1,55 @@
+[project]
+name = "llm-autotune-example-plugin"
+version = "0.1.0"
+description = "The example plugin LLM AutoTune's CI tests its plugin API with; a starting point for your own."
+requires-python = ">=3.12"
+# The platform is not a dependency: a plugin is installed into the platform's
+# own environment (its image, or its virtualenv), where `app` already is.
+dependencies = []
+
+[project.entry-points."llm_autotune.plugins"]
+example = "example_plugin:plugin"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["example_plugin"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "TID"]
+# B008: FastAPI's `Depends(...)` in parameter defaults is idiomatic.
+ignore = ["B008"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["example_plugin"]
+
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+# A plugin imports from the platform only through app.plugin_api; everything
+# else in `app` may change in any release. Banning `app` itself would ban
+# app.plugin_api too, so its other top-level modules are listed (a module's
+# submodules are banned with it).
+"app.agent".msg = "import from app.plugin_api"
+"app.api".msg = "import from app.plugin_api"
+"app.campaign_spec".msg = "import from app.plugin_api"
+"app.catalog".msg = "import from app.plugin_api"
+"app.control".msg = "import from app.plugin_api"
+"app.core".msg = "import from app.plugin_api"
+"app.datasets".msg = "import from app.plugin_api"
+"app.db".msg = "import from app.plugin_api"
+"app.evaluation".msg = "import from app.plugin_api"
+"app.hardware".msg = "import from app.plugin_api"
+"app.main".msg = "import from app.plugin_api"
+"app.metrics_catalog".msg = "import from app.plugin_api"
+"app.mocks".msg = "import from app.plugin_api"
+"app.objective".msg = "import from app.plugin_api"
+"app.plugins".msg = "import from app.plugin_api"
+"app.reporting".msg = "import from app.plugin_api"
+"app.schemas".msg = "import from app.plugin_api"
+"app.staging".msg = "import from app.plugin_api"
+"app.worker".msg = "import from app.plugin_api"

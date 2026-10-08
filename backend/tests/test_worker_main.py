@@ -83,8 +83,43 @@ def test_wait_for_schema_waits_until_the_migrate_job_has_run(monkeypatch, tmp_pa
             raise _Stop
 
     monkeypatch.setattr(worker_module.time, "sleep", fake_sleep)
+    monkeypatch.setattr(worker_module.plugins, "enabled", lambda: ())
     worker_module.wait_for_schema(url, poll_seconds=0)
     assert len(sleeps) == 3, "returns once alembic_version holds a revision, not before"
+
+
+def test_wait_for_schema_also_waits_for_each_plugins_schema(monkeypatch, tmp_path):
+    """A plugin's tick steps read its own tables, so the worker also waits for
+    the migration history of every enabled plugin that has one."""
+    import sqlalchemy as sa
+
+    import app.worker as worker_module
+    from app.plugins import PLUGIN_API_VERSION, Plugin
+
+    url = f"sqlite:///{tmp_path / 'db.sqlite'}"
+    engine = sa.create_engine(url)
+    with engine.begin() as connection:
+        connection.execute(sa.text("CREATE TABLE alembic_version (version_num VARCHAR(32))"))
+        connection.execute(sa.text("INSERT INTO alembic_version VALUES ('002_crd_group')"))
+    with_schema = Plugin(name="tables", api_version=PLUGIN_API_VERSION, migrations="/m")
+    without = Plugin(name="none", api_version=PLUGIN_API_VERSION)
+    monkeypatch.setattr(worker_module.plugins, "enabled", lambda: (with_schema, without))
+    sleeps: list[float] = []
+
+    def fake_sleep(seconds):
+        sleeps.append(seconds)
+        if len(sleeps) == 2:
+            with engine.begin() as connection:
+                connection.execute(
+                    sa.text("CREATE TABLE alembic_version_tables (version_num VARCHAR(32))")
+                )
+                connection.execute(sa.text("INSERT INTO alembic_version_tables VALUES ('t1')"))
+        if len(sleeps) > 5:
+            raise _Stop
+
+    monkeypatch.setattr(worker_module.time, "sleep", fake_sleep)
+    worker_module.wait_for_schema(url, poll_seconds=0)
+    assert len(sleeps) == 2, "returns once the plugin's schema exists, and needs none for 'none'"
 
 
 class _Clock:

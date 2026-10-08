@@ -27,3 +27,5 @@ The contracts other systems build against:
   platform from another system, and taking them back
 - [Agent API](api/agent-api.md) — the read models an LLM writes performance
   reports from
+- [Plugins](plugins.md) — adding routes, worker steps and tables from a
+  separately installed package

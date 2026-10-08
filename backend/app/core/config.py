@@ -15,6 +15,10 @@ class Settings(BaseSettings):
     admin_username: str = "admin"
     admin_password: str = ""
 
+    # Installed plugins to enable, comma-separated entry-point names
+    # (app/plugins.py, docs/plugins.md). Installed but unlisted ones stay off.
+    plugins: str = ""
+
     jwt_secret: str = "dev-secret"
     jwt_algorithm: str = "HS256"
     jwt_expire_minutes: int = 1440
