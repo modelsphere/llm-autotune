@@ -60,6 +60,7 @@ Every hook is optional:
 | `submission_extras(session, run, context)` | fields for the run's LLMBench submission; `contributor` and `source_url` replace the platform's, anything else is added to the body |
 | `run_overlay(session, run, campaign)` | what the plugin knows about a run it started for a request of its own, for the run's agent documents (`RunOverlay`, see [Runs in the agent API](#runs-in-the-agent-api)) |
 | `run_selector(session, token)` | a run id for an agent API run selector of the plugin's own spelling; raise `SelectorRefused` to answer with a specific error |
+| `promotion_origin(session, campaign, run_id)` | what a winner of a campaign the plugin runs stands for in its merge request (`PromotionOrigin`: its name, its page, a fallback release branch) |
 | `openapi_tags` | descriptions of the plugin's API tags, shown in the API docs with the platform's |
 
 `name` is lowercase letters, digits and underscores, and must equal the
