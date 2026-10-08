@@ -12,6 +12,17 @@ is something the platform can no longer change freely.
 """
 
 from app.control.orchestrator.supervisor import Supervisor
+from app.control.search import CandidateConfig
+from app.control.search.history import RunRecord
+from app.control.search.space import (
+    RangeSpec,
+    axes,
+    expand,
+    grid_values,
+    prune_inactive,
+    range_specs,
+    tied_groups,
+)
 from app.core.auth import get_current_user, require_admin
 from app.core.config import get_settings
 from app.db.base import get_async_session, sync_session_factory
@@ -30,7 +41,15 @@ from app.db.models import (
     User,
     UserRole,
 )
-from app.plugins import PLUGIN_API_VERSION, Plugin, TickStep, migration_env
+from app.objective import direction
+from app.plugins import (
+    PLUGIN_API_VERSION,
+    PlanContext,
+    Plugin,
+    Proposer,
+    TickStep,
+    migration_env,
+)
 
 __all__ = [
     "PLUGIN_API_VERSION",
@@ -38,22 +57,34 @@ __all__ = [
     "Campaign",
     "CampaignStatus",
     "Candidate",
+    "CandidateConfig",
     "CandidateStatus",
     "Event",
     "Machine",
     "MachineState",
+    "PlanContext",
     "Plugin",
     "PolicySession",
+    "Proposer",
+    "RangeSpec",
     "Run",
+    "RunRecord",
     "RunStatus",
     "Supervisor",
     "TickStep",
     "User",
     "UserRole",
+    "axes",
+    "direction",
+    "expand",
     "get_async_session",
     "get_current_user",
     "get_settings",
+    "grid_values",
     "migration_env",
+    "prune_inactive",
+    "range_specs",
     "require_admin",
     "sync_session_factory",
+    "tied_groups",
 ]

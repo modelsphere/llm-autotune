@@ -35,6 +35,9 @@ if TYPE_CHECKING:
     from sqlalchemy.orm import Session
 
     from app.control.orchestrator.supervisor import Supervisor
+    from app.control.search import CandidateConfig
+    from app.control.search.history import RunRecord
+    from app.db.models import Campaign
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +55,55 @@ TickStep = Callable[["Supervisor", "Session"], None]
 
 class PluginError(RuntimeError):
     """A plugin that cannot be loaded as configured."""
+
+
+@dataclass(frozen=True)
+class PlanContext:
+    """What a planner is handed about one ACTIVE campaign, every tick.
+
+    `session` is the worker's own; read from it, and leave the candidate
+    rows to the platform: whatever `propose_candidates` returns is validated,
+    deduplicated against what the campaign already holds, and saved."""
+
+    session: Session
+    campaign: Campaign
+    supervisor: Supervisor
+
+    # Unstarted work worth queuing at once for a space whose points do not
+    # depend on results (a grid): the queue refills as runs consume it.
+    batch_cap: int = 100
+
+    def history(self) -> list[RunRecord]:
+        """Every run and queued or rejected candidate, objective applied."""
+        from app.control.search.history import campaign_history
+
+        return campaign_history(self.session, self.campaign)
+
+    def queued(self) -> int:
+        """Valid candidates waiting for a run."""
+        from sqlalchemy import func, select
+
+        from app.db.models import Candidate, CandidateStatus
+
+        return (
+            self.session.scalar(
+                select(func.count(Candidate.id)).where(
+                    Candidate.campaign_id == self.campaign.id,
+                    Candidate.status == CandidateStatus.VALID.value,
+                )
+            )
+            or 0
+        )
+
+    def startable_slots(self) -> int:
+        """How many runs this campaign could start right now on its machines.
+        An adaptive planner asks for about this many points: asking a model
+        for a hundred with eight cards free commits to a hundred guesses
+        before any result can teach it anything."""
+        return self.supervisor._startable_slots(self.session, self.campaign)
+
+
+Proposer = Callable[[PlanContext], "Sequence[CandidateConfig] | None"]
 
 
 @dataclass(frozen=True)
@@ -73,6 +125,13 @@ class Plugin:
     on_bootstrap: called after the platform's own seeding on every deploy,
         with a sync engine. Like the platform's seeding it should only ever
         add what is missing.
+    propose_candidates: plans a campaign in-process instead of the default
+        enumeration of its space. Called with a `PlanContext` for every ACTIVE
+        campaign that has no policy container, each tick; returns the points
+        to add now (possibly none), or None for a campaign this plugin does
+        not plan. The first plugin to answer anything but None plans it. One
+        that raises is logged, and the campaign gets no new candidates that
+        tick.
     """
 
     name: str
@@ -81,6 +140,7 @@ class Plugin:
     tick_steps: Sequence[TickStep] = ()
     migrations: str | None = None
     on_bootstrap: Callable[[Engine], None] | None = None
+    propose_candidates: Proposer | None = None
 
     @property
     def version_table(self) -> str:

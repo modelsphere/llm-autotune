@@ -157,11 +157,6 @@ logger = logging.getLogger(__name__)
 # and visible; a human can re-queue it once the bug is fixed.
 MAX_ATTEMPTS_PER_CANDIDATE = 3
 
-# How many configs to draw from a search whose proposals do not depend on
-# results (a grid). Bounds one tick's work on a very large space; the rest
-# arrive on later ticks because the search skips what it has already seen.
-DEFAULT_PROPOSAL_BATCH = 100
-
 # Where a multi-node run's rendezvous port is searched from, on the master. Above
 # the usual service ports and outside the k8s NodePort range; the allocator walks
 # up from here until it finds one free on the master.
@@ -223,18 +218,6 @@ def _parse_rfc3339(value) -> datetime | None:
     except ValueError:
         return None
 
-
-def _elapsed_seconds(run: Run) -> float | None:
-    """Wall-clock a finished run took, launch to verdict.
-
-    Cost, in the only currency a night has. A policy that knows a config
-    takes 90 minutes can weigh it against one that takes 20 — and an
-    unfinished run has no duration rather than a duration of zero.
-    """
-    started, finished = _as_utc(run.started_at), _as_utc(run.finished_at)
-    if started is None or finished is None:
-        return None
-    return max(0.0, (finished - started).total_seconds())
 
 
 class Supervisor:
@@ -1287,16 +1270,18 @@ class Supervisor:
     def _plan(self, session: Session) -> None:
         """Turn a campaign's declared search space into candidate rows.
 
-        This is enumeration, not search: every point the space declares, once,
-        in the order the space declares it. There is no strategy here and no
-        pluggable one — a campaign that wants to be clever about WHICH points
-        to spend the night on names a policy container instead, and then its
-        candidates arrive over the policy session API and this step does
-        nothing (`api/policy_sessions.py`).
+        By default this is enumeration, not search: every point the space
+        declares, once, in the order the space declares it. Enumerating is
+        worth doing in-process: it is the same expansion `coverage` and the
+        UI's candidate count already use, so what the platform runs and what
+        it told you it would run cannot drift.
 
-        Enumerating is still worth doing in-process: it is the same expansion
-        `coverage` and the UI's candidate count already use, so what the
-        platform runs and what it told you it would run cannot drift.
+        A campaign that wants to be clever about WHICH points to spend the
+        night on names a policy container instead, and then its candidates
+        arrive over the policy session API and this step does nothing
+        (`api/policy_sessions.py`). Or a plugin plans it in-process
+        (`Plugin.propose_candidates`); what the plugin proposes is validated
+        and deduplicated here exactly like an enumerated point.
         """
         campaigns = session.scalars(
             select(Campaign).where(
@@ -1305,19 +1290,27 @@ class Supervisor:
             )
         ).all()
         for campaign in campaigns:
-            if not (campaign.search_space or {}):
+            planned, proposals = self._plugin_proposals(session, campaign)
+            if planned and proposals is None:
+                continue  # a planner that failed this tick; try again next tick
+            if not planned and not (campaign.search_space or {}):
                 # Nothing declared at all. Not the same as a space whose only
                 # content is a `base`, which is one deliberate configuration —
                 # this is a campaign whose configs arrive some other way.
                 continue
+            points = (
+                proposals
+                if planned
+                else [CandidateConfig(engine_args=c) for c in expand(campaign.search_space)]
+            )
             existing_hashes = set(
                 session.scalars(
                     select(Candidate.config_hash).where(Candidate.campaign_id == campaign.id)
                 ).all()
             )
             gpu_count = self._validation_gpu_count(session, campaign)
-            for config in expand(campaign.search_space or {}):
-                point = CandidateConfig(engine_args=config)
+            for point in points or ():
+                config = point.engine_args
                 if point.hash in existing_hashes:
                     continue
                 existing_hashes.add(point.hash)
@@ -1346,6 +1339,31 @@ class Supervisor:
                     campaign_id=campaign.id,
                     payload={"config": config, "error": error or ""},
                 )
+
+    def _plugin_proposals(
+        self, session: Session, campaign: Campaign
+    ) -> tuple[bool, list[CandidateConfig] | None]:
+        """(planned, proposals): whether a plugin plans this campaign, and what
+        it proposes now. The first plugin to answer anything but None plans
+        it. A planner that raises is logged and the campaign gets no new
+        candidates this tick (planned, None): falling back to enumeration
+        would fill a campaign meant to be searched cleverly with every point
+        of its space."""
+        context = plugins.PlanContext(session=session, campaign=campaign, supervisor=self)
+        for plugin in plugins.enabled():
+            if plugin.propose_candidates is None:
+                continue
+            try:
+                with session.begin_nested():
+                    proposals = plugin.propose_candidates(context)
+            except Exception:
+                logger.exception(
+                    "plugin %s: planning campaign %s failed", plugin.name, campaign.id
+                )
+                return True, None
+            if proposals is not None:
+                return True, list(proposals)
+        return False, None
 
     # -------------------------------------------------------------- schedule
 

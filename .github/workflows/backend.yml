@@ -80,8 +80,6 @@ jobs:
         options: >-
           --health-cmd "pg_isready -U autotune"
           --health-interval 5s --health-timeout 5s --health-retries 10
-    env:
-      AUTOTUNE_PLUGINS: example
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -93,13 +91,18 @@ jobs:
       - run: uv pip install -e tests/plugins/example
       - name: The example imports from the platform only through app.plugin_api
         run: uv run ruff check tests/plugins/example
-      - name: The whole suite, with the plugin enabled
+      - name: Installing a plugin changes nothing until it is enabled
         run: uv run pytest -q
+      - name: The plugin API's contract, with the example enabled
+        env:
+          AUTOTUNE_PLUGINS: example
+        run: uv run pytest -q tests/plugins
       - name: Bootstrap a fresh database, the plugin's schema included
         env:
           AUTOTUNE_SYNC_DATABASE_URL: postgresql+psycopg2://autotune:autotune@localhost:5432/autotune
           AUTOTUNE_DATABASE_URL: postgresql+asyncpg://autotune:autotune@localhost:5432/autotune
           AUTOTUNE_LLMBENCH_ENSURE_BENCHMARKS: "false"
+          AUTOTUNE_PLUGINS: example
         run: |
           uv run python -m app.db.bootstrap
           uv run python -m app.db.bootstrap   # every deploy runs it again
