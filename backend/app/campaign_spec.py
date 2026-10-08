@@ -60,9 +60,18 @@ SPEC_KEYS: tuple[str, ...] = tuple(
 MAX_DRAFT_CANDIDATES = 24
 
 
-def spec_of(campaign: Campaign) -> dict[str, Any]:
-    """The campaign as the body that would create it again."""
-    spec = {k: getattr(campaign, k) for k in SPEC_KEYS}
+# Fields that are not columns of the campaign: what plugins keep about it,
+# which the caller reads from them (app.plugins.read_campaign_extensions).
+_NOT_COLUMNS = frozenset({"extensions"})
+
+
+def spec_of(
+    campaign: Campaign, extensions: dict[str, dict[str, Any]] | None = None
+) -> dict[str, Any]:
+    """The campaign as the body that would create it again, with what plugins
+    keep about it (`extensions`) as read by the caller."""
+    spec = {k: getattr(campaign, k) for k in SPEC_KEYS if k not in _NOT_COLUMNS}
+    spec["extensions"] = extensions or {}
     if spec.get("schedule_until") is not None:
         spec["schedule_until"] = spec["schedule_until"].isoformat()
     return spec

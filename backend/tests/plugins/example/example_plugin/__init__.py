@@ -14,6 +14,7 @@ from pathlib import Path
 from app.plugin_api import PLUGIN_API_VERSION, Plugin
 
 from example_plugin.api import router
+from example_plugin.campaigns import campaign_extensions, on_campaign_created
 from example_plugin.planner import plan_reverse
 from example_plugin.seed import seed
 from example_plugin.tick import note_active_campaigns
@@ -26,4 +27,6 @@ plugin = Plugin(
     migrations=str(Path(__file__).parent / "migrations"),
     on_bootstrap=seed,
     propose_candidates=plan_reverse,
+    on_campaign_created=on_campaign_created,
+    campaign_extensions=campaign_extensions,
 )

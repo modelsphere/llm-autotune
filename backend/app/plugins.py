@@ -104,6 +104,13 @@ class PlanContext:
 
 
 Proposer = Callable[[PlanContext], "Sequence[CandidateConfig] | None"]
+CampaignCreated = Callable[["Session", "Campaign", dict[str, Any]], None]
+CampaignExtensions = Callable[["Session", "Sequence[Campaign]"], dict[int, dict[str, Any]]]
+
+
+class ExtensionRefused(ValueError):
+    """Raised by `on_campaign_created` to refuse what it was given; the
+    campaign is not created, and the message is the API's 422 answer."""
 
 
 @dataclass(frozen=True)
@@ -132,6 +139,17 @@ class Plugin:
         not plan. The first plugin to answer anything but None plans it. One
         that raises is logged, and the campaign gets no new candidates that
         tick.
+    on_campaign_created: `(session, campaign, data)`, when a campaign is
+        created (from the form, an imported spec or a clone) with
+        `extensions[<plugin name>] = data`. It runs in the same transaction:
+        raising `ExtensionRefused` refuses the campaign with that message.
+        This is how a plugin keeps its own fields about a campaign, in its
+        own side table.
+    campaign_extensions: `(session, campaigns) -> {campaign_id: data}`, what
+        the plugin keeps about these campaigns; the API shows it as
+        `extensions[<plugin name>]`, and a spec or clone carries it back into
+        `on_campaign_created`. One that raises is logged and left out: a
+        plugin must not stop campaigns from being read.
     """
 
     name: str
@@ -141,6 +159,8 @@ class Plugin:
     migrations: str | None = None
     on_bootstrap: Callable[[Engine], None] | None = None
     propose_candidates: Proposer | None = None
+    on_campaign_created: CampaignCreated | None = None
+    campaign_extensions: CampaignExtensions | None = None
 
     @property
     def version_table(self) -> str:
@@ -203,6 +223,47 @@ def enabled() -> tuple[Plugin, ...]:
     for plugin in plugins:
         logger.info("plugin %s enabled", plugin.name)
     return plugins
+
+
+def create_campaign_extensions(
+    session: Session, campaign: Campaign, extensions: dict[str, dict[str, Any]]
+) -> None:
+    """Hand each plugin its part of a new campaign's `extensions`. A key no
+    enabled plugin takes is refused rather than dropped: it is a campaign
+    that would quietly run without what its author asked for."""
+    takers = {p.name: p for p in enabled() if p.on_campaign_created is not None}
+    unknown = sorted(set(extensions) - set(takers))
+    if unknown:
+        raise ExtensionRefused(
+            f"extensions for {', '.join(unknown)}: no enabled plugin by that name "
+            "keeps campaign extensions"
+        )
+    for name, data in extensions.items():
+        takers[name].on_campaign_created(session, campaign, data or {})
+
+
+def read_campaign_extensions(
+    session: Session, campaigns: Sequence[Campaign]
+) -> dict[int, dict[str, dict[str, Any]]]:
+    """`{campaign_id: {plugin name: data}}`, from every plugin that keeps any."""
+    out: dict[int, dict[str, dict[str, Any]]] = {c.id: {} for c in campaigns}
+    if not campaigns:
+        return out
+    for plugin in enabled():
+        if plugin.campaign_extensions is None:
+            continue
+        try:
+            # A savepoint, so a failed query leaves the request's transaction
+            # usable (Postgres aborts the whole transaction otherwise).
+            with session.begin_nested():
+                found = plugin.campaign_extensions(session, campaigns)
+        except Exception:
+            logger.exception("plugin %s: reading campaign extensions failed", plugin.name)
+            continue
+        for campaign_id, data in (found or {}).items():
+            if data and campaign_id in out:
+                out[campaign_id][plugin.name] = data
+    return out
 
 
 def migration_env(metadata: MetaData, plugin_name: str) -> None:

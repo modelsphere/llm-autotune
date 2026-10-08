@@ -52,6 +52,8 @@ Every hook is optional:
 | `migrations` | upgrades the plugin's own Alembic directory to head on every deploy, after the platform's schema and before seeding. The worker waits for it as it waits for the platform's |
 | `on_bootstrap(engine)` | runs after the platform's own seeding on every deploy. Like that seeding, it should only add what is missing; if it fails, the failure is logged and the deploy goes on |
 | `propose_candidates(ctx)` | plans a campaign in-process, in place of the default enumeration of its space. See [Planning](#planning) |
+| `on_campaign_created(session, campaign, data)` | receives `extensions[<plugin name>]` of a new campaign, in the same transaction; raising `ExtensionRefused` refuses the campaign with that message. See [Campaign extensions](#campaign-extensions) |
+| `campaign_extensions(session, campaigns)` | returns `{campaign_id: data}`, shown on the campaign as `extensions[<plugin name>]` |
 
 `name` is lowercase letters, digits and underscores, and must equal the
 entry-point name.
@@ -86,6 +88,28 @@ selectively.
 The search-space helpers (`expand`, `axes`, `grid_values`, `range_specs`,
 `tied_groups`, `prune_inactive`) and the objective's `direction` are in
 `app.plugin_api` too.
+
+## Campaign extensions
+
+A plugin keeps its own fields about a campaign through `extensions`, keyed
+by plugin name, on every way a campaign is made and read:
+
+```json
+POST /api/campaigns
+{"name": "...", "search_space": {...}, "extensions": {"example": {"label": "plan:reverse"}}}
+```
+
+- **Creating:** each plugin's `on_campaign_created` gets its part and saves
+  it in its own side table. A key that no enabled plugin takes is refused
+  with a 422, not dropped: a campaign that runs without what its author asked
+  for is worse than one that does not start.
+- **Reading:** every endpoint that returns a campaign shows
+  `extensions[<plugin name>]`, from `campaign_extensions`. It is asked once
+  for a whole list of campaigns. A plugin that fails to read is logged and
+  left out.
+- **Copying:** `GET /api/campaigns/{id}/spec`, YAML export and clone carry
+  the extensions, so a copy is created with them again. A clone can override
+  them like any other field.
 
 ## Turning one on
 

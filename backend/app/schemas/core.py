@@ -307,6 +307,10 @@ class CampaignCreate(BaseModel):
     # for someone to press Generate MR. Honours the platform's dry-run setting
     # exactly as the button does.
     auto_promote: bool = False
+    # What enabled plugins keep about this campaign, keyed by plugin name
+    # (docs/plugins.md): each plugin is handed its own part when the campaign
+    # is created. Not a column; a key no enabled plugin takes is refused.
+    extensions: dict[str, dict[str, Any]] = Field(default_factory=dict)
 
 
 class MachineWarningOut(BaseModel):
@@ -376,6 +380,9 @@ class CampaignOut(BaseModel):
     # read time (never an ORM column). Empty when every pinned machine is leased
     # with enough runway.
     machine_warnings: list[MachineWarningOut] = Field(default_factory=list)
+    # What enabled plugins keep about this campaign, by plugin name; read at
+    # read time from each plugin (never an ORM column).
+    extensions: dict[str, dict[str, Any]] = Field(default_factory=dict)
 
 
 class CampaignStatusUpdate(BaseModel):

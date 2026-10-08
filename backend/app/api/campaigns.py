@@ -10,6 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app import plugins
 from app.campaign_spec import SPEC_KEYS, DraftRequest, draft_campaign, spec_of
 from app.control.launch import MachineInfo, get_driver
 from app.control.launch import preflight as pf
@@ -262,9 +263,16 @@ async def draft(
 async def list_campaigns(
     _: User = Depends(get_current_user), session: AsyncSession = Depends(get_async_session)
 ):
-    return (
+    campaigns = (
         (await session.execute(select(Campaign).order_by(Campaign.id.desc()))).scalars().all()
     )
+    extensions = await _extensions_of(session, campaigns)
+    out = []
+    for campaign in campaigns:
+        row = CampaignOut.model_validate(campaign)
+        row.extensions = extensions[campaign.id]
+        out.append(row)
+    return out
 
 
 @router.post("", response_model=CampaignOut)
@@ -273,7 +281,8 @@ async def create_campaign(
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_async_session),
 ):
-    return await _create(session, user, body)
+    campaign = await _create(session, user, body)
+    return await _campaign_out(session, campaign)
 
 
 async def _create(session: AsyncSession, user: User, body: CampaignCreate) -> Campaign:
@@ -318,7 +327,7 @@ async def _create(session: AsyncSession, user: User, body: CampaignCreate) -> Ca
     schedule_errors = sched.errors(body.daily_start, body.daily_end, body.schedule_timezone)
     if schedule_errors:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "; ".join(schedule_errors))
-    campaign = Campaign(owner_id=user.id, **body.model_dump())
+    campaign = Campaign(owner_id=user.id, **body.model_dump(exclude={"extensions"}))
     # A campaign that carries a clock starts under it, not in draft: leaving it
     # DRAFT would mean someone still has to press Start, which is exactly the
     # 23:00 keyboard visit the schedule exists to remove.
@@ -326,6 +335,15 @@ async def _create(session: AsyncSession, user: User, body: CampaignCreate) -> Ca
         campaign.status = CampaignStatus.SCHEDULED.value
     session.add(campaign)
     await session.flush()
+    # Plugins keep their part in their own tables, in this same transaction:
+    # a plugin that refuses what it was given refuses the campaign.
+    try:
+        await session.run_sync(
+            lambda sync: plugins.create_campaign_extensions(sync, campaign, body.extensions)
+        )
+    except plugins.ExtensionRefused as exc:
+        await session.rollback()
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
     session.add(
         Event(
             actor=user.username,
@@ -368,7 +386,7 @@ async def campaign_spec(
     campaign = await session.get(Campaign, campaign_id)
     if campaign is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "campaign not found")
-    return spec_of(campaign)
+    return spec_of(campaign, (await _extensions_of(session, [campaign]))[campaign.id])
 
 
 class CloneIn(BaseModel):
@@ -397,7 +415,11 @@ async def clone_campaign(
         )
     try:
         new = CampaignCreate.model_validate(
-            {**spec_of(source), **body.overrides, "name": body.name}
+            {
+                **spec_of(source, (await _extensions_of(session, [source]))[source.id]),
+                **body.overrides,
+                "name": body.name,
+            }
         )
     except ValidationError as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
@@ -405,10 +427,21 @@ async def clone_campaign(
     return await _campaign_out(session, campaign)
 
 
+async def _extensions_of(
+    session: AsyncSession, campaigns
+) -> dict[int, dict[str, dict[str, Any]]]:
+    """What enabled plugins keep about these campaigns, by campaign id."""
+    return await session.run_sync(
+        lambda sync: plugins.read_campaign_extensions(sync, list(campaigns))
+    )
+
+
 async def _campaign_out(session: AsyncSession, campaign: Campaign) -> CampaignOut:
-    """CampaignOut plus the row-only lease findings about its pinned machines.
-    Only while the campaign can still run — a finished one's pool is history."""
+    """CampaignOut plus the row-only lease findings about its pinned machines
+    (only while the campaign can still run — a finished one's pool is
+    history), and what plugins keep about it."""
     out = CampaignOut.model_validate(campaign)
+    out.extensions = (await _extensions_of(session, [campaign]))[campaign.id]
     if campaign.status in _LIVE_CAMPAIGN_STATES:
         machines = (await session.execute(select(Machine))).scalars().all()
         out.machine_warnings = [
@@ -506,7 +539,7 @@ async def set_campaign_status(
     )
     await session.commit()
     await session.refresh(campaign)
-    return campaign
+    return await _campaign_out(session, campaign)
 
 
 class PreflightRequest(BaseModel):
@@ -850,7 +883,7 @@ async def set_schedule(
     )
     await session.commit()
     await session.refresh(campaign)
-    return campaign
+    return await _campaign_out(session, campaign)
 
 
 class ForceStartRequest(BaseModel):
@@ -898,7 +931,7 @@ async def force_start(
     )
     await session.commit()
     await session.refresh(campaign)
-    return campaign
+    return await _campaign_out(session, campaign)
 
 
 @router.post(
@@ -947,7 +980,7 @@ async def force_stop(
             )
             await session.commit()
             await session.refresh(campaign)
-            return campaign
+            return await _campaign_out(session, campaign)
         # No live session: fall through to the classic pause.
 
     campaign.status = CampaignStatus.PAUSED.value
@@ -979,7 +1012,7 @@ async def force_stop(
     )
     await session.commit()
     await session.refresh(campaign)
-    return campaign
+    return await _campaign_out(session, campaign)
 
 
 @router.post("/{campaign_id}/retry-failed")

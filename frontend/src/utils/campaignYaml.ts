@@ -52,6 +52,8 @@ export const PORTABLE_KEYS = [
   'node_group',
   'deploy_branch',
   'auto_promote',
+  // What enabled plugins keep about the campaign, by plugin name.
+  'extensions',
 ] as const
 
 const HEADER = `# LLM Autotune campaign.
