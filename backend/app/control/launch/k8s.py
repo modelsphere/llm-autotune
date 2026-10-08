@@ -1107,6 +1107,13 @@ class K8sDriver(DeploymentDriver):
                 snapshot["image_tag"] = image
             pods = self.api.list("pods", self._run_selector(handle))
             if pods:
+                # The manifest digest the kubelet actually ran, e.g.
+                # "registry.example.com/team/sglang@sha256:...": what a config
+                # should pin so a moved tag cannot change what it deploys.
+                for status_ in (pods[0].get("status") or {}).get("containerStatuses") or []:
+                    image_id = str(status_.get("imageID") or "")
+                    if status_.get("name") == "engine" and "@sha256:" in image_id:
+                        snapshot["image_digest"] = image_id.split("://", 1)[-1]
                 node = (pods[0].get("spec") or {}).get("nodeName")
                 if node:
                     snapshot["k8s_node"] = node

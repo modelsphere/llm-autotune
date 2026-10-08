@@ -31,13 +31,13 @@ def _node(name: str, product: str | None, gpus: int) -> dict:
     [
         ("NVIDIA-H100-80GB-HBM3", "H100"),
         ("NVIDIA-A100-SXM4-80GB", "A100"),
-        ("A100-SXM4-80GB", "A100"),          # legacy hand-typed value
+        ("A100-SXM4-80GB", "A100"),  # legacy hand-typed value
         ("NVIDIA-H800", "H800"),
-        ("nvidia-h100", "H100"),             # case-insensitive
+        ("nvidia-h100", "H100"),  # case-insensitive
         ("NVIDIA-B300", "B300"),
-        ("NVIDIA H200 80GB", "H200"),        # space separator, not "H20"
-        ("NVIDIA-H20", "H20"),               # and H20 is not read out of H200
-        ("NVIDIA-L40S", ""),                 # a card not in the vocabulary yet
+        ("NVIDIA H200 80GB", "H200"),  # space separator, not "H20"
+        ("NVIDIA-H20", "H20"),  # and H20 is not read out of H200
+        ("NVIDIA-L40S", ""),  # a card not in the vocabulary yet
         ("", ""),
     ],
 )
@@ -150,6 +150,37 @@ def test_environment_records_the_card_the_run_actually_landed_on():
     snapshot = driver.environment(handle)
     assert snapshot["k8s_node"] == "gpu-h100-1"
     assert snapshot["card_type"] == "H100"
+
+
+def test_environment_records_the_image_digest_the_kubelet_ran():
+    settings = _clone(k8s_workload_kind="deployment")
+    api = FakeK8sApi(settings)
+    api.nodes = [_node("gpu-051", "NVIDIA-H100-80GB-HBM3", 8)]
+    driver = _driver(settings, api)
+    handle, _ = driver.launch(_spec())
+    digest = "registry.example.com/team/sglang@sha256:" + "a" * 64
+    api.pods = [
+        {
+            "spec": {"nodeName": "gpu-051"},
+            "status": {
+                "containerStatuses": [
+                    {"name": "sidecar", "imageID": "registry.example.com/x/hw@sha256:" + "b" * 64},
+                    {"name": "engine", "imageID": "docker-pullable://" + digest},
+                ]
+            },
+        }
+    ]
+    assert driver.environment(handle)["image_digest"] == digest
+
+
+def test_pick_digest_keeps_the_tags_repository():
+    from app.control.launch.ssh_docker import pick_digest
+
+    tag = "registry.example.com:5000/team/sglang:v0.5.19"
+    mine = "registry.example.com:5000/team/sglang@sha256:" + "c" * 64
+    assert pick_digest(["other/repo@sha256:" + "d" * 64, mine], tag) == mine
+    assert pick_digest(["other/repo@sha256:1"], tag) == "other/repo@sha256:1"
+    assert pick_digest([], tag) == ""
 
 
 def test_gpu_types_vocabulary_is_exposed_for_the_forms():
