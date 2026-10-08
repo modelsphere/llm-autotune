@@ -494,3 +494,31 @@ class DeploymentDriver(ABC):
         "gpu_type": str, "node_count": int, "nodes": [...], "warnings": [...]}.
         """
         return {"supported": False}
+
+    # -- smoke test ----------------------------------------------------------
+
+    def smoke_test(self, machine: MachineInfo, probe_pod: bool = False) -> dict[str, Any]:
+        """Can the platform reach this machine at all? Each substrate walks the
+        same path a launch takes, in order, and stops at the first step a launch
+        could not get past — so the first failure is the one to fix.
+
+        Read-only unless `probe_pod`: a k8s driver may then place a throwaway
+        pod on the machine's node, the only way a credential that cannot read
+        nodes can confirm the node exists and accepts our pods.
+        Shape when supported: see `smoke_result`."""
+        return {"supported": False}
+
+
+def smoke_check(name: str, status: str, detail: str) -> dict[str, str]:
+    """One step of a smoke test. `status` is pass | warn | fail | skip: warn is
+    "a launch would get past this, but look", skip is "could not be checked
+    from here" — neither fails the test."""
+    return {"name": name, "status": status, "detail": detail}
+
+
+def smoke_result(checks: list[dict[str, str]]) -> dict[str, Any]:
+    return {
+        "supported": True,
+        "ok": not any(check["status"] == "fail" for check in checks),
+        "checks": checks,
+    }

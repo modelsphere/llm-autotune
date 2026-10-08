@@ -163,3 +163,40 @@ async def test_a_reserved_machine_cannot_be_removed(client):
     resp = await client.delete(f"/api/machines/{m['id']}")
     assert resp.status_code == 409
     assert "live run" in resp.json()["detail"]
+
+
+async def test_smoke_test_reports_the_drivers_checks_and_an_unset_card_type(client, monkeypatch):
+    from app.control.launch.ssh_docker import SshDockerDriver
+
+    calls = []
+
+    def fake(self, machine, probe_pod=False):
+        calls.append((machine.name, probe_pod))
+        return {"supported": True, "ok": True,
+                "checks": [{"name": "ssh", "status": "pass", "detail": "logged in"}]}
+
+    monkeypatch.setattr(SshDockerDriver, "smoke_test", fake)
+    m = await _machine(client, gpu_type="")
+    body = (await client.post(f"/api/machines/{m['id']}/smoke-test")).json()
+    assert body["ok"] is True
+    assert [c["name"] for c in body["checks"]] == ["ssh", "card type"]
+    assert calls == [("node-1", False)]
+
+    typed = await _machine(client, name="node-2", gpu_type="H100")
+    body = (await client.post(f"/api/machines/{typed['id']}/smoke-test?pod=true")).json()
+    assert [c["name"] for c in body["checks"]] == ["ssh"]
+    assert calls[-1] == ("node-2", True)
+
+
+async def test_a_crashing_smoke_test_is_a_failed_report_not_a_500(client, monkeypatch):
+    from app.control.launch.ssh_docker import SshDockerDriver
+
+    def boom(self, machine, probe_pod=False):
+        raise RuntimeError("kaboom")
+
+    monkeypatch.setattr(SshDockerDriver, "smoke_test", boom)
+    m = await _machine(client, gpu_type="H100")
+    resp = await client.post(f"/api/machines/{m['id']}/smoke-test")
+    assert resp.status_code == 200
+    assert resp.json()["ok"] is False
+    assert "kaboom" in resp.json()["checks"][0]["detail"]
