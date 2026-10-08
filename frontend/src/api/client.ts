@@ -327,6 +327,8 @@ export interface MachineLifecycle {
 export interface Campaign {
   id: number
   owner_id: number
+  /** What installed plugins keep about the campaign, by plugin name. */
+  extensions?: Record<string, Record<string, unknown>>
   name: string
   engine: string
   image: string

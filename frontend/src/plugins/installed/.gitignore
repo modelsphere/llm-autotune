@@ -1,0 +1,4 @@
+# Frontend plugins are copied here at build time (docs/plugins.md); nothing
+# in this folder is part of the app itself.
+*
+!.gitignore

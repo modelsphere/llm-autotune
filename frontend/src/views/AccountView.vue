@@ -9,8 +9,9 @@
  */
 import { ElMessage } from 'element-plus'
 import { computed, onMounted, ref } from 'vue'
-import { useRouter } from 'vue-router'
 import { api } from '../api/client'
+import LinkButton from '../components/LinkButton.vue'
+import PluginSlot from '../components/PluginSlot.vue'
 import { useI18n } from '../i18n'
 import { useAuthStore } from '../stores/auth'
 import { exactTime, relativeTime } from '../utils/time'
@@ -26,7 +27,6 @@ interface AccountUser {
 }
 
 const auth = useAuthStore()
-const router = useRouter()
 const { t } = useI18n()
 
 const me = ref<AccountUser | null>(null)
@@ -147,9 +147,9 @@ onMounted(load)
             {{ me?.created_at ? relativeTime(me.created_at) : '—' }}
           </dd>
         </dl>
-        <el-button text type="primary" @click="router.push('/api-keys')">
+        <LinkButton text type="primary" to="/api-keys">
           {{ t('account.manageKeys') }}
-        </el-button>
+        </LinkButton>
       </el-card>
 
       <el-card class="password">
@@ -198,6 +198,8 @@ onMounted(load)
           </div>
         </el-form>
       </el-card>
+      <!-- Cards installed plugins add to the account page (src/plugins). -->
+      <PluginSlot name="account.cards" :props="{ me, reload: load }" />
     </div>
 
     <template v-if="isAdmin">

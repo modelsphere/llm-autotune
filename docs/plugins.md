@@ -136,6 +136,51 @@ policy sessions and every other waiter count a reservation as taken.
 `busy_reason(session, machine, cards=, share=)` answers "why can't a run of
 this width go here right now" from the same accounting.
 
+## Frontend
+
+A plugin's pages live in a folder compiled into the frontend at build time:
+copy it to `frontend/src/plugins/installed/<name>/` before `npm run build`.
+Its `index.ts` default-exports a `FrontendPlugin`:
+
+```ts
+import type { FrontendPlugin } from '@/plugins/api'
+
+const plugin: FrontendPlugin = {
+  name: 'example',
+  routes: [{ path: '/example', component: () => import('./TicksView.vue') }],
+  nav: [{ path: '/example', label: 'example.nav', group: 'top', order: 45 }],
+  messages: { en: { example: { nav: 'Example' } }, zh: { example: { nav: '示例' } } },
+  slots: { 'account.cards': AccountCard },
+  strategies: { group: 'Example plugin', options: [...], apply, selected, describe },
+}
+export default plugin
+```
+
+- **`routes`** are added after the app's own. List a literal path before a
+  parameter one (`/things/new` before `/things/:id`).
+- **`nav`** entries go under the Tuning menu (`group: 'tuning'`) or on the top
+  row (`'top'`), placed by `order` among the app's own entries (10, 20, 30…).
+- **`messages`** are merged into the app's dictionaries, so `t('example.nav')`
+  works anywhere.
+- **`slots`** fill the places the app marks with `<PluginSlot>`:
+  - `account.cards`: cards on the account page, with props `me` and `reload`;
+  - `campaign-detail.sections`: sections above a campaign's tabs, with props
+    `campaign` and `reload`.
+- **`strategies`** add options to New campaign ▸ Search ▸ Strategy, for a
+  campaign the backend half plans with `propose_candidates`:
+  - `apply(extensions, value)` writes the choice into the campaign's
+    `extensions`, or clears it when another strategy is picked;
+  - `selected(extensions)` reads the choice back, for an imported or cloned
+    campaign;
+  - `describe(extensions)` is how the campaign's strategy reads in lists and on
+    its page.
+
+A frontend plugin imports from `@/plugins/api` only: the API client, `useI18n`,
+`usePoll`, the link helpers, the report renderer and the shared components
+(`MergeRequestDialog`, `CampaignRuns`, `LogDialog`, `LinkButton`, …). CI builds
+the frontend with `backend/tests/plugins/example/frontend` installed on every
+change.
+
 ## Turning one on
 
 Installed is not enabled: set `AUTOTUNE_PLUGINS` to a comma-separated list of
