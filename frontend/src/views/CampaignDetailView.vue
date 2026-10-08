@@ -48,6 +48,9 @@ const machines = ref<Machine[]>([])
 const lifecycle = ref<Record<number, MachineLifecycle>>({})
 const leaderboard = ref<LeaderboardEntry[]>([])
 const metricSpecs = ref<MetricSpec[]>([])
+// The replay module's name is the deployment's (AUTOTUNE_LLMBENCH_REPLAY_MODULE),
+// so the platform says which metric a second stage defaults to.
+const defaultVerifyMetric = ref('replay.score_card_norm')
 const parity = ref<{
   machine: string
   container: string
@@ -125,7 +128,7 @@ const objective = computed(() =>
 /** The second stage's own objective. Separate because the two benchmarks share
  *  no metric names — the screening target does not exist in a replay result. */
 const verifyObjective = computed(() =>
-  describe(campaign.value?.verify_objective, 'replay.score_card_norm'))
+  describe(campaign.value?.verify_objective, defaultVerifyMetric.value))
 
 const staged = computed(
   () => !!campaign.value?.verify_benchmark_slug && (campaign.value?.verify_top_k ?? 0) > 0)
@@ -840,7 +843,10 @@ const retryableCount = computed(() => {
 
 onMounted(() => {
   load()
-  api.get('/objectives/metrics').then(({ data }) => (metricSpecs.value = data.metrics))
+  api.get('/objectives/metrics').then(({ data }) => {
+    metricSpecs.value = data.metrics
+    if (data.default_verify_target_metric) defaultVerifyMetric.value = data.default_verify_target_metric
+  })
   timer = window.setInterval(load, 10000) // polling for PoC; SSE later
 })
 onUnmounted(() => window.clearInterval(timer))

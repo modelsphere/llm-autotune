@@ -31,6 +31,7 @@ from sqlalchemy.orm import Session
 
 from app.datasets.profiles import DatasetBuild, same_dataset
 from app.db.models import Campaign, CampaignStatus
+from app.metrics_catalog import REPLAY
 
 # What a campaign may ask for at its first measurement.
 REBUILD_AT_START = "rebuild_at_start"
@@ -54,8 +55,8 @@ DECIDE_TAKE_CURRENT = "take_current"
 
 # Where the replay module reports what it actually replayed. Flat keys, module
 # prefix included, exactly as they arrive.
-METRIC_BUILD_ID = "replay.dataset_id"
-METRIC_SHA = "replay.dataset_sha256"
+METRIC_BUILD_ID = f"{REPLAY}.dataset_id"
+METRIC_SHA = f"{REPLAY}.dataset_sha256"
 
 
 def uses_pinning(campaign: Campaign) -> bool:
