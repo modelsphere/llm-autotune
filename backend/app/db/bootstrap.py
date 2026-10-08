@@ -27,6 +27,7 @@ from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.exc import OperationalError
 
 from alembic import command
+from app import plugins
 from app.core.config import get_settings
 from app.db import models  # noqa: F401  — register every table on Base.metadata
 from app.db.base import Base
@@ -81,14 +82,35 @@ def main() -> None:
     config = Config("alembic.ini")
     _wait_for_database(engine)
 
+    _platform_schema(engine, config)
+    # A plugin's schema comes after the platform's (its tables may point at
+    # the platform's) and before seeding; a plugin migration that fails stops
+    # the job like the platform's own would.
+    enabled = plugins.enabled()
+    for plugin in enabled:
+        plugins.upgrade(plugin, settings.sync_database_url)
+    _seed(engine)
+    for plugin in enabled:
+        if plugin.on_bootstrap is None:
+            continue
+        try:
+            plugin.on_bootstrap(engine)
+        except Exception:
+            logger.exception("plugin %s: bootstrap failed", plugin.name)
+
+
+def _platform_schema(engine, config: Config) -> None:
     inspector = inspect(engine)
     if inspector.has_table("alembic_version"):
         logger.info("alembic_version present — upgrading to head")
         command.upgrade(config, "head")
-        _seed(engine)
         return
 
-    tables = [t for t in inspector.get_table_names() if t != "alembic_version"]
+    tables = [
+        t
+        for t in inspector.get_table_names()
+        if t in Base.metadata.tables  # not the alembic_version_* of a plugin, nor its tables
+    ]
     if tables:
         logger.warning(
             "database has %d table(s) but no alembic_version — treating as "
@@ -100,7 +122,6 @@ def main() -> None:
         logger.info("fresh database — creating current schema and stamping head")
     Base.metadata.create_all(engine)
     command.stamp(config, "head")
-    _seed(engine)
 
 
 def _wait_for_database(engine, timeout_seconds: float = 600, poll_seconds: float = 3) -> None:

@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Plugins: an installed Python package can add API routes, steps in the
+  worker's tick, tables with their own migration history, and bootstrap
+  seeding, enabled by name with `AUTOTUNE_PLUGINS`. See `docs/plugins.md`;
+  `backend/tests/plugins/example` uses every hook, and CI tests it against
+  Postgres on every change.
+
+### Plugin API
+
+- Version 1. Hooks: `routers`, `tick_steps`, `migrations`, `on_bootstrap`.
+  The importable surface is `app.plugin_api`.
+
 ### Changed
 
 - CI: every GitHub Action is pinned to a commit SHA, workflows run with a

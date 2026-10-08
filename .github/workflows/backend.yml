@@ -60,3 +60,61 @@ jobs:
         run: uv run alembic upgrade head
       - name: The models and the migrations agree
         run: uv run alembic check
+
+  plugins:
+    # The plugin API, held to its word: the example plugin under
+    # tests/plugins/example uses every hook, so a change that would break a
+    # plugin breaks it here, in the pull request that makes it.
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: autotune
+          POSTGRES_PASSWORD: autotune
+          POSTGRES_DB: autotune
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U autotune"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      AUTOTUNE_PLUGINS: example
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
+        with:
+          enable-cache: true
+      - run: uv sync --extra dev
+      - run: uv pip install -e tests/plugins/example
+      - name: The example imports from the platform only through app.plugin_api
+        run: uv run ruff check tests/plugins/example
+      - name: The whole suite, with the plugin enabled
+        run: uv run pytest -q
+      - name: Bootstrap a fresh database, the plugin's schema included
+        env:
+          AUTOTUNE_SYNC_DATABASE_URL: postgresql+psycopg2://autotune:autotune@localhost:5432/autotune
+          AUTOTUNE_DATABASE_URL: postgresql+asyncpg://autotune:autotune@localhost:5432/autotune
+          AUTOTUNE_LLMBENCH_ENSURE_BENCHMARKS: "false"
+        run: |
+          uv run python -m app.db.bootstrap
+          uv run python -m app.db.bootstrap   # every deploy runs it again
+      - name: Each migration history agrees with its own models, and only its own
+        env:
+          AUTOTUNE_SYNC_DATABASE_URL: postgresql+psycopg2://autotune:autotune@localhost:5432/autotune
+        run: |
+          uv run alembic check
+          uv run python - <<'PY'
+          from alembic import command
+          from alembic.config import Config
+
+          config = Config()
+          config.set_main_option(
+              "script_location", "tests/plugins/example/example_plugin/migrations"
+          )
+          command.check(config)
+          PY

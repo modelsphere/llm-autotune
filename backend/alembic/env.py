@@ -6,6 +6,7 @@ from alembic import context
 from app.core.config import get_settings
 from app.db import models  # noqa: F401  — register tables on Base.metadata
 from app.db.base import Base
+from app.plugins import only_tables_of
 
 config = context.config
 if config.config_file_name is not None:
@@ -17,12 +18,16 @@ if config.config_file_name is not None:
 config.set_main_option("sqlalchemy.url", get_settings().sync_database_url)
 
 target_metadata = Base.metadata
+# The database also holds plugins' tables, each tracked by its plugin's own
+# migration history (app/plugins.py); this one answers only for the platform's.
+include_object = only_tables_of(target_metadata)
 
 
 def run_migrations_offline() -> None:
     context.configure(
         url=config.get_main_option("sqlalchemy.url"),
         target_metadata=target_metadata,
+        include_object=include_object,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
     )
@@ -37,7 +42,11 @@ def run_migrations_online() -> None:
         poolclass=pool.NullPool,
     )
     with connectable.connect() as connection:
-        context.configure(connection=connection, target_metadata=target_metadata)
+        context.configure(
+            connection=connection,
+            target_metadata=target_metadata,
+            include_object=include_object,
+        )
         with context.begin_transaction():
             context.run_migrations()
 
