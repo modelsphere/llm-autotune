@@ -35,9 +35,9 @@ tick 不会启动同一个 tick 就要拆掉的 run。
 
 两个 driver 把同一个 `LaunchSpec` 渲染成同一条 engine 命令，区别只在跑在哪里。
 
-![裸金属 ssh：捕获、清空、运行配置、恢复。Kubernetes：提交、调度、服务、删除。](assets/substrates-zh.svg)
+![裸金属 ssh：租用、运行配置、服务、移除。Kubernetes：提交、调度、服务、删除。](assets/substrates-zh.svg)
 
-裸金属机器和生产共用，所以清空之前先捕获，归还之前先恢复。Kubernetes 上的 run 借用空闲 GPU，所以不需要恢复。
+裸金属机器空闲地租给平台，平台只移除它自己启动的容器。Kubernetes 上的 run 借用空闲 GPU。
 Kubernetes driver 只申请 GPU 数量，由 scheduler 放置 pod（机器可以指定 node selector）；起不来的 pod，
 比如模型路径不存在、镜像拉不下来，会很快带着真实原因失败。它渲染一个普通 `Deployment`，或者交给
 [operator](../operator/README.md) 的 `TuningRun`。
@@ -92,6 +92,6 @@ replay benchmark 回放一份生产流量样本，而流量会变化。什么时
 - **职责分离。** policy 从不碰机器。supervisor 是机器和 run 的唯一写入者。
 - **共用判断。** 生命周期问题（这个租约在排空吗？这个 run 塞得进时间窗吗？）由 worker 和 UI 共用同一段代码回答，
   所以两边不会不一致。
-- **baseline 互锁。** 在共用机器上，只有生产已被捕获并清空后才跑实验；只有生产已恢复并能响应后才归还机器。
+- **租约就是交接。** 机器空闲地交给平台，租约结束时归还；平台只停掉它自己启动的东西。
 - **结果可比。** 一个 campaign 在 pin 住的 dataset 上给每个配置打分，并用同样方式测量生产，所以即使绝对数字漂移，
   "比生产高 12%"依然成立。

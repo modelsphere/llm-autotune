@@ -26,7 +26,6 @@ from app.core import apikeys
 from app.db.base import Base, get_async_session
 from app.db.models import (
     ApiKey,
-    BaselineStatus,
     Campaign,
     CampaignStatus,
     ContenderStatus,
@@ -151,7 +150,6 @@ async def night(monkeypatch):
             Machine(
                 id=1, name="gpu-1", host="10.0.0.9", gpu_count=8, gpu_type="H100",
                 state=MachineState.AVAILABLE.value,
-                baseline_status=BaselineStatus.CLEARED.value,
             )
         )
         session.add(

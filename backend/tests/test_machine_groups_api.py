@@ -19,7 +19,6 @@ from sqlalchemy.pool import NullPool
 from app.core.auth import create_token
 from app.db.base import Base, get_async_session
 from app.db.models import (
-    BaselineStatus,
     Campaign,
     LeaseState,
     Machine,
@@ -90,7 +89,6 @@ async def _ready(factory, *names: str) -> None:
             if row.name in names:
                 row.state = MachineState.AVAILABLE.value
                 row.lease_state = LeaseState.ACTIVE.value
-                row.baseline_status = BaselineStatus.CLEARED.value
                 row.leased_at = row.created_at
         await session.commit()
 

@@ -125,8 +125,6 @@ class MachineOut(BaseModel):
     nccl_ifname: str = ""
     state: str
     notes: str
-    baseline: dict[str, Any]
-    baseline_status: str
     # Cards currently held by live runs — how much of the machine is actually
     # in use, which `state` alone cannot say once runs share a machine.
     gpus_busy: int = 0
@@ -206,7 +204,6 @@ class MachineGroupMemberOut(BaseModel):
     # group as ready-to-deploy or blocked without a second request per member.
     leased: bool
     state: str
-    baseline_status: str
     needs_attention: bool
     gpus_busy: int = 0
     # When this member's lease is promised back. Shown on the group because a

@@ -7,15 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed
-
-- A policy campaign with a nightly window stayed active after its policy
-  reported the search exhausted, waiting for a next night that would only
-  hear the same. It is now done when its session is.
-- The campaign page counted runs over candidates, so a policy campaign, whose
-  configs are each a launch and a benchmark, read "18/10 candidates
-  evaluated". It now counts candidates.
-
 ### Added
 
 - A campaign describes its workload instead of naming a benchmark: synthetic
@@ -151,11 +142,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   records the pod's `imageID`.
 - The overview diagram matches the platform, and the agent API doc's
   examples match its schemas.
+- A policy campaign with a nightly window stayed active after its policy
+  reported the search exhausted, waiting for a next night that would only
+  hear the same. It is now done when its session is.
+- The campaign page counted runs over candidates, so a policy campaign, whose
+  configs are each a launch and a benchmark, read "18/10 candidates
+  evaluated". It now counts candidates.
 
 ### Removed
 
 - The CI check that searched the tree for a list of internal host names; that
   list no longer lives in the repository.
+- Production capture, clearing and restoring. A lease is now the hand-over:
+  the machine is lent to the platform free, campaigns run on it at once, and
+  ending the lease stops only the platform's own containers. Gone with it:
+  the in-place production benchmark ("baseline canary"), the
+  `/machines/{id}/baseline/{capture,clear,restore}` routes, the Override
+  menu's Capture/Clear/Restore, `AUTOTUNE_AUTO_BASELINE_LIFECYCLE` and
+  `AUTOTUNE_AUTO_RESTORE_PRODUCTION`, `production_status` in the lease API,
+  and the machines' `baseline` and `baseline_status` columns (migration
+  `005`). Production's config is still measured as a campaign's baseline, by
+  launching the config recorded on **Baselines**; the preflight's "matches
+  production" check reads that record too. Runs against an endpoint the
+  platform did not launch fail as `endpoint_unreachable` /
+  `endpoint_unhealthy`.
 
 ## [0.1.2] - 2026-09-29
 

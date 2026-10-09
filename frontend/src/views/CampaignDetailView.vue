@@ -55,9 +55,8 @@ const metricSpecs = ref<MetricSpec[]>([])
 // so the platform says which metric a second stage defaults to.
 const defaultVerifyMetric = ref('replay.score_card_norm')
 const parity = ref<{
-  machine: string
-  container: string
-  missing: { flag: string; production: unknown; container: string }[]
+  baseline_id: number | null
+  missing: { flag: string; production: unknown }[]
 } | null>(null)
 const selectedRun = ref<RunDetail | null>(null)
 const drawerOpen = ref(false)
@@ -614,10 +613,10 @@ const configRows = computed(() => {
             ? `${c.dataset_profile} @ ${c.dataset_build_id}`
             : `${c.dataset_profile} — not pinned yet`,
           hint: c.dataset_build_id
-            ? `${c.dataset_policy_applied}; held for this campaign's whole life`
+            ? `sample ${c.dataset_policy_applied}; kept for this campaign's whole life`
             : c.dataset_policy === 'use_current'
-              ? 'takes whatever build is published when it starts'
-              : 'a fresh build is requested when the campaign starts',
+              ? 'uses the current sample when it starts'
+              : 'takes a fresh sample when it starts',
         }]
       : []),
     { label: 'Machines', value: (c.machine_names ?? []).join(', ') || 'any registered machine' },
@@ -644,9 +643,9 @@ const configRows = computed(() => {
       hint: `learned from this campaign's runs; capped at ${c.max_run_minutes} min`,
     },
     {
-      label: 'Baseline canary',
-      value: c.run_baseline_canary ? 'yes' : 'no',
-      hint: 'benchmark production before clearing it',
+      label: 'Production reference',
+      value: c.run_baseline_canary ? 'measured' : 'not measured',
+      hint: "the recorded baseline config, launched and benchmarked like a candidate",
     },
     {
       label: 'Machine sharing',
@@ -1126,9 +1125,9 @@ onMounted(() => {
               {{ t('campaign.datasetAdopted') }}
             </el-tag>
             <InfoHint>
-              Every candidate here replayed this one build, so their scores compare.
-              Another campaign's numbers only compare to these if it replayed the same
-              build id.
+              Every candidate here replayed this one sample of the dataset, so their
+              scores compare. Another campaign's numbers only compare to these if it
+              replayed the same sample (the same id).
             </InfoHint>
           </p>
           <ScoreBars :rows="verifiedBoard" :swept-keys="sweptKeys"
@@ -1360,14 +1359,13 @@ onMounted(() => {
         <div class="block-head">
           <h3>Difference from production</h3>
           <span class="muted tiny">
-            flags <span class="mono">{{ parity?.container || 'the captured service' }}</span>
-            passes that this campaign never sets
+            flags production's recorded baseline sets that this campaign never sets
           </span>
         </div>
         <pre class="mono block">{{ parity?.missing?.length
           ? parity.missing.map((m) => `${m.flag}: ${m.production}`).join('\n')
-          : (parity?.machine ? 'none — every flag production sets is set here too'
-                             : 'no captured production service to compare against') }}</pre>
+          : (parity?.baseline_id ? 'none — every flag production sets is set here too'
+                                 : 'no baseline recorded for this model on Baselines') }}</pre>
 
         <div class="block-head">
           <h3>Search space</h3>

@@ -19,10 +19,6 @@ const groups = ref<MachineGroup[]>([])
  *  a machine means the platform-default cluster, which has no row here. */
 const clusters = ref<Cluster[]>([])
 const steps = ref<string[]>([])
-const autoLifecycle = ref(true)
-/** Whether WE put production back when a lease ends. Off by default, and the
- *  one setting an operator must not discover after pressing End lease. */
-const autoRestore = ref(true)
 const lifecycle = ref<Record<number, MachineLifecycle>>({})
 const showAdd = ref(false)
 const busy = ref(false)
@@ -154,8 +150,6 @@ async function load() {
   }
   const { data } = await api.get('/machines/lifecycle')
   steps.value = data.steps
-  autoLifecycle.value = data.auto
-  autoRestore.value = data.auto_restore
   lifecycle.value = Object.fromEntries(
     (data.machines as MachineLifecycle[]).map((m) => [m.machine_id, m]),
   )
@@ -429,23 +423,15 @@ async function endLease(machine: Machine, mode: 'polite' | 'eager') {
             stage?.returnable_at ? ` — expect to wait until ${exactClock(stage.returnable_at)}` : ''
           }.`
         : ''
-  // What happens to production is NOT a property of the mode — it depends on
-  // what was captured and on whether this deployment restores on hand-back. The
-  // dialog used to promise a restore unconditionally, which was false for a
-  // machine captured empty and false again wherever auto-restore is off. Ask
-  // the backend, which reads it off the branch the drain will take.
-  const back = stage?.hand_back
   try {
     await ElMessageBox.confirm(
-      `Hand ${machine.name} back to production?${warning}\n\n` +
-        (back?.summary ?? 'Check the machine before handing it back.'),
+      `Hand ${machine.name} back?${warning}\n\nOnly the platform's own runs stop; ` +
+        'nothing else on the machine is touched.',
       mode === 'eager' ? 'End lease now' : 'End lease',
       {
         confirmButtonText: mode === 'eager' ? 'Stop everything' : 'End it',
         cancelButtonText: 'Cancel',
-        // Leaving production down is the outcome worth a red dialog even on a
-        // polite end — it is the one the operator cannot undo by waiting.
-        type: mode === 'eager' || back?.owed ? 'error' : 'warning',
+        type: mode === 'eager' ? 'error' : 'warning',
       },
     )
   } catch {
@@ -453,10 +439,7 @@ async function endLease(machine: Machine, mode: 'polite' | 'eager') {
   }
   try {
     await api.post(`/machines/${machine.name}/lease/end`, { mode, reason: 'ended from the UI' })
-    const runs = mode === 'eager' ? 'Stopping runs' : 'No new runs will start'
-    if (back?.owed) ElMessage.warning(`${runs}; production stays down — restore it yourself`)
-    else if (back?.restores) ElMessage.success(`${runs}; production comes back after that`)
-    else ElMessage.success(`${runs}; nothing of production's is affected`)
+    ElMessage.success(mode === 'eager' ? 'Stopping runs' : 'No new runs will start')
     await load()
   } catch (error: any) {
     ElMessage.error(error.response?.data?.detail ?? 'Could not end the lease')
@@ -468,19 +451,17 @@ function exactClock(iso: string | null): string {
   return new Date(iso).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
 }
 
-const busyBaseline = ref<number | null>(null)
+const busyMachine = ref<number | null>(null)
 /** The controlled GPU-type vocabulary, from the backend so a card added there
  *  (B300, …) shows up in the dropdowns without a frontend change. */
 const gpuTypes = ref<string[]>([])
 
-/** One handler for the overflow menu: an eager hand-back sits next to the
- *  baseline overrides because both are "I know what I am doing" actions. */
+/** One handler for the overflow menu. */
 function menu(machine: Machine, command: string) {
   if (command === 'end-eager') return endLease(machine, 'eager')
   if (command === 'probe') return probeCapacity(machine)
   if (command === 'edit') return openEdit(machine)
   if (command === 'remove') return removeMachine(machine)
-  return baselineAction(machine, command as 'capture' | 'clear' | 'restore')
 }
 
 /** "Can the platform reach this machine at all?" The backend walks the path a
@@ -527,7 +508,7 @@ async function runSmoke() {
  *  probe's own warnings — a selector that matched nothing, an unknown card, a
  *  pool spanning two card types. */
 async function probeCapacity(machine: Machine) {
-  busyBaseline.value = machine.id
+  busyMachine.value = machine.id
   try {
     const { data } = await api.post(`/machines/${machine.id}/probe-capacity`)
     const p = data.probe ?? {}
@@ -540,52 +521,7 @@ async function probeCapacity(machine: Machine) {
   } catch (error: any) {
     ElMessage.error(error.response?.data?.detail ?? 'Probe failed')
   } finally {
-    busyBaseline.value = null
-  }
-}
-
-/** The manual overrides. Named as such: the sequence runs itself, and every
- *  one of these interrupts it somewhere. Clear is the dangerous one — it stops
- *  the very service the baseline canary is queued to measure, which is how
- *  three canaries failed against a machine that was fine. */
-async function baselineAction(machine: Machine, action: 'capture' | 'clear' | 'restore') {
-  const stage = stageOf(machine)
-  if (action === 'clear') {
-    const services = machine.baseline?.services ?? []
-    const warning = stage?.canary_pending
-      ? `\n\nThe baseline canary has not passed yet. Stopping production now leaves ` +
-        `this campaign with nothing to compare its results against.`
-      : ''
-    try {
-      await ElMessageBox.confirm(
-        `Stop ${services.length} production service(s) on ${machine.name}? ` +
-          `They can be restored from the captured deploy scripts.${warning}`,
-        'Clear production services',
-        {
-          confirmButtonText: 'Stop them',
-          cancelButtonText: 'Cancel',
-          type: stage?.canary_pending ? 'error' : 'warning',
-        },
-      )
-    } catch {
-      return
-    }
-  }
-  busyBaseline.value = machine.id
-  try {
-    const { data } = await api.post(`/machines/${machine.id}/baseline/${action}`)
-    const count = data.baseline?.services?.length ?? 0
-    ElMessage.success(
-      action === 'capture' ? `Captured ${count} service(s)` : `Baseline ${action}d`,
-    )
-    if (action === 'restore') {
-      ElMessage.warning('The deploy script returns in seconds; the model loads for minutes')
-    }
-    await load()
-  } catch (error: any) {
-    ElMessage.error(error.response?.data?.detail ?? `${action} failed`)
-  } finally {
-    busyBaseline.value = null
+    busyMachine.value = null
   }
 }
 
@@ -595,50 +531,10 @@ async function baselineAction(machine: Machine, action: 'capture' | 'clear' | 'r
 function leaseLook(m: Machine): { type: string; text: string } {
   if (m.lease_state === 'draining') return { type: 'warning', text: 'handing back' }
   if (m.state === 'away' || m.lease_state === 'released' || m.lease_state === 'none') {
-    return { type: 'info', text: 'with production' }
+    return { type: 'info', text: 'not leased' }
   }
   if (m.state === 'reserved') return { type: 'warning', text: 'running' }
   return { type: 'success', text: 'leased' }
-}
-
-/** What has been done to PRODUCTION on this box — a separate question from what
- *  the lease says, and one `baseline_status` cannot answer alone: `cleared`
- *  covers both "we stopped production" and "there was nothing to stop", and only
- *  the first is owed a restore. Two machines that read identically on the page
- *  while meaning opposite things is what this tag exists to end. */
-function productionLook(m: Machine): { type: string; text: string; title: string } | null {
-  if (m.state === 'away' && m.lease_state === 'none') return null
-  const n = m.baseline?.services?.length ?? 0
-  if (m.baseline_status === 'captured') {
-    return {
-      type: 'success',
-      text: `production up · ${n} captured`,
-      title: `${n} service(s) written down, still running. They can be restored from the capture.`,
-    }
-  }
-  if (m.baseline_status === 'cleared') {
-    return n
-      ? {
-          type: 'danger',
-          text: `production down · ${n} to restore`,
-          title: `We stopped ${n} production service(s) on this machine. They are owed back.`,
-        }
-      : {
-          type: 'info',
-          text: 'nothing was captured',
-          title:
-            'Capture reached the machine and found no production services — it was ' +
-            'already free when it was handed over, so nothing is owed back.',
-        }
-  }
-  if (m.baseline_status === 'restored') {
-    return { type: 'success', text: 'production restored', title: 'Production was put back.' }
-  }
-  return {
-    type: 'info',
-    text: 'not captured yet',
-    title: 'Nothing has been recorded or stopped on this machine.',
-  }
 }
 
 const readinessLook: Record<string, { type: string; text: string }> = {
@@ -669,10 +565,6 @@ function stepClass(machine: Machine, index: number): string {
   return stage.state === 'waiting' ? 'now pending' : 'now'
 }
 
-const anyBlocked = computed(() =>
-  Object.values(lifecycle.value).some((m) => m.state === 'blocked'),
-)
-
 onMounted(async () => {
   try {
     gpuTypes.value = (await api.get('/machines/gpu-types')).data.gpu_types
@@ -692,10 +584,8 @@ onMounted(async () => {
         <span class="muted">
           Lease a machine, schedule a campaign — the platform does the rest.
           <InfoHint :width="400">
-            Per machine, automatically: <b>capture</b> what production is running,
-            <b>benchmark</b> it while it is still up, <b>clear</b> it only once that
-            control run passes, run the experiments, then <b>restore</b> production when
-            the lease ends or the campaign's window closes.
+            Leasing hands a machine to the platform, free: campaigns run on it until the
+            lease ends, and ending it stops only the platform's own runs.
             <br /><br />
             The same lease can be started and ended by an external fleet manager over the
             API — these buttons call exactly those endpoints.
@@ -709,23 +599,6 @@ onMounted(async () => {
         <el-button type="primary" @click="openAdd">Add machine</el-button>
       </div>
     </div>
-
-    <el-alert v-if="!autoLifecycle" type="warning" :closable="false" show-icon
-      style="margin-bottom: 12px"
-      title="Automatic hand-over is switched off"
-      description="AUTOTUNE_AUTO_BASELINE_LIFECYCLE is false, so capture, clear and
-        restore have to be driven from the Override menu below. Each machine still
-        shows the step it has actually reached — the switch stops the sequence
-        moving, it does not make the position unknown." />
-
-    <el-alert v-if="!autoRestore" type="info" :closable="false" show-icon
-      style="margin-bottom: 12px"
-      title="Ending a lease does not put production back"
-      description="AUTOTUNE_AUTO_RESTORE_PRODUCTION is false, so a machine whose
-        production we stopped is handed back with it still down and the restore is
-        yours to do (Override ▸ Restore, which keeps working after the lease closes).
-        Machines that were already free when we got them are unaffected — each card
-        says which it is." />
 
     <div v-if="groups.length" class="groups">
       <h2 class="section-title">
@@ -818,10 +691,6 @@ onMounted(async () => {
             title="What an external fleet manager is told when it asks for this machine">
             {{ readinessLook[stageOf(m)!.readiness]?.text ?? stageOf(m)!.readiness }}
           </el-tag>
-          <el-tag v-if="productionLook(m)" size="small" effect="plain"
-            :type="(productionLook(m)!.type as any)" :title="productionLook(m)!.title">
-            {{ productionLook(m)!.text }}
-          </el-tag>
           <span class="muted tiny">
             {{ m.gpus_busy }}/{{ m.gpu_count }} cards in use
             <template v-if="m.gpu_type"> · {{ m.gpu_type }}</template>
@@ -842,7 +711,7 @@ onMounted(async () => {
 
           <el-button size="small" text @click="openSmoke(m)">Smoke test</el-button>
           <el-dropdown trigger="click" @command="(a: any) => menu(m, a)">
-            <el-button size="small" text :loading="busyBaseline === m.id">More ▾</el-button>
+            <el-button size="small" text :loading="busyMachine === m.id">More ▾</el-button>
             <template #dropdown>
               <el-dropdown-menu>
                 <el-dropdown-item command="edit">
@@ -858,18 +727,6 @@ onMounted(async () => {
                   :disabled="m.lease_state === 'none'
                   || m.lease_state === 'released'" class="risky">
                   End lease now — stop runs immediately
-                </el-dropdown-item>
-                <el-dropdown-item command="capture" divided :disabled="m.state === 'away'">
-                  Capture — record production now
-                </el-dropdown-item>
-                <el-dropdown-item command="clear"
-                  :disabled="m.baseline_status !== 'captured'"
-                  :class="stageOf(m)?.canary_pending ? 'risky' : ''">
-                  Clear — stop production now
-                </el-dropdown-item>
-                <el-dropdown-item command="restore"
-                  :disabled="!m.baseline?.services?.length || m.state === 'reserved'">
-                  Restore — put production back
                 </el-dropdown-item>
               </el-dropdown-menu>
             </template>
@@ -901,8 +758,7 @@ onMounted(async () => {
       </div>
 
       <div v-if="(m.lease_state === 'active' || m.lease_state === 'draining')
-        && stageOf(m)?.hand_back?.summary" class="handback"
-        :class="{ owed: stageOf(m)!.hand_back.owed }">
+        && stageOf(m)?.hand_back?.summary" class="handback">
         <span class="muted tiny label">On hand-back</span>
         <span class="tiny">{{ stageOf(m)!.hand_back.summary }}</span>
       </div>
@@ -915,25 +771,7 @@ onMounted(async () => {
         </LinkButton>
       </div>
 
-      <p v-if="m.baseline_status === 'cleared' && !m.baseline?.services?.length"
-        class="muted tiny fold-note">
-        No production services were found on this machine when it was captured, so there
-        is no service list here and nothing to put back.
-      </p>
-
-      <el-collapse v-if="m.baseline?.services?.length" class="fold">
-        <el-collapse-item :title="`Production on this machine (${m.baseline.services.length})`">
-          <div v-for="s in m.baseline.services" :key="s.container" class="mono svc">
-            {{ s.container }} · :{{ s.port }} · {{ s.served_model_name }}
-          </div>
-        </el-collapse-item>
-      </el-collapse>
     </div>
-
-    <p v-if="anyBlocked" class="muted tiny foot">
-      A blocked machine never has its production torn down — that is the point.
-      A machine we could not measure is the one not to clear.
-    </p>
 
     <el-dialog v-model="showAdd" :title="editingId === null ? 'Add machine' : 'Edit machine'"
       width="480px">
@@ -1521,43 +1359,15 @@ onMounted(async () => {
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
-/* Production left down is the outcome an operator cannot undo by waiting, so
-   it is the one that gets colour. */
-.handback.owed {
-  border-left-color: var(--el-color-danger);
-  background: var(--el-color-danger-light-9);
-}
-.fold-note {
-  margin: 6px 0 0;
-}
 .for {
   display: flex;
   align-items: center;
   gap: 6px;
   margin-top: 4px;
 }
-.fold {
-  margin-top: 6px;
-  border-top: none;
-}
-.fold :deep(.el-collapse-item__header) {
-  font-size: 12px;
-  height: 32px;
-  line-height: 32px;
-  border-bottom: none;
-}
-.fold :deep(.el-collapse-item__wrap) {
-  border-bottom: none;
-}
-.svc {
-  line-height: 1.7;
-}
 .empty {
   padding: 24px;
   text-align: center;
-}
-.foot {
-  margin-top: 4px;
 }
 .grid-2 {
   display: grid;

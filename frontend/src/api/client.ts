@@ -44,17 +44,6 @@ export interface Machine {
   nccl_ifname: string
   state: 'away' | 'available' | 'reserved'
   notes: string
-  baseline: {
-    services?: {
-      container: string
-      image: string
-      port: string
-      served_model_name: string
-      endpoint_url: string
-      restore_script: string
-    }[]
-  }
-  baseline_status: 'none' | 'captured' | 'cleared' | 'restored'
   gpus_busy: number
   /** Who lent us this machine and until when. `none` = never leased. */
   lease_state: LeaseState
@@ -166,7 +155,6 @@ export interface MachineGroupMember {
   driver: string
   leased: boolean
   state: string
-  baseline_status: string
   needs_attention: boolean
   gpus_busy: number
   /** When this member's lease is promised back. */
@@ -246,7 +234,6 @@ export interface LeaseStatus {
   lease_released_at: string | null
   readiness: 'busy' | 'idle' | 'returnable'
   returnable_at: string | null
-  production_status: string
   live_runs: {
     run_id: number
     campaign_id: number
@@ -289,11 +276,8 @@ export interface CampaignSchedule {
   finished: boolean
 }
 
-/** Where a machine is in the hand-over sequence, from `/machines/lifecycle`.
- *
- *  Answered by the backend on purpose: `state` and `baseline_status` alone
- *  cannot say whether a baseline canary is still owed, and a page that guesses
- *  is how manual Capture/Clear came to look like required steps. */
+/** Where a machine is in its lease, from `/machines/lifecycle` — the same
+ *  predicates the worker acts on, so the page never guesses. */
 export interface MachineLifecycle {
   machine_id: number
   /** Index into the `steps` array the same endpoint returns. */
@@ -302,26 +286,13 @@ export interface MachineLifecycle {
   headline: string
   detail: string
   campaigns: { id: number; name: string }[]
-  /** A canary is owed and has not passed — clearing by hand destroys the very
-   *  service it exists to measure. */
-  canary_pending: boolean
   /** The same word the lease API gives an external caller, so the page and the
    *  fleet manager can never describe a machine differently. */
   readiness: 'busy' | 'idle' | 'returnable'
   /** Worst case for when a polite hand-back completes; null when idle. */
   returnable_at: string | null
-  /** What End lease actually does to production on this machine, decided by
-   *  the backend from the branch the drain will take. The card and the confirm
-   *  dialog both render `summary` rather than each writing their own sentence. */
-  hand_back: {
-    /** We start production again before the lease closes. */
-    restores: boolean
-    /** Production is down and we are NOT the ones putting it back. */
-    owed: boolean
-    /** How many captured services that verdict is about. */
-    services: number
-    summary: string
-  }
+  /** What End lease does on this machine right now, in one line. */
+  hand_back: { summary: string }
 }
 
 export interface Campaign {
@@ -454,7 +425,7 @@ export interface Run {
   campaign_id: number
   candidate_id: number
   machine_id: number | null
-  kind: string // experiment | baseline (the canary against production)
+  kind: string // experiment | policy_launch | external (| baseline, before 0.2.0)
   /** screen = the cheap benchmark every candidate gets; verify = the expensive
    *  one only the shortlist gets. Their metrics share no names. */
   stage: string
@@ -558,7 +529,10 @@ export interface Redline {
 export interface DatasetProfile {
   name: string
   display_name: string
+  /** Resampled only when a campaign asks, so it holds steady in between. */
   managed: boolean
+  /** How often LLMBench resamples it on its own; 0 = only on request. */
+  schedule_hours: number
   enabled: boolean
   build_id: string
   records: number | null

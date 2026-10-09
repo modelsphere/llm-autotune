@@ -78,10 +78,9 @@ kubectl create secret generic autotune-worker-ssh \
   --from-file=id_ed25519=$HOME/.ssh/id_ed25519
 ```
 
-Then add each machine from the Resources page. Such a box is usually shared with
-production, so the platform captures what is already running on it, verifies it
-can put it back, clears it for the night, and restores it afterwards. It refuses
-to run experiments on a machine it could not capture.
+Then add each machine from the Resources page and lease it to the platform.
+Lease it free: the platform runs its engines next to nothing, and when the
+lease ends it stops only the containers it started.
 
 ## What measures a run
 
@@ -212,10 +211,8 @@ The ones installs usually reach for:
 | `AUTOTUNE_PROMOTION_TARGET` | `manual` | `gitlab` opens a merge request for a winner instead of only rendering its config |
 | `AUTOTUNE_PROMOTION_DRY_RUN` | `true` | build and record the merge request without pushing anything |
 | `AUTOTUNE_GITLAB_BASE_URL`, `_PROJECT`, `_TOKEN` | — | the deploy repository promotion writes to; the token needs to push branches and open merge requests |
-| `AUTOTUNE_AUTO_RESTORE_PRODUCTION` | `false` | put production back on a borrowed ssh machine when the window or lease ends |
-| `AUTOTUNE_AUTO_BASELINE_LIFECYCLE` | `true` | let the worker take production down after a passing canary; `false` asks a person on the Resources page |
 | `AUTOTUNE_DEFAULT_DAILY_START`, `_END`, `AUTOTUNE_DEFAULT_SCHEDULE_TIMEZONE` | — | the window a drafted campaign gets when its author names none |
-| `AUTOTUNE_DEFAULT_MAX_RUN_MINUTES` | `150` | how long one run may take, start to verdict |
+| `AUTOTUNE_DEFAULT_MAX_RUN_MINUTES` | `150` | window a run reserves before the campaign has measured one of its own |
 | `AUTOTUNE_READY_TIMEOUT_MINUTES` | `30` | how long a started engine may take to answer `/v1/models` |
 | `AUTOTUNE_IMAGE_PULL_TIMEOUT_MINUTES` | `45` | how long a pod may spend scheduling and pulling its image |
 | `AUTOTUNE_HEALTH_PROBE_TIMEOUT_SECONDS` | `600` | how long the first chat completion may take |

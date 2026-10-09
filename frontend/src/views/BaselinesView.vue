@@ -203,7 +203,7 @@ async function remove(b: Baseline) {
     await ElMessageBox.confirm(
       `Delete the baseline for ${b.served_model_name} / ${b.engine} / ` +
         `${b.card_type || '(any card)'}? Campaigns comparing against it will fall ` +
-        `back to raw scores until one is captured again.`,
+        `back to raw scores until one is recorded again.`,
       'Delete baseline',
       { confirmButtonText: 'Delete', cancelButtonText: 'Cancel', type: 'warning' },
     )
@@ -228,7 +228,7 @@ function tuneFromThis(b: Baseline) {
 }
 
 const capturedNote = computed(
-  () => 'Captured automatically when a machine is handed over; a hand-set one is left alone.',
+  () => 'Recorded here by hand, from a pasted command or a deploy-repo file.',
 )
 
 onMounted(async () => {

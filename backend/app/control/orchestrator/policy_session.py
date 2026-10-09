@@ -41,7 +41,6 @@ from app.db.models import (
     TERMINAL_RUN_STATES,
     TERMINAL_SESSION_STATES,
     ApiKey,
-    BaselineStatus,
     Campaign,
     CampaignStatus,
     Candidate,
@@ -240,8 +239,6 @@ class PolicySessionEngine:
             return False
         needed = settings_of(campaign).cards if campaign.share_machine else 0
         for m in self.sup._usable_machines(db, campaign):
-            if m.baseline_status != BaselineStatus.CLEARED.value:
-                continue  # the baseline lifecycle's to move, not the queue's
             if m.id in blocked:
                 busy.add(m.id)
                 continue

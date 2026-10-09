@@ -22,7 +22,6 @@ from app.control.orchestrator.occupancy import Reservation, busy_reason
 from app.control.orchestrator.supervisor import Supervisor
 from app.db.base import Base
 from app.db.models import (
-    BaselineStatus,
     Campaign,
     CampaignStatus,
     Machine,
@@ -55,8 +54,7 @@ def _stack(campaigns: list[dict], *, gpu_count: int = 8, ports: int = 4):
         s.add(User(id=1, username="u", password_hash="x"))
         s.add(Policy(id=1, owner_id=1, name="rs", image="policy:1", ports=ports))
         s.add(Machine(id=1, name="node-1", host="10.0.0.1", gpu_count=gpu_count,
-                      state=MachineState.AVAILABLE.value,
-                      baseline_status=BaselineStatus.CLEARED.value))
+                      state=MachineState.AVAILABLE.value))
         for i, spec in enumerate(campaigns):
             s.add(Campaign(
                 id=100 + i, owner_id=1, name=f"c{i}", engine="sglang", image="img",

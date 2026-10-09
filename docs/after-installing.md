@@ -148,9 +148,10 @@ worker:
 ```
 
 Run the script again, then **Add machine** on **Resources** with its address and
-ssh user. The machine needs Docker and the NVIDIA container toolkit. Such a box
-is usually shared with production: the platform captures what runs there
-before it takes the box and can put it back afterwards
+ssh user, and put the public half of that key in the user's
+`~/.ssh/authorized_keys` there. The machine needs Docker and the NVIDIA
+container toolkit. Lease it to the platform free; ending the lease stops only
+the platform's own containers
 ([deploying.md](deploying.md#bare-metal-boxes-over-ssh)).
 
 ## Your own models

@@ -35,7 +35,6 @@ from app.control.search import CandidateConfig
 from app.db.base import Base
 from app.db.models import (
     TERMINAL_RUN_STATES,
-    BaselineStatus,
     Campaign,
     CampaignStatus,
     Candidate,
@@ -71,8 +70,7 @@ def _platform(metrics=None, environment=None):
         session.add(User(id=1, username="u", password_hash="x"))
         session.add(
             Machine(id=1, name="node-24", host="10.0.0.1", gpu_count=8, gpu_type="A100",
-                    state=MachineState.AVAILABLE.value,
-                    baseline_status=BaselineStatus.CLEARED.value)
+                    state=MachineState.AVAILABLE.value)
         )
         session.add(
             Campaign(id=1, owner_id=1, name="manual", engine="sglang", image="img",

@@ -45,11 +45,11 @@ so a tick never starts a run that the same tick would tear down.
 Both drivers render the same `LaunchSpec` into the same engine command; only
 where it runs differs.
 
-![Bare metal over ssh: capture, clear, run configs, restore. Kubernetes: submit, schedule, serve, delete.](assets/substrates.svg)
+![Bare metal over ssh: lease, run configs, serve, remove. Kubernetes: submit, schedule, serve, delete.](assets/substrates.svg)
 
-A bare-metal box is shared with production, so it is captured before it is
-cleared and restored before it is handed back. A Kubernetes run borrows idle
-GPUs, so there is nothing to restore. The Kubernetes driver asks for a GPU
+A bare-metal box is leased to the platform free, and the platform only ever
+removes the containers it started. A Kubernetes run borrows idle GPUs. The
+Kubernetes driver asks for a GPU
 count and lets the scheduler place the pod (a machine may pin a node
 selector); a pod that cannot start, such as a missing model path or an image
 that will not pull, fails fast with its real reason. It renders a plain
@@ -119,9 +119,8 @@ leaderboard ranks cannot disagree.
 - **Shared predicates.** Lifecycle questions (is this lease draining? does
   this run fit the window?) are answered by the same code for the worker and
   the UI, so the two cannot disagree.
-- **The baseline interlock.** On a shared machine, experiments run only after
-  production was captured and cleared, and the machine goes back only after
-  production is restored and answering.
+- **The lease is the hand-over.** A machine comes to the platform free and
+  goes back when the lease ends; the platform stops only what it launched.
 - **Comparable results.** A campaign scores every config on its pinned dataset
   and measures production the same way, so "+12% over production" holds as
   absolute numbers drift.

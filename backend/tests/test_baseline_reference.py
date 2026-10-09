@@ -1,10 +1,9 @@
 """The baseline as a measured reference (Stage 2).
 
 A baseline is the production config, resolved by (served model, engine, card
-type). It is measured on the same dataset as the candidates it anchors — in
-place when production already serves it (the shortcut), by relaunching it when
-production runs something else — and it spans BOTH stages, so the verify stage
-finally has a drift-robust reference to rank against.
+type). It is measured on the same dataset as the candidates it anchors, by
+launching it like any config, and it spans BOTH stages, so the verify stage
+has a drift-robust reference to rank against.
 """
 
 from sqlalchemy import create_engine, select
@@ -16,7 +15,6 @@ from app.control.search import CandidateConfig
 from app.db.base import Base
 from app.db.models import (
     Baseline,
-    BaselineStatus,
     Campaign,
     CampaignStatus,
     Candidate,
@@ -35,19 +33,8 @@ from app.db.models import (
 from app.staging import SCREEN, VERIFY, stage_of
 from tests.fakes import NullDriver
 
-PROD_CONFIG = {"tp": "2", "chunked_prefill_size": "32768", "enable_cache_report": True}
 
-
-def _prod_service(config=PROD_CONFIG):
-    return {
-        "container": "sglang-p8050", "endpoint_url": "http://10.0.0.1:8050",
-        "served_model_name": "glm-5", "port": "8050", "cards": 2,
-        "engine_args": dict(config),
-    }
-
-
-def _platform(*, baseline_args=None, prod=True, card_type="A100",
-              staged=True, canary=True):
+def _platform(*, baseline_args=None, card_type="A100", staged=True, canary=True):
     engine = create_engine("sqlite://")
     Base.metadata.create_all(engine)
     factory = sessionmaker(engine, expire_on_commit=False)
@@ -56,9 +43,6 @@ def _platform(*, baseline_args=None, prod=True, card_type="A100",
         session.add(Machine(
             id=1, name="node-24", host="10.0.0.1", gpu_count=8, gpu_type=card_type,
             state=MachineState.AVAILABLE.value,
-            baseline={"services": [_prod_service()]} if prod else {"services": []},
-            baseline_status=BaselineStatus.CAPTURED.value if prod
-            else BaselineStatus.CLEARED.value,
         ))
         session.add(Campaign(
             id=1, owner_id=1, name="c", engine="sglang", image="img",
@@ -131,7 +115,7 @@ def test_resolve_and_compare():
 def test_the_verify_stage_gets_a_relaunched_baseline():
     """A staged campaign with a defined baseline verifies it too — not in the
     shortlist, but as the reference the verify stage is ranked against."""
-    supervisor, factory = _platform(baseline_args={"tp": "8"}, prod=False)
+    supervisor, factory = _platform(baseline_args={"tp": "8"})
     with factory() as session:
         # Screening is complete: a real candidate and the screen baseline are
         # both measured, so the campaign is ready to verify.
@@ -151,33 +135,12 @@ def test_the_verify_stage_gets_a_relaunched_baseline():
         assert verify_baselines[0].status == CandidateStatus.VALID.value, "it will launch"
 
 
-# -- the shortcut: measure in place only when production is the baseline -------
+# -- measured by launching it ------------------------------------------------
 
 
-def test_production_serving_the_baseline_is_measured_in_place():
-    """The shortcut: production already runs the baseline config, so measure it
-    where it stands — no relaunch, an in-place canary run."""
-    supervisor, factory = _platform(baseline_args=dict(PROD_CONFIG))
-
-    supervisor.tick()
-
-    with factory() as session:
-        runs = session.scalars(select(Run)).all()
-        baseline_runs = [r for r in runs if r.kind == RunKind.BASELINE.value]
-        assert len(baseline_runs) == 1, "an in-place canary against production"
-        # No relaunch screen baseline was created — the shortcut stood in for it.
-        screen_baselines = [
-            c for c in session.scalars(select(Candidate)).all()
-            if is_baseline_candidate(c) and stage_of(c) == SCREEN
-            and not is_in_place_baseline(c)
-        ]
-        assert not screen_baselines
-
-
-def test_production_running_something_else_relaunches_the_baseline():
-    """Production serves a different config than the defined baseline, so the
-    in-place shortcut does not apply: the baseline is relaunched as a config the
-    pipeline screens itself, and clearing is not gated on a canary."""
+def test_the_baseline_is_launched_and_screened_like_any_config():
+    """The platform never measures production in place: the recorded baseline
+    config is launched as one more config the pipeline screens."""
     supervisor, factory = _platform(baseline_args={"tp": "4", "enable_dp_attention": True})
 
     supervisor.tick()
@@ -191,11 +154,10 @@ def test_production_running_something_else_relaunches_the_baseline():
         ]
         assert len(relaunch) == 1
         assert relaunch[0].config == {"tp": "4", "enable_dp_attention": True}
-        # …and it was LAUNCHED, not retired: clearing was not gated on a canary
-        # (production is not the reference), so the machine freed and it ran.
+        # …and it was LAUNCHED, on the leased machine, like any candidate.
         its_runs = [r for r in session.scalars(select(Run)).all()
                     if r.candidate_id == relaunch[0].id]
         assert its_runs and its_runs[0].kind == RunKind.EXPERIMENT.value
-        # No in-place canary run — production is not the reference here.
+        # Nothing measured in place.
         assert not [r for r in session.scalars(select(Run)).all()
                     if r.kind == RunKind.BASELINE.value]

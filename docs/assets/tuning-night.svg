@@ -2,8 +2,8 @@
   <defs><marker id="a-grey" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#5b6b7a"/></marker><marker id="a-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#2f6f4f"/></marker><marker id="a-orange" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#c07a2c"/></marker><marker id="a-purple" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#8b72be"/></marker><marker id="a-red" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#c96161"/></marker><marker id="a-blue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#5b85c9"/></marker></defs>
   <rect width="1000" height="210" fill="#ffffff"/>
   <rect x="20" y="50" width="150" height="70" rx="8" fill="#fdf5e1" stroke="#d1a646" stroke-width="1.4"/>
-  <text x="95.0" y="80.5" font-size="15" fill="#1b2733" font-weight="700" text-anchor="middle">Take over</text>
-  <text x="95.0" y="101.5" font-size="12.5" fill="#7a5a1a" text-anchor="middle">capture, clear</text>
+  <text x="95.0" y="80.5" font-size="15" fill="#1b2733" font-weight="700" text-anchor="middle">Lease</text>
+  <text x="95.0" y="101.5" font-size="12.5" fill="#7a5a1a" text-anchor="middle">handed over free</text>
   <rect x="176" y="50" width="140" height="70" rx="8" fill="#e4edf9" stroke="#5b85c9" stroke-width="1.4"/>
   <text x="246.0" y="80.5" font-size="15" fill="#1b2733" font-weight="700" text-anchor="middle">Baseline</text>
   <text x="246.0" y="101.5" font-size="12.5" fill="#4a5a6a" text-anchor="middle">measure production</text>
@@ -15,7 +15,7 @@
   <text x="755.0" y="101.5" font-size="12.5" fill="#4a5a6a" text-anchor="middle">re-measure the best</text>
   <rect x="836" y="50" width="144" height="70" rx="8" fill="#fdf5e1" stroke="#d1a646" stroke-width="1.4"/>
   <text x="908.0" y="80.5" font-size="15" fill="#1b2733" font-weight="700" text-anchor="middle">Hand back</text>
-  <text x="908.0" y="101.5" font-size="12.5" fill="#7a5a1a" text-anchor="middle">restore, verify</text>
+  <text x="908.0" y="101.5" font-size="12.5" fill="#7a5a1a" text-anchor="middle">stop our runs</text>
   <path d="M677 30 L677 140" fill="none" stroke="#c96161" stroke-width="1.6" stroke-dasharray="5 4"/>
   <text x="677" y="22" font-size="12" fill="#c96161" font-weight="700" text-anchor="middle">search deadline</text>
   <path d="M20 160 L978 160" fill="none" stroke="#5b6b7a" stroke-width="1.6" marker-end="url(#a-grey)"/>

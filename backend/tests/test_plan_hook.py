@@ -19,7 +19,6 @@ from app.control.search import CandidateConfig
 from app.control.search.history import campaign_history
 from app.db.base import Base
 from app.db.models import (
-    BaselineStatus,
     Campaign,
     CampaignStatus,
     Candidate,
@@ -47,7 +46,6 @@ def _stack(search_space=None):
             Machine(
                 id=1, name="gpu-01", host="10.0.0.1", gpu_count=8,
                 state=MachineState.AVAILABLE.value,
-                baseline_status=BaselineStatus.CLEARED.value,
             )
         )
         session.add(

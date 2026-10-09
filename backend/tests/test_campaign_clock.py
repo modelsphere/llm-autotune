@@ -13,7 +13,6 @@ from sqlalchemy.orm import sessionmaker
 from app.control.orchestrator.supervisor import Supervisor
 from app.db.base import Base
 from app.db.models import (
-    BaselineStatus,
     Campaign,
     CampaignStatus,
     Candidate,
@@ -44,8 +43,7 @@ def _platform(*, daily_start="23:00", daily_end="08:00", status=CampaignStatus.S
         session.add(User(id=1, username="u", password_hash="x"))
         session.add(
             Machine(id=1, name="node-24", host="10.0.0.1", gpu_count=8,
-                    state=MachineState.AVAILABLE.value, baseline={"services": []},
-                    baseline_status=BaselineStatus.CLEARED.value,
+                    state=MachineState.AVAILABLE.value,
                     lease_state=LeaseState.ACTIVE.value,
                     lease_due_at=datetime.now(UTC) + timedelta(days=1))
         )

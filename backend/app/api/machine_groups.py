@@ -208,7 +208,6 @@ def _member_out(machine: Machine, rank: int, busy: int) -> MachineGroupMemberOut
         driver=_effective_driver(machine),
         leased=machine.lease_state == LeaseState.ACTIVE.value,
         state=machine.state,
-        baseline_status=machine.baseline_status,
         needs_attention=bool(machine.needs_attention),
         gpus_busy=busy,
         lease_due_at=machine.lease_due_at,

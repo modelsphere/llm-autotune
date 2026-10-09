@@ -80,21 +80,6 @@ class Settings(BaseSettings):
     # point back at what produced it. Empty means no link is sent.
     public_ui_url: str = ""
 
-    # Let the worker take production down after a PASSING canary and put it
-    # back when the window closes. A night is unattended by definition; set
-    # false to require a human on the Resources page for both steps.
-    auto_baseline_lifecycle: bool = True
-
-    # Whether the worker RESTARTS production itself when a window or lease ends.
-    # Off by default: on these fleets an admin owns production and restores it
-    # by hand (often they never handed it to us running in the first place —
-    # they stopped it themselves). Auto-restart is the one lifecycle step that
-    # relaunches a service we did not start, so it stays opt-in; when off, the
-    # machine is handed back with production left exactly as we found it and an
-    # event flags that a manual restore is owed. Capture and the hand-over clear
-    # still run under auto_baseline_lifecycle — only the put-back is gated here.
-    auto_restore_production: bool = False
-
     # Below this, a difference from the baseline is not distinguishable from
     # run-to-run variance. Measured on node-24 with the long benchmark: four runs
     # of the same config spanned 0.24%, so 1% is ~4x the observed noise.

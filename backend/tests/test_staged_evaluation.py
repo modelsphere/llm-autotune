@@ -18,7 +18,6 @@ from app.control.orchestrator.supervisor import Supervisor
 from app.control.search import CandidateConfig
 from app.db.base import Base
 from app.db.models import (
-    BaselineStatus,
     Campaign,
     CampaignStatus,
     Candidate,
@@ -58,8 +57,7 @@ def _stack(*, verify_top_k=1, verify_slug="rolling-replay-test-mf-v0", space=Non
         session.add(User(id=1, username="u", password_hash="x"))
         session.add(
             Machine(id=1, name="node-24", host="10.0.0.1", gpu_count=8,
-                    state=MachineState.AVAILABLE.value,
-                    baseline_status=BaselineStatus.CLEARED.value)
+                    state=MachineState.AVAILABLE.value)
         )
         session.add(
             Campaign(id=1, owner_id=1, name="c", engine="sglang", image="img",

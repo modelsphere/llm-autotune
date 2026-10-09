@@ -33,8 +33,6 @@ class NullDriver(DeploymentDriver):
         # removed; the fake models that so the teardown-confirmation janitor can
         # see cleanup complete instead of a container that attaches forever.
         self._gone: set[str] = set()
-        self.cleared: list[str] = []
-        self.restored: list[str] = []
         # Generic workloads (policy containers): the recorded specs let a test
         # read the env a container was born with (the session token lives
         # there), and `workload_states` lets it kill one mid-test.
@@ -84,17 +82,6 @@ class NullDriver(DeploymentDriver):
 
     def workload_state(self, handle) -> WorkloadState:
         return self.workload_states.get(handle.container_name, WorkloadState.GONE)
-
-    def capture_baseline(self, machine) -> dict:
-        return {"services": []}
-
-    def clear_baseline(self, machine, baseline) -> list[str]:
-        self.cleared.append(machine.name)
-        return [s["container"] for s in (baseline or {}).get("services", [])]
-
-    def restore_baseline(self, machine, baseline) -> list[str]:
-        self.restored.append(machine.name)
-        return [s["container"] for s in (baseline or {}).get("services", [])]
 
     @staticmethod
     def _handle(spec) -> DeploymentHandle:

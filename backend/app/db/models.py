@@ -72,26 +72,11 @@ class LeaseEndMode(StrEnum):
     EAGER = "eager"
 
 
-class BaselineStatus(StrEnum):
-    """Lifecycle of the handed-over production services on a borrowed machine.
-
-    NONE -> CAPTURED (services + restore scripts recorded)
-         -> CLEARED  (production stopped; the machine is ours to experiment on)
-         -> RESTORED (production brought back and verified before hand-back)
-
-    Experiments may only run while CLEARED: capture is what makes teardown
-    reversible, so we never destroy something we cannot put back.
-    """
-
-    NONE = "none"
-    CAPTURED = "captured"
-    CLEARED = "cleared"
-    RESTORED = "restored"
-
-
 class RunKind(StrEnum):
     EXPERIMENT = "experiment"
-    BASELINE = "baseline"  # canary against the handed-over production service
+    # A benchmark of a production service measured in place. No longer
+    # created; kept so runs recorded before 0.2.0 still read.
+    BASELINE = "baseline"
     # An engine the platform launched FOR a policy container ("delegated
     # launch"). Launched and health-gated like an experiment, but then held at
     # SERVING for the policy to use instead of being benchmarked and torn down.
@@ -390,13 +375,6 @@ class Machine(Base):
         DateTime(timezone=True), nullable=True
     )
     notes: Mapped[str] = mapped_column(Text, default="")
-    # What was running when the machine was handed to us, and how to put it
-    # back: {"services": [{container, image, port, served_model_name,
-    # endpoint_url, restore_script}], "captured_at": ...}
-    baseline: Mapped[dict] = mapped_column(JsonCol, default=dict)
-    baseline_status: Mapped[str] = mapped_column(
-        String(16), default=BaselineStatus.NONE.value
-    )
 
     # -- the lease: who handed this machine over, and until when --------------
     #

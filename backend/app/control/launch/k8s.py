@@ -31,10 +31,8 @@ What is NOT here on purpose:
 - No node/device selection: `spec.gpu_indices` becomes a *count*; the cluster
   assigns actual devices. Packing several runs onto specific cards of one box
   is a bare-metal concern — on k8s the scheduler bin-packs.
-- No production teardown: `capture/clear/restore_baseline` are no-ops that
-  report "cluster-managed". The nightly baseline is therefore measured by
-  *relaunching* the production config as its own workload, not by canarying an
-  in-place service we are not allowed to stop.
+- Nothing but our own workloads: production keeps running elsewhere in the
+  cluster, and the baseline is measured by *relaunching* its config.
 """
 
 from __future__ import annotations
@@ -1163,32 +1161,6 @@ class K8sDriver(DeploymentDriver):
         if int(status.get("succeeded") or 0) or int(status.get("failed") or 0):
             return WorkloadState.EXITED
         return WorkloadState.RUNNING
-
-    # -- baseline lifecycle (cluster-managed; nothing for us to do) -----------
-    #
-    # On bare metal the platform borrows a box and must stop/restore the
-    # production services on it. On k8s it borrows GPU *quota*: the cluster
-    # keeps production running elsewhere and schedules our workloads on whatever
-    # it frees. So there is nothing to capture, clear or restore — and returning
-    # an empty capture is exactly right: the supervisor reads "no production
-    # services to stop" as "the pool is already ours" and proceeds, while the
-    # nightly baseline is measured by relaunching the production config.
-
-    def capture_baseline(self, machine: MachineInfo) -> dict:
-        return {
-            "driver": self.name,
-            "services": [],
-            "note": "k8s pool: production is cluster-managed and is not stopped by the platform",
-        }
-
-    def clear_baseline(self, machine: MachineInfo, baseline: dict) -> list[str]:
-        return []
-
-    def restore_baseline(self, machine: MachineInfo, baseline: dict) -> list[str]:
-        return []
-
-    def verify_baseline(self, machine: MachineInfo, baseline: dict) -> list[dict]:
-        return []
 
     # -- helpers -------------------------------------------------------------
 

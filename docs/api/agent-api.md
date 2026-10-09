@@ -18,7 +18,7 @@ campaign's search space did.
 These are the decisions; everything below follows from them.
 
 1. **Runs are the unit.** Every measured thing on the platform is a run: a
-   candidate is a run, a verification is a run, a baseline canary is a run.
+   candidate is a run, a verification is a run, a measured baseline is a run.
    The agent API addresses runs by id and nothing else. A campaign is context
    around a run, not an alternative identity for it.
 

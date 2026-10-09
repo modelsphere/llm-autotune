@@ -59,8 +59,10 @@ const chosenProfile = computed(
   () => props.profiles.find((p) => p.name === w.value.dataset_profile) ?? null)
 
 function profileNote(p: DatasetProfile): string {
-  const size = p.records != null ? `${p.records} requests` : 'not built yet'
-  return p.managed ? `${size} · fixed until rebuilt` : `${size} · refreshes on a schedule`
+  const size = p.records != null ? `${p.records} requests` : 'no sample yet'
+  return p.managed
+    ? `${size} · resampled only when a campaign asks`
+    : `${size} · LLMBench resamples it every ${p.schedule_hours} h`
 }
 </script>
 
@@ -107,8 +109,9 @@ function profileNote(p: DatasetProfile): string {
           Dataset
           <InfoHint :width="380">
             A dataset is a sample of your production requests that LLMBench collects from
-            your logs, set up on LLMBench under <b>Replay datasets</b>. A campaign holds
-            one build of it for its whole life, so every candidate sees the same requests.
+            your logs, set up on LLMBench under <b>Replay datasets</b>. A campaign keeps the
+            sample it started with for its whole life, so every candidate sees the same
+            requests.
           </InfoHint>
         </label>
         <el-select v-model="w.dataset_profile" size="small" filterable style="width: 100%">
@@ -136,9 +139,17 @@ function profileNote(p: DatasetProfile): string {
           size="small" controls-position="right" class="num" />
         <span>at a time.</span>
       </div>
-      <el-checkbox v-if="chosenProfile" v-model="rebuild" size="small">
-        Take a fresh sample when the campaign starts
-      </el-checkbox>
+      <template v-if="chosenProfile">
+        <el-checkbox v-model="rebuild" size="small">
+          Take a fresh sample when the campaign starts
+        </el-checkbox>
+        <div v-if="!chosenProfile.managed" class="muted tiny warn-line">
+          LLMBench resamples this dataset every {{ chosenProfile.schedule_hours }} h on its
+          own, so a campaign running longer may see it change; runs measured on a different
+          sample are marked as not comparable. A dataset resampled only on request avoids
+          that.
+        </div>
+      </template>
     </template>
 
     <template v-else>
@@ -172,4 +183,5 @@ function profileNote(p: DatasetProfile): string {
 .field { display: flex; flex-direction: column; gap: 4px; }
 .opt-help { margin-left: 8px; font-size: 12px; }
 .becomes { margin-top: 2px; }
+.warn-line { color: var(--el-color-warning-dark-2, #b88230); }
 </style>

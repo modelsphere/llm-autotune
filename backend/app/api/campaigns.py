@@ -12,6 +12,7 @@ from sqlalchemy.orm import selectinload
 
 from app import plugins
 from app.campaign_spec import SPEC_KEYS, DraftRequest, draft_campaign, spec_of
+from app.control.baseline import resolve_baseline
 from app.control.launch import MachineInfo, get_driver
 from app.control.launch import preflight as pf
 from app.control.orchestrator import lifecycle, timing
@@ -173,6 +174,8 @@ async def dataset_profiles(_: User = Depends(get_current_user)):
                 "name": profile.get("name", ""),
                 "display_name": profile.get("display_name", ""),
                 "managed": not (profile.get("schedule_interval_hours") or 0),
+                # How often LLMBench resamples it on its own; 0 = only on request.
+                "schedule_hours": profile.get("schedule_interval_hours") or 0,
                 "enabled": bool(profile.get("enabled", True)),
                 "build_id": current.get("build_id", ""),
                 "records": current.get("records"),
@@ -708,7 +711,9 @@ def _widest_candidate(search_space: dict) -> int:
         return 0
 
 
-def _run_preflight(body: PreflightRequest, machines: list[Machine]) -> list[dict]:
+def _run_preflight(
+    body: PreflightRequest, machines: list[Machine], production: dict[str, dict | None]
+) -> list[dict]:
     """The machine-side probes, once per candidate machine.
 
     Runs in a worker thread: it is ssh, and a form that blocks the event loop
@@ -766,10 +771,8 @@ def _run_preflight(body: PreflightRequest, machines: list[Machine]) -> list[dict
         # same list rather than in a banner people close.
         base = (body.search_space or {}).get("base") or {}
         config = {**base, **dict.fromkeys(swept_keys(body.search_space or {}))}
-        served = body.served_model_name or served_name_for(body.model_path)
-        missing = missing_flags(config, machine.baseline, served)
-        container = missing[0]["container"] if missing else ""
-        checks.append(pf.parity_check(missing, container))
+        args = production.get(machine.gpu_type or "")
+        checks.append(pf.parity_check(missing_flags(config, args), args is not None))
         checks.append(space_check)
         checks.extend(benchmark_checks)
         checks.extend(multi_node_check)
@@ -830,7 +833,16 @@ async def preflight(
                 if allowed else "no machines are registered"
             ),
         }
-    results = await anyio.to_thread.run_sync(_run_preflight, body, candidates)
+    # Production's recorded config per card type, read here on the request's
+    # session so the probes in the worker thread need no database of their own.
+    served = body.served_model_name or served_name_for(body.model_path)
+    production: dict[str, dict | None] = {}
+    for card_type in {m.gpu_type or "" for m in candidates}:
+        row = await session.run_sync(
+            lambda db, card_type=card_type: resolve_baseline(db, served, body.engine, card_type)
+        )
+        production[card_type] = dict(row.engine_args or {}) if row is not None else None
+    results = await anyio.to_thread.run_sync(_run_preflight, body, candidates, production)
     return {"machines": results, "ok": all(r["ok"] for r in results), "note": ""}
 
 
@@ -1238,29 +1250,27 @@ async def config_parity(
     _: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_async_session),
 ):
-    """How this campaign's config differs from the production service captured
-    on its machine — the reference that matters, since an engine default is not
-    what the baseline canary measured."""
+    """How this campaign's config differs from production's, as recorded on
+    Baselines for its model, engine and card type — the reference that
+    matters, since an engine default is not what production runs."""
     campaign = await session.get(Campaign, campaign_id)
     if campaign is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "no such campaign")
 
     machines = (await session.execute(select(Machine))).scalars().all()
     allowed = campaign.machine_names or []
-    candidates = [m for m in machines if not allowed or m.name in allowed]
-    # Only a machine we have actually inspected can answer the question.
-    machine = next((m for m in candidates if (m.baseline or {}).get("services")), None)
-    if machine is None:
-        return {"machine": "", "container": "", "missing": []}
-
+    card_type = next(
+        (m.gpu_type for m in machines if (not allowed or m.name in allowed) and m.gpu_type), ""
+    )
+    production = await session.run_sync(
+        lambda db: resolve_baseline(db, campaign.served_model_name, campaign.engine, card_type)
+    )
+    if production is None:
+        return {"baseline_id": None, "missing": []}
     base = (campaign.search_space or {}).get("base") or {}
     config = {**base, **dict.fromkeys(swept_keys(campaign.search_space or {}))}
-    missing = missing_flags(config, machine.baseline, campaign.served_model_name)
-    return {
-        "machine": machine.name,
-        "container": missing[0]["container"] if missing else "",
-        "missing": missing,
-    }
+    return {"baseline_id": production.id,
+            "missing": missing_flags(config, production.engine_args)}
 
 
 @router.get("/{campaign_id}/leaderboard", response_model=list[LeaderboardEntry])

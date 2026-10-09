@@ -1,13 +1,14 @@
-"""Comparing a campaign's config against the production command we captured.
+"""Comparing a campaign's config against production's, as recorded on Baselines.
 
 Campaign 19 lost a night because its base config omitted --enable-cache-report,
 which production runs with: every candidate failed the benchmark's cache check
 for a reason unrelated to the parameters being swept.
 """
 
-from app.control.search.parity import missing_flags, parse_engine_args
+from app.control.engine_command import parse_engine_args
+from app.control.search.parity import missing_flags
 
-# Exactly what capture recorded for node-24's sglang-modelforge-0.2-p8050.
+# A production command, as pasted into a baseline.
 PRODUCTION = {
     "services": [
         {
@@ -53,7 +54,7 @@ def test_bare_switches_and_valued_flags_both_parse():
 
 
 def test_a_docker_run_line_parses_the_same_way():
-    """Capture has stored argv lists and whole `docker run` lines over time."""
+    """Both argv lists and whole `docker run` lines parse."""
     line = (
         "docker run -d --name x --gpus all img -m sglang.launch_server "
         "--model-path /model --tp 2 --enable-cache-report"
@@ -62,8 +63,11 @@ def test_a_docker_run_line_parses_the_same_way():
     assert args == {"model_path": "/model", "tp": "2", "enable_cache_report": True}
 
 
+PRODUCTION_ARGS = parse_engine_args(PRODUCTION["services"][0]["command"])
+
+
 def test_the_flag_that_cost_campaign_19_a_night_is_reported():
-    missing = {m["flag"] for m in missing_flags(CAMPAIGN_19, PRODUCTION, "glm-5")}
+    missing = {m["flag"] for m in missing_flags(CAMPAIGN_19, PRODUCTION_ARGS)}
     assert "enable_cache_report" in missing
     assert "enable_metrics" in missing
     assert "stream_response_default_include_usage" in missing
@@ -71,18 +75,18 @@ def test_the_flag_that_cost_campaign_19_a_night_is_reported():
 
 def test_placement_flags_are_not_differences():
     """Where the model lives and which socket it binds are set per run."""
-    missing = {m["flag"] for m in missing_flags(CAMPAIGN_19, PRODUCTION, "glm-5")}
+    missing = {m["flag"] for m in missing_flags(CAMPAIGN_19, PRODUCTION_ARGS)}
     assert not missing & {"model_path", "host", "port", "served_model_name"}
 
 
 def test_a_different_value_is_the_point_of_the_campaign_not_a_warning():
     """Production runs chunked_prefill_size 16384; the campaign sweeps 32768.
     That is the experiment, not drift."""
-    missing = {m["flag"] for m in missing_flags(CAMPAIGN_19, PRODUCTION, "glm-5")}
+    missing = {m["flag"] for m in missing_flags(CAMPAIGN_19, PRODUCTION_ARGS)}
     assert "chunked_prefill_size" not in missing
     assert "mem_fraction_static" not in missing
 
 
-def test_no_capture_means_nothing_to_compare():
+def test_no_recorded_baseline_means_nothing_to_compare():
     assert missing_flags(CAMPAIGN_19, None) == []
-    assert missing_flags(CAMPAIGN_19, {"services": []}) == []
+    assert missing_flags(CAMPAIGN_19, {}) == []
