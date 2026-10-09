@@ -1,18 +1,15 @@
-# Agent ↔ Platform API (report generation)
+# Agent API
 
-Routes live under `/api/agent/v1/` (backend `app/api/agent.py`, read models in
-`app/agent/`), and saved reports render at `/reports/{id}` in the UI. The
-sections below are the contract.
+Read models an LLM agent builds performance reports from, and the place it
+saves them. Routes are under `/api/agent/v1/`; saved reports render at
+`/reports/{id}` in the UI. Exact shapes are at `/api/docs` on your install,
+under the `agent` tag. The [perf-report skill](../../agent_skills/perf-report)
+is a ready-made agent for Claude Code; [perf-report-prompt.md](../perf-report-prompt.md)
+is the prompt to start it with.
 
-An **agent** is an LLM (Claude Code today, an MCP client or a platform-hosted
-agent later) that turns finished runs into a performance report: one
-**baseline** launch config compared against N **attempts**, in the style of a
-"performance lab" write-up. The attempts are runs of a campaign: whatever the
-platform launched and measured, whether a policy proposed it or the campaign's
-declared space did.
-
-This document is the contract. Exact request/response shapes will be at
-[`/api/docs`](/api/docs) under the `agent` tag once implemented.
+A report compares one **baseline** run against N **attempts**: runs the
+platform launched and measured, whether a policy proposed them or the
+campaign's search space did.
 
 ---
 
@@ -49,9 +46,8 @@ These are the decisions; everything below follows from them.
    writes. Every response carries `kind`, `schema_version` and `links` to its
    parts, so an agent that only knows the entry point can discover the rest.
 
-6. **Additive.** The existing `/api/campaigns/*` and
-   `/api/runs/*` routes stay as they are. The agent routes are read models over
-   the same tables plus one new table for saved reports.
+6. **Read models.** The agent routes read the same tables as the rest of the
+   API, plus one table of saved reports.
 
 ---
 
@@ -82,6 +78,9 @@ Write:
 | `GET /api/agent/v1/reports?campaign_id=ID` | saved reports, newest first |
 | `GET /api/agent/v1/reports/{id}` | the saved report, its markdown and the frozen comparison |
 | `GET /api/agent/v1/reports/{id}/assets/{name}` | one chart, with its content type |
+| `GET /api/agent/v1/reports/{id}/export.html` | the report as one self-contained HTML file |
+| `GET /api/agent/v1/reports/{id}/bundle.zip` | the markdown, the data and the renderer, to edit offline |
+| `GET /api/agent/v1/report-blocks` | the block types a report's markdown may use |
 
 Errors are JSON, always, with `error` and `reasons[]`:
 
@@ -107,22 +106,22 @@ ran, produced by the same renderer, so it is copy-pasteable.
 {
   "kind": "launch", "schema_version": 1, "run_id": 812,
   "config": {
-    "engine": "sglang", "image": "sglang:glm-5.3-flash",
-    "model_path": "/mnt/models/GLM-5.2", "served_model_name": "glm-5.2",
+    "engine": "sglang", "image": "lmsysorg/sglang:v0.5.4",
+    "model_path": "/models/Qwen3-32B", "served_model_name": "qwen3-32b",
     "service_port": 28200,
     "engine_args": {"tp": 4, "mem_fraction_static": 0.85, "kv_cache_dtype": "fp8_e4m3"},
-    "extra_env": {"SGLANG_ENABLE_DEEPEP": "1"}, "extra_volumes": {},
+    "extra_env": {"SGLANG_ENABLE_JIT_DEEPGEMM": "0"}, "extra_volumes": {},
     "gpu_type": "H200"
   },
   "cards": 4,
   "rendered": {
     "engine_command": "python -m sglang.launch_server --model-path … --tp 4 …",
-    "docker_command": "docker run -d --gpus '\"device=0,1,2,3\"' … sglang:glm-5.3-flash …",
+    "docker_command": "docker run -d --gpus '\"device=0,1,2,3\"' … lmsysorg/sglang:v0.5.4 …",
     "engine_flags": {"tp": "--tp", "mem_fraction_static": "--mem-fraction-static", "kv_cache_dtype": "--kv-cache-dtype"}
   },
   "origin": {
     "source": "campaign",
-    "campaign_id": 402, "campaign_name": "glm-5.2 kv fp8", "candidate_id": 1190
+    "campaign_id": 402, "campaign_name": "qwen3-32b kv fp8", "candidate_id": 1190
   }
 }
 ```
@@ -138,9 +137,9 @@ the version probe plus the machine row, not re-probed.
 ```json
 {
   "kind": "environment", "schema_version": 1, "run_id": 812,
-  "machine": {"name": "node-85", "gpu_type": "H200", "gpu_count": 8, "driver": "ssh_docker"},
+  "machine": {"name": "node-24", "gpu_type": "H200", "gpu_count": 8, "driver": "ssh_docker"},
   "gpu_indices": [0,1,2,3], "card_type": "H200",
-  "engine_version": "0.5.15", "torch_version": "2.9.0", "cuda_version": "12.9",
+  "engine_version": "0.5.4", "torch_version": "2.9.0", "cuda_version": "12.9",
   "gpu_name": "NVIDIA H200", "image_digest": "sha256:…",
   "started_at": "…", "finished_at": "…", "duration_seconds": 3120
 }
@@ -169,7 +168,7 @@ The benchmark settings, from both owners, with frozen and live kept apart.
 {
   "kind": "benchmark", "schema_version": 1, "run_id": 812,
   "llmbench": {
-    "slug": "glm-5-2-h200-sweep", "benchmark_id": 71, "url": "https://llmbench…/benchmarks/71",
+    "slug": "qwen3-32b-h200-sweep", "benchmark_id": 71, "url": "https://llmbench…/benchmarks/71",
     "config_hash_frozen": "9f1c…", "config_hash_live": "9f1c…", "drifted": false,
     "dataset_build_id": "prod-traffic-2026-09-10"
   },
@@ -334,10 +333,10 @@ attempt in the list, so both a "baseline vs optimized" table and a
       "launch": {"…": "…"}, "environment": {"…": "…"}, "results": {"…": "…"},
       "diff_vs_baseline": {
         "engine": {"from": "vllm", "to": "sglang"},
-        "image": {"from": "vllm:0.11", "to": "sglang:glm-5.3-flash"},
+        "image": {"from": "vllm/vllm-openai:v0.11.0", "to": "lmsysorg/sglang:v0.5.4"},
         "engine_args": {"added": {"kv_cache_dtype": "fp8_e4m3", "mem_fraction_static": 0.85},
                         "removed": {}, "changed": {}},
-        "extra_env": {"added": {"SGLANG_ENABLE_DEEPEP": "1"}, "removed": {}, "changed": {}},
+        "extra_env": {"added": {"SGLANG_ENABLE_JIT_DEEPGEMM": "0"}, "removed": {}, "changed": {}},
         "cards": {"from": 4, "to": 4}
       },
       "diff_vs_previous": {"engine_args": {"changed": {"kv_cache_dtype": {"from": "bf16", "to": "fp8_e4m3"}}}, "…": "…"},
@@ -428,7 +427,7 @@ report records the flag.
 
 ```json
 {
-  "title": "Optimizing GLM-5.2 throughput on H200",
+  "title": "Optimizing Qwen3-32B throughput on H200",
   "baseline_run_id": 790, "attempt_run_ids": [801, 805, 812],
   "comparable": true,
   "markdown": "# …",
@@ -486,73 +485,18 @@ because the API is shaped around them.
 
 ## Auth and scope
 
-The agent authenticates with `X-API-Key`. A key acts as its owner, so the
-agent's key is minted from a dedicated non-admin user (`reporter`). That user
-can read everything above, save reports and, in phase 1b, submit entries; it
-cannot change a campaign's objective or its benchmark. The audit trail shows
-`key:reporter`. A `read_only` flag on keys is the next step if agents ever get
-more autonomous than that.
+The agent authenticates with `X-API-Key`, and a key acts as its owner. Mint
+the agent's key from a dedicated non-admin user: it can read everything above
+and save reports, but not change a campaign. The audit trail names that user.
 
-The MCP server, when it comes, exposes exactly the routes above as tools with
-the same names (`get_run`, `get_comparison`, `save_report`, …) and the same
-JSON. It is a wrapper, not a second API.
+## Beyond the agent API
 
----
+The agent API should hold everything a report needs. When it does not, the
+rest of the platform API (`/api/campaigns/*`, `/api/runs/*`,
+`/api/openapi.json`) takes the same key; the skill lists those routes as
+allowed but not preferred, and forbids the ones that change anything. A field
+an agent keeps fetching that way belongs in the agent API.
 
-## Expandability and escape hatches
-
-The agent API is the recommended path, not the only one. Three tiers, from
-preferred to discouraged:
-
-1. **Agent API** (`/api/agent/v1/*`). Stable shapes, computed comparisons,
-   documented conventions. Everything a report needs should be here.
-2. **Existing platform API** (`/api/campaigns/*`,
-   `/api/runs/*`, `/api/openapi.json`). Same `X-API-Key` works. A strong agent
-   may use it when the agent API lacks a field. The skill file lists these
-   routes as "allowed, not preferred" and forbids the mutating ones.
-3. **Direct database queries.** Possible, not recommended, and
-   never from a container we ship. If a human wants it for a one-off, use a
-   read-only Postgres role (`agent_ro`, SELECT only). Schemas are internal
-   and change without notice.
-
-**Promotion rule.** Any fallback the agent uses twice becomes a feature
-request: add the field or part to the agent API, then remove the fallback from
-the skill. The fallbacks exist so the first week is not blocked on us, not as a
-permanent second interface.
-
-**Versioning.** `/v1/` in the path, `schema_version` on every part and
-document. Within v1 changes are additive only: new keys, new parts, new query
-selectors. Agents must ignore unknown keys. Removing or renaming a field is a
-`/v2/`.
-
-**Adding a part.** A new part (for example `cost`, or `search` for autotune)
-is one Pydantic model, one route, one key in `RunDocument` and
-`ComparisonDocument`, and one entry in `links`. Nothing else changes.
-
-**Other agents.** The routes are plain JSON over HTTP with a header key, so
-any harness (Claude Code, an MCP client through the wrapper, a cron job, the
-frontend itself) can consume them. The skill file is the only Claude-specific
-artifact.
-
----
-
-
-## Implementation notes
-
-- `LaunchPart` is `LaunchConfig.from_run` plus the existing renderers in
-  `backend/app/control/launch/ssh_docker.py` and `engines/flags.py`.
-- `EnvironmentPart` is `Run.env_snapshot` plus the machine row.
-- `BenchmarkPart.modules[].params` come from the run's
-  `module_reports[].params` (frozen); live comes from the existing
-- `ResultsPart.scenarios[].levels[]` come from `Result.raw` (the `cN` groups
-  per module run), `summary` from `scenarios_of`, `verdicts` from
-  `module_reports` plus `quality_of`.
-- `ComparisonDocument.catalog` is `metrics_catalog`.
-- New table: `agent_reports` (id, title, baseline_run_id, attempt_run_ids,
-  comparable, markdown, comparison_json, assets, generator, created_by,
-  created_at). One migration.
-- Rough effort: parts + run document 1 day, comparison 1 day, markdown
-  rendering half a day, reports table + viewer half a day.
-
----
-
+**Versioning.** `/v1/` in the path and `schema_version` on every part and
+document. Within v1, changes only add: new keys, parts and selectors. Agents
+ignore keys they do not know. Removing or renaming a field is a `/v2/`.

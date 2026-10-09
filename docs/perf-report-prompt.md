@@ -29,7 +29,7 @@ Run once per shell, in the repo checkout or in any folder that holds `agent_skil
 ```bash
 export AUTOTUNE_URL=https://autotune.example.com      # the platform API
 export AUTOTUNE_UI_URL=https://autotune.example.com   # the web UI, for report links
-export AUTOTUNE_API_KEY=atk_...                   # the reporter key
+export AUTOTUNE_API_KEY=atk_...                       # a key of a non-admin user
 claude
 ```
 
@@ -43,16 +43,17 @@ Fill in the fields at the top. Everything below them stays as it is.
 - **Scenarios** is optional too: what to call each workload in both languages,
   in the order the campaign measures them. Leave it out and the agent names them
   from their input/output shape (`TEMPLATE.md` → "Naming the scenarios").
-- **Attempts** go in the order the report should tell them, comma-separated.
+- **Baseline** and **Attempts** are run ids; attempts go in the order the
+  report should tell them, comma-separated.
 
 ```
 Campaign: [42]
-Baseline: [s42]
-Attempts: [s43]
+Baseline: [41]
+Attempts: [47, 52]
 Names: [Prod, fp8 + 32k prefill]
 Scenarios: [Agent long-context / Agent 长上下文场景, Document QA / 长文档问答场景]
-Title (English): [Optimizing Qwen3.6-35B-A3B on H800]
-Title (Chinese): [在 H800 上优化 Qwen3.6-35B-A3B]
+Title (English): [Optimizing Qwen3-32B on H100]
+Title (Chinese): [在 H100 上优化 Qwen3-32B]
 
 Write a performance report for the campaign above on our LLM AutoTune platform and save it there, in English and in Chinese.
 
@@ -70,21 +71,3 @@ The report:
 
 Finish when both reports pass `check` and are saved (English first, Chinese as its translation). Reply with both report links, the source zip link the script printed, and the conclusion's headline sentence. List any choice you made that the template did not decide for you, and anything in the data that looked wrong. Keep those notes in your reply, not in the report. Do not ask me questions along the way.
 ```
-
-## Changes from the 2026-09-16 prompt
-
-That prompt was written for the first version of the skill. Don't reuse it.
-
-| The old prompt said | Now |
-|---|---|
-| Install matplotlib; use charts from `work/charts/` | No images: charts are `chart` blocks the platform draws |
-| Paste tables from `work/tables.md` | Tables and serving commands are blocks from `work/blocks.md`, checked on save |
-| Pick a template, or the default outline in SKILL.md | `TEMPLATE.md` is the only outline |
-| `Language: [English]` | Always both languages; the Chinese report is saved with `--translation-of` |
-| Write "not recorded" for missing facts | Leave the fact out; the template's rules decide what appears |
-| For a failed attempt, say why it failed | Report what it changed and the failure message, without explaining why (the template's "report, don't judge" rule) |
-| Reply with the gain "and whether it still passes all redlines" | Reply with the headline sentence; gate status is not in the report |
-| Name no config labels | Names go in `--labels` |
-| Bullet lists in every section | Running prose with the numbers in bold, numbered sections, a caption per figure and table |
-| Scenarios go by their token shape | The report names them (`--scenarios`), and every chart and table follows |
-| The agent writes figure and table captions | The platform draws and numbers them; `check` refuses agent-written ones |

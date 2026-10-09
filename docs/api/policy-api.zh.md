@@ -1,14 +1,14 @@
 # Policy ↔ Platform API
 
-一个 **policy** 是平台在一台 GPU 机器上运行一晚的容器。它的任务：尝试不同的 engine 设置，返回其中表现
+一个 **policy** 是平台在 campaign 时间窗内、在一台 GPU 机器上运行的容器。它的任务：尝试不同的 engine 设置，返回其中表现
 最好的几组。机器由平台管理，测量由平台执行，最终结果也由平台决定。
 
-本文是一份通俗说明。具体的请求/返回格式见 [`/api/docs`](/api/docs)；完整版见
-[policy-contract.md](policy-contract.md)。English：[policy-api.md](policy-api.md)。
+本文是简要说明。完整契约见 [policy-contract.md](policy-contract.md)；具体的请求/返回格式见你部署上的
+`/api/docs`。English：[policy-api.md](policy-api.md)
 
 **全文使用的三个术语**
 
-- **session** —— 一个 policy，在一台机器上，用一晚 tune 一个 model。
+- **session** —— 一个 policy，在一台机器上，用一个时间窗 tune 一个 model。
 - **contender** —— 你提出的一组 engine 设置，作为一个候选答案。
 - **verdict** —— 平台自己对某个 contender 的测量结果，也是唯一计入最终结果的分数。
 
@@ -122,4 +122,6 @@ port —— 这些由平台补充。你只提交你的设置；平台会将其�
 | `422` | 设置因安全被拒绝（放不下 GPU，或格式错误） | 修正设置后重试。 |
 | `429` | 当前没有空闲的 GPU 或 port | 等待，或释放你占用的资源。 |
 
-SDK（`autotune-policy-sdk`）已为你实现了必需的调用与重试处理；基于它构建的 policy 天然满足本 contract。
+SDK [`policies/autotune_policy`](https://github.com/modelsphere/llm-autotune-policies/tree/main/autotune_policy) 实现了必需的调用、heartbeat 和重试：
+`run_policy(SearchLoop(your_strategy))` 即满足本契约，你只需要写 search 本身。
+[random search](https://github.com/modelsphere/llm-autotune-policies/tree/main/random-search) 是一个完整的例子。

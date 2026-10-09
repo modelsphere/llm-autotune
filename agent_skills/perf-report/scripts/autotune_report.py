@@ -3,7 +3,7 @@
 
     autotune_report.py campaigns
     autotune_report.py campaign <id>
-    autotune_report.py compare --baseline s1 --attempts s3,s4 --out work/ [--force]
+    autotune_report.py compare --baseline 41 --attempts 47,52 --out work/ [--force]
     autotune_report.py check --markdown work/report.en.md --comparison work/comparison.json
     autotune_report.py save --title T --markdown work/report.en.md
         --comparison work/comparison.json [--lang en] [--translation-of ID] [--labels A,B]

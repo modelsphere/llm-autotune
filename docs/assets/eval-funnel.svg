@@ -1,82 +1,42 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1010 770" font-family="Helvetica, Arial, sans-serif">
-  <defs>
-    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-      <path d="M0,0 L10,5 L0,10 z" fill="#4a4f5a"/>
-    </marker>
-  </defs>
-  <style>
-    .node { fill:#e9ebfa; stroke:#8f96d8; stroke-width:1.2; }
-    .hex  { fill:#eef0fb; stroke:#8f96d8; stroke-width:1.2; }
-    .out  { fill:#f7f8fc; stroke:#9aa3b5; stroke-width:1.2; }
-    .win  { fill:#e6f4ea; stroke:#57a06a; stroke-width:1.4; }
-    .ntitle { font-size:13px; font-weight:bold; fill:#1f2430; text-anchor:middle; }
-    .wtitle { font-size:13px; font-weight:bold; fill:#1e7a3a; text-anchor:middle; }
-    .nsub { font-size:11.5px; fill:#3a4050; text-anchor:middle; }
-    .edge { stroke:#4a4f5a; stroke-width:1.6; fill:none; }
-    .lab  { font-size:11px; fill:#333; paint-order:stroke; stroke:#ffffff; stroke-width:3.5; }
-    .labm { font-size:11px; fill:#333; text-anchor:middle; paint-order:stroke; stroke:#ffffff; stroke-width:3.5; }
-  </style>
-  <rect x="0" y="0" width="1010" height="770" fill="#ffffff"/>
-
-  <!-- main spine -->
-  <rect class="node" x="180" y="40" width="240" height="44" rx="6"/>
-  <text class="ntitle" x="300" y="67">a config the planner proposed</text>
-
-  <polygon class="hex" points="150,148 174,120 426,120 450,148 426,176 174,176"/>
-  <text class="ntitle" x="300" y="144">1 · Paper check</text>
-  <text class="nsub" x="300" y="162">constraints · fits in VRAM · free</text>
-
-  <polygon class="hex" points="150,258 174,230 426,230 450,258 426,286 174,286"/>
-  <text class="ntitle" x="300" y="254">2 · Launch &amp; health</text>
-  <text class="nsub" x="300" y="272">does it run &amp; answer correctly?</text>
-
-  <polygon class="hex" points="150,372 174,340 426,340 450,372 426,404 174,404"/>
-  <text class="ntitle" x="300" y="368">3 · Screening benchmark</text>
-  <text class="nsub" x="300" y="386">cheap · ~10–15 min · scores everyone</text>
-
-  <polygon class="hex" points="150,483 174,455 426,455 450,483 426,511 174,511"/>
-  <text class="ntitle" x="300" y="479">4 · Confirm the best</text>
-  <text class="nsub" x="300" y="497">repeat the top few · rule out luck</text>
-
-  <polygon class="hex" points="150,597 174,565 426,565 450,597 426,629 174,629"/>
-  <text class="ntitle" x="300" y="593">5 · Verify on real traffic</text>
-  <text class="nsub" x="300" y="611">replay the rolling dataset · finalists · ~1 h</text>
-
-  <rect class="win" x="176" y="675" width="248" height="52" rx="6"/>
-  <text class="wtitle" x="300" y="700">Recommended config(s)</text>
-  <text class="nsub" x="300" y="718">ranked against production</text>
-
-  <!-- spine arrows -->
-  <path class="edge" d="M300,84 V116" marker-end="url(#arr)"/>
-  <path class="edge" d="M300,176 V226" marker-end="url(#arr)"/>
-  <text class="lab" x="312" y="205">valid</text>
-  <path class="edge" d="M300,286 V336" marker-end="url(#arr)"/>
-  <text class="lab" x="312" y="315">healthy</text>
-  <path class="edge" d="M300,404 V451" marker-end="url(#arr)"/>
-  <text class="lab" x="312" y="431">promising</text>
-  <path class="edge" d="M300,511 V561" marker-end="url(#arr)"/>
-  <text class="lab" x="312" y="540">lead holds up</text>
-  <path class="edge" d="M300,629 V671" marker-end="url(#arr)"/>
-  <text class="lab" x="312" y="655">meets the SLOs</text>
-
-  <!-- rejects (dashed, right column) -->
-  <rect class="out" x="560" y="128" width="180" height="40" rx="6"/>
-  <text class="ntitle" x="650" y="152">rejected — free</text>
-  <path class="edge" d="M450,148 L556,148" stroke-dasharray="5 3" marker-end="url(#arr)"/>
-  <text class="labm" x="505" y="140">invalid</text>
-
-  <rect class="out" x="560" y="240" width="260" height="56" rx="6"/>
-  <text class="ntitle" x="690" y="262">failure, explained</text>
-  <text class="nsub" x="690" y="281">crash · OOM · garbage output</text>
-  <path class="edge" d="M450,258 L556,264" stroke-dasharray="5 3" marker-end="url(#arr)"/>
-  <text class="labm" x="505" y="250">broken</text>
-
-  <rect class="out" x="560" y="352" width="200" height="40" rx="6"/>
-  <text class="ntitle" x="660" y="376">culled — clearly worse</text>
-  <path class="edge" d="M450,372 L556,372" stroke-dasharray="5 3" marker-end="url(#arr)"/>
-  <text class="labm" x="505" y="364">loses</text>
-
-  <!-- feedback loop: failures -> planner proposals -->
-  <path class="edge" d="M820,268 V62 H424" marker-end="url(#arr)"/>
-  <text class="labm" x="640" y="50">failures &amp; dead-ends teach the search</text>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1080 250" font-family="-apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif">
+  <defs><marker id="a-grey" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#5b6b7a"/></marker><marker id="a-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#2f6f4f"/></marker><marker id="a-orange" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#c07a2c"/></marker><marker id="a-purple" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#8b72be"/></marker><marker id="a-red" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#c96161"/></marker><marker id="a-blue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#5b85c9"/></marker></defs>
+  <rect width="1080" height="250" fill="#ffffff"/>
+  <rect x="20" y="20" width="150" height="90" rx="8" fill="#e4edf9" stroke="#5b85c9" stroke-width="1.4"/>
+  <text x="95.0" y="51.5" font-size="15" fill="#1b2733" font-weight="700" text-anchor="middle">Paper check</text>
+  <text x="95.0" y="72.5" font-size="12.5" fill="#4a5a6a" text-anchor="middle">constraints,</text>
+  <text x="95.0" y="90.5" font-size="12.5" fill="#4a5a6a" text-anchor="middle">VRAM fit</text>
+  <path d="M170 65 L196 65" fill="none" stroke="#5b6b7a" stroke-width="1.6" marker-end="url(#a-grey)"/>
+  <rect x="198" y="20" width="150" height="90" rx="8" fill="#e4edf9" stroke="#5b85c9" stroke-width="1.4"/>
+  <text x="273.0" y="51.5" font-size="15" fill="#1b2733" font-weight="700" text-anchor="middle">Launch + health</text>
+  <text x="273.0" y="72.5" font-size="12.5" fill="#4a5a6a" text-anchor="middle">runs, and</text>
+  <text x="273.0" y="90.5" font-size="12.5" fill="#4a5a6a" text-anchor="middle">answers correctly</text>
+  <path d="M348 65 L374 65" fill="none" stroke="#5b6b7a" stroke-width="1.6" marker-end="url(#a-grey)"/>
+  <rect x="376" y="20" width="150" height="90" rx="8" fill="#e4edf9" stroke="#5b85c9" stroke-width="1.4"/>
+  <text x="451.0" y="51.5" font-size="15" fill="#1b2733" font-weight="700" text-anchor="middle">Benchmark</text>
+  <text x="451.0" y="72.5" font-size="12.5" fill="#4a5a6a" text-anchor="middle">every config</text>
+  <text x="451.0" y="90.5" font-size="12.5" fill="#4a5a6a" text-anchor="middle">on LLMBench</text>
+  <path d="M526 65 L552 65" fill="none" stroke="#5b6b7a" stroke-width="1.6" marker-end="url(#a-grey)"/>
+  <rect x="554" y="20" width="150" height="90" rx="8" fill="#ffffff" stroke="#9aa7b4" stroke-width="1.2" stroke-dasharray="5 3"/>
+  <text x="629.0" y="51.5" font-size="15" fill="#1b2733" font-weight="700" text-anchor="middle">Confirm</text>
+  <text x="629.0" y="72.5" font-size="12.5" fill="#4a5a6a" text-anchor="middle">optional:</text>
+  <text x="629.0" y="90.5" font-size="12.5" fill="#4a5a6a" text-anchor="middle">repeat the top K</text>
+  <path d="M704 65 L730 65" fill="none" stroke="#5b6b7a" stroke-width="1.6" marker-end="url(#a-grey)"/>
+  <rect x="732" y="20" width="150" height="90" rx="8" fill="#ffffff" stroke="#9aa7b4" stroke-width="1.2" stroke-dasharray="5 3"/>
+  <text x="807.0" y="51.5" font-size="15" fill="#1b2733" font-weight="700" text-anchor="middle">Verify</text>
+  <text x="807.0" y="72.5" font-size="12.5" fill="#4a5a6a" text-anchor="middle">optional:</text>
+  <text x="807.0" y="90.5" font-size="12.5" fill="#4a5a6a" text-anchor="middle">replay the top 3</text>
+  <path d="M882 65 L908 65" fill="none" stroke="#5b6b7a" stroke-width="1.6" marker-end="url(#a-grey)"/>
+  <rect x="910" y="20" width="150" height="90" rx="8" fill="#e8f6ee" stroke="#3b9a68" stroke-width="1.4"/>
+  <text x="985.0" y="51.5" font-size="15" fill="#1b2733" font-weight="700" text-anchor="middle">Winner</text>
+  <text x="985.0" y="72.5" font-size="12.5" fill="#4a5a6a" text-anchor="middle">ranked against</text>
+  <text x="985.0" y="90.5" font-size="12.5" fill="#4a5a6a" text-anchor="middle">production</text>
+  <path d="M95 110 L95 168" fill="none" stroke="#c96161" stroke-width="1.6" stroke-dasharray="5 4" marker-end="url(#a-red)"/>
+  <rect x="20" y="170" width="150" height="50" rx="8" fill="#fbeaea" stroke="#c96161" stroke-width="1.4"/>
+  <text x="95.0" y="200.0" font-size="12.5" fill="#8a3a3a" text-anchor="middle">rejected, free</text>
+  <path d="M273 110 L273 168" fill="none" stroke="#c96161" stroke-width="1.6" stroke-dasharray="5 4" marker-end="url(#a-red)"/>
+  <rect x="198" y="170" width="150" height="50" rx="8" fill="#fbeaea" stroke="#c96161" stroke-width="1.4"/>
+  <text x="273.0" y="200.0" font-size="12.5" fill="#8a3a3a" text-anchor="middle">failed, classified</text>
+  <path d="M451 110 L451 168" fill="none" stroke="#c96161" stroke-width="1.6" stroke-dasharray="5 4" marker-end="url(#a-red)"/>
+  <rect x="376" y="170" width="150" height="50" rx="8" fill="#fbeaea" stroke="#c96161" stroke-width="1.4"/>
+  <text x="451.0" y="200.0" font-size="12.5" fill="#8a3a3a" text-anchor="middle">crossed a redline</text>
 </svg>

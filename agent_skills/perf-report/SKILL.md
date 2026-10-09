@@ -48,7 +48,7 @@ library only). Run it with `python3`.
    them (the ablation order).
 
    ```
-   python3 scripts/autotune_report.py compare --baseline s1 --attempts s3,s4 --out work/
+   python3 scripts/autotune_report.py compare --baseline 41 --attempts 47,52 --out work/
    ```
 
    It starts `work/` empty — anything an earlier report left there is moved

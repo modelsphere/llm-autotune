@@ -19,17 +19,12 @@ what exists: the first admin (only while there are no users), the built-in
 objectives, the `local-cluster` machine (only while there are no machines), and
 the screen benchmark on LLMBench.
 
-## Migration compatibility
+## Migrations
 
-The public migration chain starts at `001_initial`, which materializes the
-current models. It is **not** a continuation of any chain that predates the first
-public release — a database from before that cannot be upgraded onto this one by
-replaying revisions. Start a new database, or migrate your data across
-deliberately.
-
-From the first public release onward, every schema change is an ordinary
-incremental revision on top of `001_initial`, and `helm upgrade` is all that is
-needed.
+The chain starts at `001_initial`, and every schema change is an incremental
+revision on top of it, so `helm upgrade` is all an upgrade needs. A plugin's
+tables migrate on their own chain, in their own version table
+([plugins](plugins.md)).
 
 ## Versions
 

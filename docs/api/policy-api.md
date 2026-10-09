@@ -1,17 +1,16 @@
 # Policy ↔ Platform API
 
-A **policy** is a container the platform runs on a GPU machine for one night. Its
-job: try different engine settings and return the ones that performed best. The
-platform owns the machine, performs the measurements, and decides the final
-result.
+A **policy** is a container the platform runs on a GPU machine for a
+campaign's window. It tries engine settings and returns the ones that did best;
+the platform owns the machine, does the measuring, and decides the result.
 
-This is the plain-language guide. Exact request/response shapes are at
-[`/api/docs`](/api/docs); the full version is [policy-contract.md](policy-contract.md).
-中文：[policy-api.zh.md](policy-api.zh.md).
+This is the short guide. The full contract is
+[policy-contract.md](policy-contract.md); exact request and response shapes are
+at `/api/docs` on your install. 中文：[policy-api.zh.md](policy-api.zh.md)
 
 **Three terms used throughout**
 
-- **session** — one policy, tuning one model, on one machine, for one night.
+- **session** — one policy, tuning one model, on one machine, for one window.
 - **contender** — a set of engine settings you propose as a good answer.
 - **verdict** — the platform's own measurement of a contender. The only score
   that counts toward the result.
@@ -38,8 +37,7 @@ request. It is valid only for this session.
 
 ![How a policy talks to the platform: the policy calls and the platform replies; a search loop, then finalize, then the platform takes the verdict](diagrams/policy-interaction.svg)
 
-For how a policy fits into the wider system — campaigns, the
-control loop — see the [platform architecture](platform-architecture.md).
+Where a policy fits in the wider system: [platform architecture](platform-architecture.md).
 
 ---
 
@@ -153,5 +151,8 @@ safety: a config that does not fit the GPUs, or a malformed value.
 | `422` | Settings rejected as unsafe (do not fit the GPUs, or malformed) | Fix the settings and retry. |
 | `429` | No free GPUs or ports at the moment | Wait, or release something you hold. |
 
-The SDK (`autotune-policy-sdk`) implements the required calls and the retry
-handling for you; a policy built on it satisfies this contract by construction.
+The SDK, [`policies/autotune_policy`](https://github.com/modelsphere/llm-autotune-policies/tree/main/autotune_policy), implements
+the required calls, heartbeats and retries:
+`run_policy(SearchLoop(your_strategy))` satisfies the contract, and you write
+only the search. [Random search](https://github.com/modelsphere/llm-autotune-policies/tree/main/random-search) is a complete
+example.

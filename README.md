@@ -1,32 +1,45 @@
 # LLM AutoTune
 
-LLM AutoTune finds the best serving configuration for an LLM inference engine
-(sglang, vLLM). You declare what to tune and what "better" means; the platform
-launches each configuration on real GPUs, benchmarks it, scores it against your
-objective, and records exactly what ran.
+LLM AutoTune finds the best serving configuration for your model on your
+GPUs. A **campaign** sets a model, a **search space** of engine settings
+(sglang, vLLM) and an **objective**: one metric to improve, plus redlines a
+config must hold. A **policy**, your search algorithm in a container, picks
+configs to try; the platform launches each one, benchmarks it with
+[LLMBench](https://github.com/modelsphere/llm-bench), and ranks it against the
+**baseline**, what production runs today.
 
-![LLM AutoTune platform overview](docs/api/diagrams/platform-overview.png)
+![LLM AutoTune overview](docs/api/diagrams/platform-overview.png)
 
 ## Features
 
-- **Campaigns**: a model, a search space, an objective and a nightly window;
-  the platform runs the search and ranks the results.
-- **Search policies**: enumerate the space, or plug in a search algorithm as a
-  container ([policy contract](docs/api/policy-contract.md)). Random search is
-  included.
-- **Measured by the platform**: every configuration is benchmarked the same
-  way through [LLMBench](https://github.com/modelsphere/llm-bench), under your
-  latency and quality redlines.
-- **GPUs anywhere**: nodes of a Kubernetes cluster, other clusters, or
-  bare-metal machines over ssh. Machines shared with production are captured
-  and restored around each night.
-- **Baselines**: measure what production runs today and tune from it.
-- **Reproducible results**: each run records its launch command, engine
-  version, card type and dataset.
-- **Promotion**: a winner becomes a merge request against your deploy repo.
-- **Reports**: an agent API that LLM-written performance reports are built on.
-- **Plugins**: add API routes, pages, scheduled steps and search strategies
-  ([plugins](docs/plugins.md)).
+- **Bring any search algorithm.** A policy is any container that speaks a small
+  HTTP API ([policy contract](docs/api/policy-contract.md)). Random search is
+  included; without a policy the platform enumerates the space.
+- **Results you can trust.** The platform measures every config itself, the
+  same way, and re-measures the best before it reports. A policy never grades
+  its own results.
+- **Real GPUs, real traffic.** Benchmarks run on the cards you serve on and
+  can replay captured production traffic; a config that breaks a latency or
+  quality redline is out.
+- **Uses the GPUs you have.** Kubernetes nodes, other clusters, or ssh
+  machines. Production machines are borrowed for a nightly window and
+  restored after.
+- **Reproducible.** Every run records its launch command, engine version, card
+  type and dataset.
+- **From result to rollout.** A winner becomes a merge request against your
+  deploy repo; an agent API feeds LLM-written reports.
+- **Restart-safe.** All state is in Postgres; a restart mid-run loses nothing.
+- **Extensible.** Plugins add pages, API routes, scheduled steps and search
+  strategies ([plugins](docs/plugins.md)).
+
+## How it works
+
+![Platform architecture: the policy on a GPU machine asks the API for runs; the supervisor launches each config, LLMBench benchmarks it, and the winner becomes a merge request](docs/api/diagrams/platform-architecture.svg)
+
+The policy only decides what to try. The supervisor starts it, launches the
+configs it asks for, and has LLMBench benchmark them; at the deadline the
+platform re-measures the policy's best itself, and that measurement is the
+verdict. More in [platform architecture](docs/api/platform-architecture.md).
 
 ## Install
 
