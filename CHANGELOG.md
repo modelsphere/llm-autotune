@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- A policy campaign with a nightly window stayed active after its policy
+  reported the search exhausted, waiting for a next night that would only
+  hear the same. It is now done when its session is.
+- The campaign page counted runs over candidates, so a policy campaign, whose
+  configs are each a launch and a benchmark, read "18/10 candidates
+  evaluated". It now counts candidates.
+
 ### Added
 
 - `AUTOTUNE_LLMBENCH_REPLAY_MODULE` (default `replay`): the name LLMBench's

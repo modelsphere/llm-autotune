@@ -998,12 +998,14 @@ class PolicySessionEngine:
                          "validated": self._verdict_count(db, session)},
             )
             # A one-off window (force-start, or no recurring schedule) has no
-            # next night: the campaign is done the moment its session is.
-            # _maybe_finish_campaign never fires for policy campaigns (no
-            # candidate queue), so this is where they end.
-            if (
+            # next night: the campaign is done the moment its session is. Nor
+            # does a policy that said its search is exhausted: the next night
+            # would start it only for it to say so again. _maybe_finish_campaign
+            # never fires for policy campaigns (no candidate queue), so this is
+            # where they end.
+            if campaign.status == CampaignStatus.ACTIVE.value and (
                 schedule_of(campaign) is None
-                and campaign.status == CampaignStatus.ACTIVE.value
+                or session.search_end_reason == "policy_exhausted"
             ):
                 campaign.status = CampaignStatus.DONE.value
                 self.sup._event(db, "campaign_done", campaign_id=campaign.id)

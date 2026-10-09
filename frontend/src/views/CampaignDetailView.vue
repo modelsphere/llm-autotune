@@ -816,8 +816,15 @@ const progress = computed(() => {
   // the declared size is a floor while planning, the row count takes over once
   // repeats grow past it. Before planning both fall back and it reads 0/256.
   const total = Math.max(candidates.value.length, spaceSize.value ?? 0) || spaceSize.value
-  const done = runs.value.filter((r) => !isLive(r.status)).length
-  return { total, done }
+  // Candidates, not runs, on top too: one candidate can be several runs — a
+  // policy's launch plus the benchmark of it, or a retry — and counting runs
+  // read 8 policy configs as "18/10". A candidate is done once it has a
+  // finished run and none still going.
+  const live = new Set(runs.value.filter((r) => isLive(r.status)).map((r) => r.candidate_id))
+  const finished = new Set(
+    runs.value.filter((r) => !isLive(r.status) && !live.has(r.candidate_id)).map((r) => r.candidate_id),
+  )
+  return { total, done: finished.size }
 })
 
 /** Why is an active campaign not starting anything? Silence is the worst

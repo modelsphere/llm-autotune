@@ -530,6 +530,59 @@ async def test_a_graceful_exhaust_is_labelled_exhausted_not_deadline(night):
     assert row.search_end_reason == "policy_exhausted"
 
 
+async def _recurring(http) -> None:
+    """Give the campaign a daily window that is open now, so it has a next night."""
+    now = datetime.now(UTC)
+    async with http.db() as session:
+        campaign = await session.get(Campaign, 1)
+        campaign.daily_start = (now - timedelta(hours=1)).strftime("%H:%M")
+        campaign.daily_end = (now + timedelta(hours=3)).strftime("%H:%M")
+        campaign.schedule_timezone = "UTC"
+        await session.commit()
+
+
+async def _drive_to_end(supervisor, http) -> None:
+    for _ in range(10):
+        supervisor.tick()
+        if (await _session_row(http)).terminal:
+            return
+    raise AssertionError("the session did not end")
+
+
+async def test_an_exhausted_search_ends_a_recurring_campaign(night):
+    """A policy that says it has covered its space ends the campaign, even one
+    with a nightly window: the next night would only hear the same thing."""
+    supervisor, driver, http = night
+    await _recurring(http)
+    policy = await _boot(supervisor, driver, http)
+
+    assert (await policy.heartbeat(status="exhausted"))["command"] == "finalize"
+    assert (await policy.post("/session/finalized")).status_code == 204
+    await _drive_to_end(supervisor, http)
+
+    async with http.db() as session:
+        assert (await session.get(Campaign, 1)).status == CampaignStatus.DONE.value
+
+
+async def test_a_deadline_leaves_a_recurring_campaign_for_its_next_night(night):
+    """A search cut off by its deadline has more to do: the campaign stays active
+    and its policy starts again in the next window."""
+    supervisor, driver, http = night
+    await _recurring(http)
+    policy = await _boot(supervisor, driver, http)
+
+    async with http.db() as session:
+        campaign = await session.get(Campaign, 1)
+        campaign.window_end = datetime.now(UTC) + timedelta(minutes=10)
+        await session.commit()
+    assert (await policy.heartbeat())["command"] == "finalize"
+    assert (await policy.post("/session/finalized")).status_code == 204
+    await _drive_to_end(supervisor, http)
+
+    async with http.db() as session:
+        assert (await session.get(Campaign, 1)).status == CampaignStatus.ACTIVE.value
+
+
 async def test_delegated_work_after_exhausted_clears_the_signal(night):
     """The one case where a later beat *should* drop the signal: the policy
     actually resumes delegated work, proving it was not done after all."""
