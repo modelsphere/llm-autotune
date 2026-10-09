@@ -573,6 +573,9 @@ function moreAction(command: string) {
 
 function learnedRunLength(c: Campaign): string {
   const t = c.learned_timing
+  if (t?.bench_minutes == null && t?.estimated_bench_minutes != null) {
+    return `≈ ${Math.round(t.estimated_bench_minutes)} min benchmark, estimated from its settings`
+  }
   if (!t || t.bench_minutes == null) return 'not measured yet'
   const parts = [
     t.startup_minutes != null ? `${Math.round(t.startup_minutes)} min startup` : '',

@@ -96,8 +96,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `policy_settings.approx_minutes_each` and `model_startup_minutes` still pin
     it when given;
   - `max_run_minutes` is now only a cap, default 720: a new run needs as much
-    window as this campaign's runs have taken (the server default before the
-    first one), and a lease's `returnable_at` follows the same figure.
+    window as this campaign's runs have taken, and a lease's `returnable_at`
+    follows the same figure;
+  - before the first run, the benchmark's length is estimated from its own
+    settings on LLMBench (a sweep's levels × seconds, a replay's time cap), and
+    the engine's startup is bounded by the readiness timeout;
+  - a run cut at the window's end counts as a sample of at least the time it
+    got, so a too-short estimate corrects itself the next night;
+  - with nothing measured or estimated, a run reserves
+    `AUTOTUNE_DEFAULT_MAX_RUN_MINUTES`, now 240 (was 150).
 - `served_model_name` is optional when creating a campaign: empty means the
   last part of `model_path`.
 - New campaign form: the served model name, launch extras, engine port, max

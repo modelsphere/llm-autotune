@@ -212,7 +212,7 @@ The ones installs usually reach for:
 | `AUTOTUNE_PROMOTION_DRY_RUN` | `true` | build and record the merge request without pushing anything |
 | `AUTOTUNE_GITLAB_BASE_URL`, `_PROJECT`, `_TOKEN` | — | the deploy repository promotion writes to; the token needs to push branches and open merge requests |
 | `AUTOTUNE_DEFAULT_DAILY_START`, `_END`, `AUTOTUNE_DEFAULT_SCHEDULE_TIMEZONE` | — | the window a drafted campaign gets when its author names none |
-| `AUTOTUNE_DEFAULT_MAX_RUN_MINUTES` | `150` | window a run reserves before the campaign has measured one of its own |
+| `AUTOTUNE_DEFAULT_MAX_RUN_MINUTES` | `240` | window a run reserves when its length can be neither measured nor estimated from its benchmark |
 | `AUTOTUNE_READY_TIMEOUT_MINUTES` | `30` | how long a started engine may take to answer `/v1/models` |
 | `AUTOTUNE_IMAGE_PULL_TIMEOUT_MINUTES` | `45` | how long a pod may spend scheduling and pulling its image |
 | `AUTOTUNE_HEALTH_PROBE_TIMEOUT_SECONDS` | `600` | how long the first chat completion may take |

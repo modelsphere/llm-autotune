@@ -346,6 +346,8 @@ export interface Campaign {
     bench_minutes: number | null
     verify_bench_minutes: number | null
     samples: number
+    /** From the benchmark's own settings, before any run is measured. */
+    estimated_bench_minutes: number | null
   }
   confirm_top_k: number
   confirm_repeats: number

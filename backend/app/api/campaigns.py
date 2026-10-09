@@ -21,6 +21,7 @@ from app.control.search.parity import missing_flags
 from app.control.search.space import candidate_count, expand, space_errors, swept_keys
 from app.control.search.validation import cards_used
 from app.core.auth import get_current_user
+from app.core.config import get_settings
 from app.datasets import pinning
 from app.datasets.profiles import DatasetProfileClient, DatasetProfileError
 from app.db.base import get_async_session
@@ -62,6 +63,7 @@ from app.schemas.core import (
     served_name_for,
 )
 from app.schemas.policy import PolicySettings
+from app.staging import SCREEN, VERIFY
 
 logger = logging.getLogger(__name__)
 
@@ -325,6 +327,30 @@ async def _resolve_benchmark_specs(body: CampaignCreate) -> None:
             body.dataset_profile = spec.dataset_profile.strip()
 
 
+async def _benchmark_estimates(body: CampaignCreate) -> dict[str, float | None]:
+    """How long each stage's benchmark should take, from its own parameters on
+    LLMBench — what the window is planned from until runs are measured. Empty
+    when LLMBench is not configured or cannot say; it never fails a creation."""
+    if not get_settings().llmbench_base_url:
+        return {}
+    slugs = {SCREEN: body.benchmark_slug or get_settings().llmbench_benchmark_slug,
+             VERIFY: body.verify_benchmark_slug}
+
+    def _read() -> dict[str, float | None]:
+        client = LLMBenchClient(max_attempts=1)
+        out: dict[str, float | None] = {}
+        for stage, slug in slugs.items():
+            if slug:
+                found = client.get_benchmark(slug)
+                out[stage] = timing.estimate_benchmark_minutes(found) if found else None
+        return out
+
+    try:
+        return await anyio.to_thread.run_sync(_read)
+    except Exception:
+        return {}
+
+
 async def _create(session: AsyncSession, user: User, body: CampaignCreate) -> Campaign:
     """Validate and save a campaign. The one path every way of making one takes
     — the form, an imported spec, a clone, a posted draft — so a rule added here
@@ -370,6 +396,7 @@ async def _create(session: AsyncSession, user: User, body: CampaignCreate) -> Ca
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "; ".join(schedule_errors))
     campaign = Campaign(owner_id=user.id, **body.model_dump(
         exclude={"extensions", "benchmark_spec", "verify_benchmark_spec"}))
+    timing.set_priors(campaign, await _benchmark_estimates(body))
     # A campaign that carries a clock starts under it, not in draft: leaving it
     # DRAFT would mean someone still has to press Start, which is exactly the
     # 23:00 keyboard visit the schedule exists to remove.

@@ -1970,6 +1970,7 @@ class Supervisor:
             if window_end is not None and _now() >= window_end:
                 if run.llmbench_submission_id:
                     self.bench.cancel(run.llmbench_submission_id)
+                timing.record_cut(session, run, stage_of_run(run), _now())
                 self._finish(session, run, RunStatus.KILLED, error="window cutoff")
 
     # --------------------------------------------------------------- helpers

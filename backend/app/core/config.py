@@ -88,7 +88,12 @@ class Settings(BaseSettings):
 
     worker_tick_seconds: int = 10
     run_log_dir: str = "./runs"
-    default_max_run_minutes: int = 150
+    # Window a run reserves when its length can be neither measured (no run of
+    # this campaign has finished yet) nor estimated from the benchmark's own
+    # parameters (a replay with no time cap, an unknown module). Generous: a
+    # run cut at the window's end is lost whole, a reserve too long only idles
+    # the window's tail — and the first cut run teaches the real length.
+    default_max_run_minutes: int = 240
 
     # -- policy sessions (docs/api/policy-contract.md) ------------------------
     #
