@@ -159,7 +159,9 @@ says replaces what the platform would build from its own rows. That covers:
 Runs of one group compare by the group's rules: two runs of the same group
 are comparable whatever else differs, and runs of two groups are not
 (`group_differs`). A saved report records the group of the runs it compares,
-and `GET /api/agent/v1/reports?group=<slug>` lists by it.
+and `GET /api/agent/v1/reports?group=<slug>` lists by it. A group with a
+`page_path` (its page in the web UI, usually a plugin route) is linked from
+the report pages.
 
 ## Frontend
 

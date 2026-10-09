@@ -139,6 +139,14 @@ onBeforeUnmount(cleanup)
             </router-link>
             ·
           </template>
+          <template v-if="report.group">
+            {{ t('reports.group') }}:
+            <router-link v-if="report.group.page_path" :to="report.group.page_path">
+              {{ report.group.name || report.group.slug }}
+            </router-link>
+            <span v-else>{{ report.group.name || report.group.slug }}</span>
+            ·
+          </template>
           {{ t('reports.inputs') }}:
           <span class="mono">run {{ report.baseline_run_id }}</span>
           →

@@ -25,6 +25,7 @@ const zh: typeof en = {
     baseline: 'Baseline 运行',
     attempts: '优化尝试',
     campaign: 'Campaign',
+    group: '分组',
     by: '保存者',
     when: '保存时间',
     notComparable: '不可比',

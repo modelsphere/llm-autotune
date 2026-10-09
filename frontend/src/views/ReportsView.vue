@@ -50,6 +50,18 @@ onMounted(load)
           <span v-else class="muted">—</span>
         </template>
       </el-table-column>
+      <el-table-column v-if="reports.some((r) => r.group)" :label="t('reports.group')"
+        min-width="140">
+        <template #default="{ row }">
+          <template v-if="row.group">
+            <router-link v-if="row.group.page_path" :to="row.group.page_path">
+              {{ row.group.name || row.group.slug }}
+            </router-link>
+            <span v-else>{{ row.group.name || row.group.slug }}</span>
+          </template>
+          <span v-else class="muted">—</span>
+        </template>
+      </el-table-column>
       <el-table-column :label="t('reports.baseline')" width="130">
         <template #default="{ row }"><span class="mono">run {{ row.baseline_run_id }}</span></template>
       </el-table-column>

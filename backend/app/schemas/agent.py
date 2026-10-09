@@ -45,6 +45,9 @@ class RunGroup(BaseModel):
     served_model_name: str = ""
     precision: str = ""
     gpu_type: str = ""
+    # Where the group lives in the web UI (e.g. "/things/<slug>"), if it has
+    # a page; reports link to it.
+    page_path: str = ""
 
 
 class LaunchRendered(BaseModel):

@@ -839,12 +839,27 @@ export function downloadText(filename: string, text: string): void {
 
 // -- agent API (reports an LLM wrote from finished runs) -----------------------
 
+/** Runs a plugin keeps together as one comparable set. */
+export interface RunGroup {
+  kind: string
+  slug: string
+  name: string
+  model_name: string
+  served_model_name: string
+  precision: string
+  gpu_type: string
+  /** The group's page in this app, or '' when it has none. */
+  page_path: string
+}
+
 export interface AgentReport {
   id: number
   title: string
   baseline_run_id: number
   attempt_run_ids: number[]
   campaign_id: number | null
+  /** The group every run of the comparison belongs to, when there is one. */
+  group?: RunGroup | null
   comparable: boolean
   generator: Record<string, unknown>
   created_by_name: string

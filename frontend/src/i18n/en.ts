@@ -19,6 +19,7 @@ export default {
     baseline: 'Baseline run',
     attempts: 'Attempts',
     campaign: 'Campaign',
+    group: 'Group',
     by: 'Saved by',
     when: 'Saved',
     notComparable: 'not comparable',
