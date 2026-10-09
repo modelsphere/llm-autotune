@@ -56,6 +56,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The CI check that searched the tree for a list of internal host names; that
   list no longer lives in the repository.
 
+### Fixed
+
+- `deploy/quickstart.sh` no longer prints git's "is not a commit" warning and
+  detached-HEAD advice while fetching the LLMBench chart, and a fetch that
+  fails part-way is retried on the next run instead of leaving an empty
+  directory the script then takes for the chart.
+
 ## [0.1.2] - 2026-09-29
 
 ### Added
