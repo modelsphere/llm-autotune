@@ -145,9 +145,8 @@ async def machine_lifecycle(_: User = Depends(get_current_user)):
 
 async def _probe_capacity(machine: Machine) -> dict:
     """Ask the machine's substrate how many GPUs of what type it really has.
-    Best-effort: a driver that cannot answer (bare metal, or an unconfigured/
-    unreachable cluster) yields {"supported": False} and the caller keeps the
-    values already on the row."""
+    Best-effort: a machine that cannot be reached yields {"supported": False}
+    and the caller keeps the values already on the row."""
     driver = _driver_for(machine)
     try:
         return await anyio.to_thread.run_sync(driver.probe_capacity, _machine_info(machine))
@@ -186,11 +185,10 @@ async def create_machine(
     if exists:
         raise HTTPException(status.HTTP_409_CONFLICT, "machine name taken")
     machine = Machine(**body.model_dump())
-    # A k8s machine is a node-slice, so its capacity and card type are the
-    # cluster's to state, not the operator's to type. Read them from the node(s)
-    # the selector matches; fall back to whatever was entered if the cluster
-    # cannot be reached.
-    probe = await _probe_capacity(machine) if machine.driver == "k8s" else {"supported": False}
+    # Capacity and card type are the machine's to state, not the operator's to
+    # type: nvidia-smi over ssh, or the node(s) a k8s selector matches. Whatever
+    # was entered stands when the machine cannot be reached yet.
+    probe = await _probe_capacity(machine)
     _apply_probe(machine, probe)
     session.add(machine)
     session.add(
@@ -211,10 +209,10 @@ async def probe_capacity(
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_async_session),
 ):
-    """Re-read GPU count and card type from the cluster and update the machine.
+    """Re-read GPU count and card type from the machine and update it.
 
-    The Refresh button behind a k8s node-slice: nodes get added, drained, or
-    relabelled, so the capacity a machine was created with drifts. Returns the
+    The Refresh button: nodes get added, drained or relabelled and boxes get
+    re-carded, so the capacity a machine was created with drifts. Returns the
     machine plus the raw probe (per-node detail and any warnings — a selector
     that matched nothing, an unknown card, a pool spanning two card types)."""
     machine = await _get_machine(machine_id, session)
@@ -222,8 +220,8 @@ async def probe_capacity(
     if not probe.get("supported"):
         raise HTTPException(
             status.HTTP_409_CONFLICT,
-            f"{machine.name} runs on the {machine.driver or 'ssh_docker'} substrate, "
-            "which cannot probe capacity; set GPU count and type by hand",
+            f"could not read {machine.name}'s cards: "
+            + ("; ".join(probe.get("warnings") or []) or "the machine did not answer"),
         )
     _apply_probe(machine, probe)
     session.add(
@@ -298,7 +296,7 @@ async def update_machine(
             raise HTTPException(status.HTTP_409_CONFLICT, "machine name taken")
     for field, value in body.model_dump().items():
         setattr(machine, field, value)
-    probe = await _probe_capacity(machine) if machine.driver == "k8s" else {"supported": False}
+    probe = await _probe_capacity(machine)
     _apply_probe(machine, probe)
     session.add(
         Event(

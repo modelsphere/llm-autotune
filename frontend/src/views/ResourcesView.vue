@@ -21,6 +21,7 @@ const clusters = ref<Cluster[]>([])
 const steps = ref<string[]>([])
 const lifecycle = ref<Record<number, MachineLifecycle>>({})
 const showAdd = ref(false)
+const addAdvanced = ref<string[]>([])
 const busy = ref(false)
 const poll = usePoll(() => load(), 10000)
 
@@ -502,9 +503,9 @@ async function runSmoke() {
   }
 }
 
-/** Re-read a k8s machine's GPU count and card type from the cluster. The
- *  capacity behind a node-slice drifts as nodes are added/drained/relabelled,
- *  so this is the "read it from the source of truth" button. Surfaces the
+/** Re-read a machine's GPU count and card type from the machine itself
+ *  (nvidia-smi, or the k8s nodes its selector matches) — capacity drifts as
+ *  nodes are added, drained and re-carded. Surfaces the
  *  probe's own warnings — a selector that matched nothing, an unknown card, a
  *  pool spanning two card types. */
 async function probeCapacity(machine: Machine) {
@@ -720,10 +721,10 @@ onMounted(async () => {
                 <el-dropdown-item command="remove" class="risky">
                   Remove — delete this machine
                 </el-dropdown-item>
-                <el-dropdown-item v-if="m.driver === 'k8s'" command="probe" divided>
-                  Refresh capacity — re-read GPUs from the cluster
+                <el-dropdown-item command="probe" divided>
+                  Refresh capacity — re-read its GPUs
                 </el-dropdown-item>
-                <el-dropdown-item command="end-eager" :divided="m.driver !== 'k8s'"
+                <el-dropdown-item command="end-eager"
                   :disabled="m.lease_state === 'none'
                   || m.lease_state === 'released'" class="risky">
                   End lease now — stop runs immediately
@@ -803,15 +804,24 @@ onMounted(async () => {
             <el-option v-for="c in clusters" :key="c.id"
               :label="`${c.name} · ${c.namespace} · ${c.workload_kind}`" :value="c.id" />
           </el-select>
+          <div class="muted tiny">Add one under <strong>Clusters</strong>.</div>
+        </el-form-item>
+        <el-form-item v-if="form.driver !== 'k8s'" label="Host">
+          <el-input v-model="form.host" class="mono" placeholder="10.0.0.24" />
+        </el-form-item>
+        <el-form-item v-if="form.driver === 'k8s'" label="Node selector">
+          <el-input v-model="form.node_selector" class="mono"
+            placeholder="empty: any node with free GPUs" />
           <div class="muted tiny">
-            Which apiserver this slice's pods land in. Empty = the platform-default
-            cluster (the <span class="mono">AUTOTUNE_K8S_*</span> env). Manage them under
-            <strong>Clusters</strong>.
+            Which nodes its pods may land on, as <span class="mono">label=value</span>
+            pairs — for a model whose weights live on only some nodes.
           </div>
         </el-form-item>
-        <el-form-item :label="form.driver === 'k8s' ? 'Label (host is unused on k8s)' : 'Host'">
-          <el-input v-model="form.host" class="mono" />
-        </el-form-item>
+        <div class="muted tiny detected">
+          GPU count and type are read from the machine when you save.
+        </div>
+        <el-collapse v-model="addAdvanced" class="dialog-advanced">
+          <el-collapse-item name="advanced" title="Advanced">
         <div v-if="form.driver !== 'k8s'" class="grid-2">
           <el-form-item label="SSH user"><el-input v-model="form.ssh_user" /></el-form-item>
           <el-form-item label="SSH port">
@@ -819,7 +829,7 @@ onMounted(async () => {
           </el-form-item>
         </div>
         <div class="grid-2">
-          <el-form-item :label="form.driver === 'k8s' ? 'GPU count (pool to borrow)' : 'GPU count'">
+          <el-form-item label="GPU count (if it cannot be read)">
             <el-input-number v-model="form.gpu_count" :min="1" :max="64" />
           </el-form-item>
           <el-form-item label="GPU type">
@@ -828,24 +838,6 @@ onMounted(async () => {
               <el-option v-for="t in gpuTypes" :key="t" :label="t" :value="t" />
             </el-select>
           </el-form-item>
-        </div>
-        <el-form-item v-if="form.driver === 'k8s'" label="Node selector">
-          <el-input v-model="form.node_selector" class="mono"
-            placeholder="kubernetes.io/hostname=gpu-a100-1" />
-          <div class="muted tiny">
-            Which cluster nodes this slice's pods may land on, as
-            <span class="mono">label=value</span> pairs (comma-separated). Pin one node
-            (<span class="mono">kubernetes.io/hostname=…</span>) or a whole card type
-            (<span class="mono">nvidia.com/gpu.product=NVIDIA-H100-80GB-HBM3</span>). Needed
-            when a model's weights live on only some nodes. Empty = the scheduler is free.
-          </div>
-        </el-form-item>
-        <div v-if="form.driver === 'k8s'" class="muted tiny" style="margin: -6px 0 10px">
-          GPU count and type are read from the cluster on save (and via
-          <strong>Refresh capacity</strong> later) and overwrite what is set here. Set
-          them anyway: a credential that cannot read nodes (a cluster we are a guest
-          on) leaves these values as the only record, and a machine with no GPU type
-          is passed over by anything that matches machines by card type.
         </div>
         <template v-if="form.driver !== 'k8s'">
           <el-form-item label="Interior address (multi-node)">
@@ -866,6 +858,8 @@ onMounted(async () => {
           </el-form-item>
         </template>
         <el-form-item label="Notes"><el-input v-model="form.notes" /></el-form-item>
+          </el-collapse-item>
+        </el-collapse>
       </el-form>
       <template #footer>
         <el-button @click="showAdd = false">Cancel</el-button>
@@ -1149,6 +1143,12 @@ onMounted(async () => {
 .setup {
   margin-top: 4px;
   line-height: 1.5;
+}
+.detected {
+  margin: -6px 0 8px;
+}
+.dialog-advanced {
+  border-top: none;
 }
 .header-row {
   display: flex;

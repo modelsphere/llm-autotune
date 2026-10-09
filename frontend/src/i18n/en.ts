@@ -193,6 +193,7 @@ export default {
     report: 'Report',
     logs: 'Logs',
     exportYaml: 'Export YAML',
+    more: 'More',
     clone: 'Clone',
     cloneName: 'Name for the copy — it keeps this campaign\'s definition, not its results',
     cloneFailed: 'Clone failed',

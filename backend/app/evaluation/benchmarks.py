@@ -98,12 +98,33 @@ def ensure_document(client: LLMBenchClient, doc: dict, slug: str) -> Ensured:
                    locked=bool(existing.get("is_locked")))
 
 
+def file_untagged(client: LLMBenchClient) -> list[str]:
+    """File every benchmark this account created but never tagged — made
+    before AutoTune filed its benchmarks — under its group. Best-effort per
+    benchmark; returns the slugs filed."""
+    me = client.whoami().get("id")
+    filed = []
+    for benchmark in client.list_benchmarks():
+        if benchmark.get("created_by_user_id") != me or benchmark.get("group_tags"):
+            continue
+        try:
+            client.set_group_tags(benchmark["id"], [GROUP_TAG])
+            filed.append(benchmark["slug"])
+        except Exception:
+            continue
+    return filed
+
+
 def ensure_screen_benchmark(max_attempts: int = 1) -> Ensured | None:
-    """Ensure the default screen benchmark on the configured LLMBench.
+    """Ensure the default screen benchmark on the configured LLMBench, and
+    file any of AutoTune's older benchmarks under its group.
 
     None when there is nothing to do: ensuring is turned off, or no LLMBench
     is configured. Raises when LLMBench cannot be reached or refuses."""
     settings = get_settings()
     if not settings.llmbench_ensure_benchmarks or not settings.llmbench_base_url:
         return None
-    return ensure_benchmark(LLMBenchClient(max_attempts=max_attempts))
+    client = LLMBenchClient(max_attempts=max_attempts)
+    ensured = ensure_benchmark(client)
+    file_untagged(client)
+    return ensured

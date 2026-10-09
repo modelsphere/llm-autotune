@@ -172,3 +172,13 @@ async def test_the_spec_endpoint_names_the_benchmark_without_creating_it(client)
     assert out["slug"] == bs.BenchmarkSpec().slug
     assert out["module"] == bs.SWEEP_MODULE
     assert client.made == []
+
+
+def test_older_benchmarks_of_ours_are_filed_and_others_left_alone(mock_llmbench):
+    from app.evaluation.benchmarks import file_untagged
+
+    filed = file_untagged(mock_llmbench)
+    assert "autotune-screen-v1" in filed
+    for slug in filed:
+        assert mock_llmbench.get_benchmark(slug)["group_tags"] == [GROUP_TAG]
+    assert file_untagged(mock_llmbench) == [], "already filed: nothing to do twice"

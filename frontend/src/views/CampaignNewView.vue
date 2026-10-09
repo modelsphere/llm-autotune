@@ -131,6 +131,10 @@ const STEPS = [
   { title: 'Check', hint: 'before committing a night' },
 ]
 
+/** The name a campaign gets when its author leaves it blank. */
+const defaultName = computed(() =>
+  `${servedName.value || 'model'} · ${new Date().toISOString().slice(0, 10)}`)
+
 /** What the engine serves the model as: the typed name, else the last part of
  *  the model path — the same rule the API applies to an empty field. */
 const servedName = computed(() =>
@@ -227,7 +231,6 @@ const verifyObjectiveMismatch = computed(() => {
  *  end and is told the first page was wrong. */
 const problems = computed<string[][]>(() => [
   [
-    !form.value.name.trim() && 'a name',
     !form.value.image.trim() && 'a container image',
     !form.value.model_path.trim() && 'the model path on the machine',
   ].filter(Boolean) as string[],
@@ -666,7 +669,7 @@ async function create() {
     const extras = fromYaml<{ env?: Record<string, string>; volumes?: Record<string, string> }>(
       form.value.extras_text, 'Launch extras')
     const { data } = await api.post('/campaigns', {
-      name: form.value.name,
+      name: form.value.name.trim() || defaultName.value,
       engine: form.value.engine,
       image: form.value.image.trim(),
       model_path: form.value.model_path,
@@ -760,13 +763,7 @@ onMounted(async () => {
         <template v-if="step === 0">
           <el-form label-position="top">
             <el-form-item label="Campaign name">
-              <el-input v-model="form.name" placeholder="node-24 prefill sweep, week 32" />
-            </el-form-item>
-            <el-form-item label="Engine">
-              <el-select v-model="form.engine" style="width: 100%">
-                <el-option label="sglang" value="sglang" />
-                <el-option label="vllm" value="vllm" />
-              </el-select>
+              <el-input v-model="form.name" :placeholder="defaultName" />
             </el-form-item>
             <el-form-item label="Container image">
               <el-input v-model="form.image" class="mono"
@@ -1192,7 +1189,7 @@ onMounted(async () => {
         <h3>So far</h3>
         <dl>
           <dt>Name</dt>
-          <dd :class="{ empty: !form.name }">{{ form.name || 'unnamed' }}</dd>
+          <dd>{{ form.name || defaultName }}</dd>
           <dt>Serving</dt>
           <dd :class="{ empty: !servedName }">
             {{ servedName || '—' }} <span class="muted">on {{ form.engine }}</span>

@@ -191,6 +191,7 @@ const zh: typeof en = {
     report: '报告',
     logs: '日志',
     exportYaml: '导出 YAML',
+    more: '更多',
     clone: '克隆',
     cloneName: '副本名称（保留此 campaign 的定义，不含结果）',
     cloneFailed: '克隆失败',

@@ -565,6 +565,12 @@ const logSources = computed<LogSource[]>(() => {
  *  be reproduced, compared against another campaign, or have one field lifted
  *  out of it without reading the database. */
 /** "≈ 6 min startup + 22 min benchmark", or a note that nothing ran yet. */
+function moreAction(command: string) {
+  if (command === 'logs') logOpen.value = true
+  else if (command === 'clone') void cloneCampaign()
+  else if (command === 'export') exportOpen.value = true
+}
+
 function learnedRunLength(c: Campaign): string {
   const t = c.learned_timing
   if (!t || t.bench_minutes == null) return 'not measured yet'
@@ -910,17 +916,23 @@ onMounted(() => {
           {{ campaign.status }}
         </el-tag>
         <el-button @click="openReport">{{ t('campaign.report') }}</el-button>
-        <el-button v-if="logSources.length" @click="logOpen = true">
-          {{ t('campaign.logs') }}
-        </el-button>
-        <el-button @click="cloneCampaign">{{ t('campaign.clone') }}</el-button>
-        <el-button @click="exportOpen = true">
-          {{ t('campaign.exportYaml') }}
-          <InfoHint :width="320">
-            Everything needed to recreate this campaign. Import it on the New campaign
-            page to build a variant without walking the whole form again.
-          </InfoHint>
-        </el-button>
+        <!-- The occasional actions, one click away instead of a row of buttons
+             nobody reads past. -->
+        <el-dropdown trigger="click" class="more" @command="moreAction">
+          <el-button>{{ t('campaign.more') }} ▾</el-button>
+          <template #dropdown>
+            <el-dropdown-menu>
+              <el-dropdown-item v-if="logSources.length" command="logs">
+                {{ t('campaign.logs') }}
+              </el-dropdown-item>
+              <el-dropdown-item command="clone">{{ t('campaign.clone') }}</el-dropdown-item>
+              <el-dropdown-item command="export"
+                title="Everything needed to recreate this campaign — import it on the New campaign page">
+                {{ t('campaign.exportYaml') }}
+              </el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
         <el-button type="success" plain :disabled="!winner" @click="openMr(null)">
           {{ t('promotion.generateMr') }}
           <InfoHint :width="340">
@@ -1532,6 +1544,11 @@ onMounted(() => {
 </template>
 
 <style scoped>
+/* A dropdown breaks el-button's sibling spacing; restore it. */
+.more {
+  margin: 0 12px;
+  vertical-align: middle;
+}
 .log-head {
   display: flex;
   align-items: center;

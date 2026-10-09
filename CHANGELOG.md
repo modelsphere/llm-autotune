@@ -75,6 +75,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- A bare-metal machine's GPU count and card type are read with `nvidia-smi`
+  when it is saved, as a Kubernetes slice's already were from its nodes;
+  **Refresh capacity** works for both. The Add machine dialog asks for a name
+  and an address (or a node selector), with the rest under Advanced.
+- New campaign: the engine follows the chosen search space instead of being
+  asked for, and a campaign left unnamed is named after its model and date.
+  The campaign page keeps Report and the run controls in view and moves logs,
+  clone and YAML export under **More**.
+
 - A campaign learns how long its runs take — the engine coming up, and each
   benchmark coming back — and plans its window from that (`run_timing` on the
   campaign, migration `004`; shown on the campaign page as "Run length").

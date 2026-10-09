@@ -763,6 +763,24 @@ class SshDockerDriver(DeploymentDriver):
             checks.append(smoke_check("gpus", "pass", f"{seen} visible"))
         return smoke_result(checks)
 
+    def probe_capacity(self, machine) -> dict:
+        """The cards `nvidia-smi` sees, so nobody has to type them."""
+        result = self._ssh(machine, "nvidia-smi --query-gpu=name --format=csv,noheader",
+                           timeout=30)
+        if result.returncode != 0:
+            return {"supported": False,
+                    "warnings": [f"nvidia-smi failed: {(result.stderr or result.stdout).strip()}"]}
+        names = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+        kinds = sorted({normalize_gpu_type(name) for name in names} - {""})
+        warnings = []
+        if len(kinds) > 1:
+            warnings.append(f"mixed cards on one machine: {', '.join(kinds)}")
+        if names and not kinds:
+            warnings.append(f"unknown card {names[0]!r}; set its type by hand")
+        return {"supported": True, "node_count": 1, "gpu_count": len(names),
+                "gpu_type": kinds[0] if len(kinds) == 1 else "", "nodes": [machine.name],
+                "warnings": warnings}
+
     def _check_port_free(self, machine, port: int) -> None:
         result = self._ssh(
             machine,
