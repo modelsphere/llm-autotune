@@ -56,11 +56,11 @@ jobs:
           helm template t deploy/helm/llm-autotune \
             --set jwtSecret=ci --set adminPassword=ci --set gpuCluster.inCluster=true > /dev/null
           helm template t deploy/helm/llm-autotune \
-            -f deploy/helm/llm-autotune/values-quickstart.yaml \
+            -f deploy/helm/llm-autotune/values-demo.yaml \
             --set jwtSecret=ci --set adminPassword=ci > /dev/null
           helm template t deploy/helm/llm-autotune \
-            -f deploy/helm/llm-autotune/values-quickstart.yaml \
+            -f deploy/helm/llm-autotune/values-demo.yaml \
             -f deploy/helm/llm-autotune/values-mock.yaml \
             --set jwtSecret=ci --set adminPassword=ci > /dev/null
-      - name: The quickstart script passes shellcheck
-        run: shellcheck deploy/quickstart.sh
+      - name: The install scripts pass shellcheck
+        run: shellcheck -x deploy/quickstart.sh deploy/demo.sh deploy/lib/platforms.sh

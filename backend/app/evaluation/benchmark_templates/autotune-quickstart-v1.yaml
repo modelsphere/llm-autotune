@@ -1,5 +1,5 @@
 # A light screen for trying the platform on a laptop or a CPU-only cluster
-# (deploy/quickstart.sh), where the engine is the mock and the benchmark client
+# (deploy/demo.sh), where the engine is the mock and the benchmark client
 # shares the machine's CPUs with it.
 #
 # The real screen (autotune-screen-v1) sends 2048-token prompts to 64

@@ -37,8 +37,8 @@ Runs still need somewhere to land: a local kind cluster added on the Resources
 page with its kubeconfig, or any machine the worker can ssh into that has Docker.
 Use the mock engine as the campaign's image;
 [mock-engine/README.md](mock-engine/README.md) has both. To try a change to the
-chart or the images end to end, `deploy/quickstart.sh --kind` installs this
-checkout's chart next to LLMBench.
+chart or the images end to end, `deploy/demo.sh --kind` installs this
+checkout's chart next to LLMBench on a local kind cluster.
 
 ## Before you open a pull request
 

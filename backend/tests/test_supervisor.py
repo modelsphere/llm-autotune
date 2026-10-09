@@ -236,7 +236,7 @@ def test_happy_path_to_succeeded():
 def test_a_campaign_activated_mid_tick_is_planned_not_finished(monkeypatch):
     """The API can make a campaign active after a tick's _plan has run and
     before its _schedule does. Regression: _schedule then saw no candidates and
-    marked it DONE without ever running it (the quickstart's demo, force-started
+    marked it DONE without ever running it (the demo's campaign, force-started
     the moment the worker came up)."""
     supervisor, factory = make_supervisor()
     real_plan = supervisor._plan

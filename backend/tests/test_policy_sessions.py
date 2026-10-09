@@ -624,7 +624,7 @@ async def test_a_machine_with_no_cards_takes_cpu_only_launches(night):
     """A GPU-free machine gives a policy session no cards. Its launches then ask
     for none, whatever the config's parallelism; refusing them as a card-count
     mismatch left a policy nothing to launch, so it reported the space
-    exhausted before trying anything (the quickstart on kind)."""
+    exhausted before trying anything (the demo on kind)."""
     supervisor, driver, http = night
     async with http.db() as session:
         (await session.get(Machine, 1)).gpu_count = 0

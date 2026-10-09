@@ -648,7 +648,7 @@ async def request_launch(
 
     canonical, dev = _validated(body.engine_args, campaign, machine)
     needed = cards_used(canonical)
-    # A machine with no cards (a CPU-only slice: kind, the quickstart's mock
+    # A machine with no cards (a CPU-only slice: kind, the demo's mock
     # engine) gives the session none, and its launches ask for none whatever
     # the config's parallelism, the way a plain campaign runs there. Asking
     # for a card it does not hold is still refused, as outside the allocation.

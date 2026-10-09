@@ -38,6 +38,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `deploy/quickstart.sh` now installs a deployment you keep: LLM AutoTune and
+  LLMBench on the cluster kubectl points at (`--context` to pick one), with
+  runs on its GPU nodes. It warns when no node offers GPUs. The no-GPU
+  try-out (kind, the mock engine, the demo campaign) moved to
+  `deploy/demo.sh`, and `values-quickstart.yaml` is now `values-demo.yaml`.
+  A 0.1.x quickstart install is a demo install: `mv .quickstart .demo`, then
+  use `deploy/demo.sh`. `docs/after-the-quickstart.md` is now
+  `docs/after-installing.md`.
+- The README is shorter: install first, then the demo.
 - Every campaign endpoint that returns a campaign (create, read, list, clone,
   status, schedule, force start and stop) now returns it the same way, with
   its machine warnings and `extensions`.
