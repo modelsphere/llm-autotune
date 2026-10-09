@@ -13,6 +13,7 @@ export const router = createRouter({
     { path: '/campaigns/:id', component: () => import('../views/CampaignDetailView.vue') },
     { path: '/search-spaces', component: () => import('../views/SearchSpacesView.vue') },
     { path: '/objectives', component: () => import('../views/ObjectivesView.vue') },
+    { path: '/policies', component: () => import('../views/PoliciesView.vue') },
     { path: '/baselines', component: () => import('../views/BaselinesView.vue') },
     { path: '/runs', component: () => import('../views/RunsView.vue') },
     { path: '/resources', component: () => import('../views/ResourcesView.vue') },

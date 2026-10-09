@@ -445,6 +445,7 @@ function openBuilder(path: string) {
 async function refreshLists() {
   searchSpaces.value = (await api.get('/search-spaces')).data
   objectives.value = (await api.get('/objectives')).data
+  policies.value = (await api.get('/policies')).data
   ElMessage.success('List refreshed')
 }
 
@@ -920,6 +921,9 @@ onMounted(async () => {
                   that decides what to try next; the platform still launches, benchmarks
                   and judges every configuration it picks.
                 </InfoHint>
+                <el-button link type="primary" class="label-link"
+                  @click="openBuilder('/policies')">Register one</el-button>
+                <el-button link class="label-link" @click="refreshLists">Refresh</el-button>
               </template>
               <el-select v-model="form.strategy" style="width: 100%" filterable>
                 <el-option value="" label="No policy — every configuration, in order" />

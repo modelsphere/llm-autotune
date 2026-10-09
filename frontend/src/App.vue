@@ -22,6 +22,7 @@ const NAV: NavItem[] = [
   { path: '/campaigns', label: 'nav.campaigns', group: 'tuning', order: 10 },
   { path: '/search-spaces', label: 'nav.searchSpaces', group: 'tuning', order: 30 },
   { path: '/objectives', label: 'nav.objectives', group: 'tuning', order: 40 },
+  { path: '/policies', label: 'nav.policies', group: 'tuning', order: 45 },
   { path: '/baselines', label: 'nav.baselines', group: 'tuning', order: 50 },
   { path: '/runs', label: 'nav.runs', group: 'top', order: 20 },
   { path: '/resources', label: 'nav.resources', group: 'top', order: 30 },

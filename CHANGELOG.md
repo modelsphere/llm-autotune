@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- A **Policies** page under Automatic Tuning: register a policy image by name,
+  edit it, and remove one no campaign uses. The New campaign form links to it
+  from its Strategy picker.
+
 - A campaign describes its workload instead of naming a benchmark: synthetic
   prompts (sizes, concurrency levels) or a replay of a dataset. AutoTune
   creates the matching benchmark on LLMBench when the campaign is created,

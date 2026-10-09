@@ -777,6 +777,8 @@ export interface Policy {
   repo_url: string
   version: string
   gpus_in_container: boolean
+  /** Mount the campaign's weights at /model. */
+  needs_model: boolean
   env: Record<string, string>
   ports: number
   created_at: string | null
