@@ -47,6 +47,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   updates for the backend, frontend and operator dependencies and the Actions.
 - `NOTICE` lists every third-party component the images ship, with corrected
   licenses (Starlette and Uvicorn are BSD-3-Clause).
+- The `policies` submodule points at llm-autotune-policies 5e6f62b: its README
+  shows how to register a policy with `POST /api/policies`, and it gains a
+  NOTICE and a CHANGELOG. The policies themselves are unchanged.
 
 ### Removed
 
