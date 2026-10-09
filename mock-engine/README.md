@@ -6,7 +6,7 @@ GPUs. It answers to both `python3 -m sglang.launch_server ...` and
 on Kubernetes or over ssh.
 
 No image is published: it is a few kilobytes of Python on `python:3.12-slim`,
-built where it is used. [deploy/quickstart.sh](../deploy/quickstart.sh) builds
+built where it is used. [deploy/demo.sh](../deploy/demo.sh) builds
 it as `llm-autotune-mock-engine:<version>` and loads it into the cluster, or
 pushes it to the registry named with `--registry`. By hand:
 `docker build -t llm-autotune-mock-engine:<version> mock-engine/`, then
@@ -18,7 +18,7 @@ directory, which would otherwise surface as a confusing crash deep inside a
 real engine. The mock ignores what is in it, so a placeholder is enough.
 
 **On Kubernetes** the chart provides one: with `mockModel.enabled` (on in
-`values-quickstart.yaml`, which [deploy/quickstart.sh](../deploy/quickstart.sh)
+`values-demo.yaml`, which [deploy/demo.sh](../deploy/demo.sh)
 installs with) a DaemonSet writes `/var/lib/llm-autotune/mock-model/config.json`
 on every node, using the mock image (`mockModel.image`), so every node has the
 image before the first run. Use `/var/lib/llm-autotune/mock-model` as the
@@ -58,4 +58,4 @@ On a laptop or a small CPU-only cluster, the default screen benchmark
 measures how fast the benchmark client can prepare requests rather than the
 mock, and two settings rank by noise. Screen mock campaigns with
 `autotune-quickstart-v1` instead (short requests, concurrency 1 and 4), as the
-quickstart's demo does; `deploy/quickstart.sh` creates it on LLMBench.
+demo does; `deploy/demo.sh` creates it on LLMBench.

@@ -87,13 +87,13 @@ the response is always current.
   "contract": {"version": "1.0"},
   "session_id": 17,
   "campaign_id": 42,
-  "policy": {"name": "tpe-qwen36", "image": "registry/tpe-qwen36:1.3.0", "version": "1.3.0"},
+  "policy": {"name": "my-policy", "image": "registry/my-policy:1.3.0", "version": "1.3.0"},
 
   "model": {
     "engine": "sglang",
     "image": "lmsysorg/sglang:v0.5.3",
     "model_path": "/model",
-    "served_model_name": "qwen36",
+    "served_model_name": "qwen3-32b",
     "extra_env": {},
     "extra_volumes": {}
   },
@@ -257,7 +257,7 @@ PUT /api/policy/v1/session/plan
     {"param": "enable_torch_compile", "values": [true, false],
      "reason": "not in declared space; strong prior from sglang release notes"}
   ],
-  "notes": "TPE, gamma=0.15, warm-started from 2 prior nights"
+  "notes": "Bayesian search, warm-started from 2 prior nights"
 }
 ```
 
@@ -462,7 +462,7 @@ from their specs, time permitting. Either way the machine's own guarantees
 | `401` | Bad or expired token | The session is over for you; exit. |
 | `409` | The phase forbids it (launch after finalize, bench that cannot finish before the deadline, contender update after freeze, `serving` for a contender that was not commanded) | Re-read the heartbeat command and follow it. |
 | `410` | Session reached a terminal state | Exit. |
-| `422` | Config rejected for safety (cards, malformed values) — message says why | Fix the config; this is the same validation every internal planner faces. |
+| `422` | Config rejected for safety (cards, malformed values) — message says why | Fix the config; every config faces the same validation. |
 | `429` | No free cards/ports inside your allocation | Release something, or wait. |
 
 ---
@@ -517,7 +517,7 @@ from their specs, time permitting. Either way the machine's own guarantees
 
 ## Related
 
-- [`/api/docs`](/api/docs) — every endpoint with schemas.
+- `/api/docs` on your install — every endpoint with schemas.
 - [Machine Lease API](machine-lease.md) — how the machine itself is lent to
   the platform; a policy session always lives inside a lease and a campaign
   window.

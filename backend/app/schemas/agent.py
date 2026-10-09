@@ -24,10 +24,30 @@ SCHEMA_VERSION = 1
 
 
 class LaunchOrigin(BaseModel):
-    source: Literal["campaign"] = "campaign"
+    # What produced the run: "campaign", or a plugin's own kind of request.
+    source: str = "campaign"
     campaign_id: int | None = None
     campaign_name: str = ""
     candidate_id: int | None = None
+    # What a plugin knows about where the run came from (RunOverlay.origin).
+    extensions: dict[str, Any] = Field(default_factory=dict)
+
+
+class RunGroup(BaseModel):
+    """Runs a plugin keeps together as one comparable set (RunOverlay.group):
+    runs of one group compare with each other by its rules, not by model and
+    card type. `kind` names the plugin's notion of it."""
+
+    kind: str
+    slug: str
+    name: str = ""
+    model_name: str = ""
+    served_model_name: str = ""
+    precision: str = ""
+    gpu_type: str = ""
+    # Where the group lives in the web UI (e.g. "/things/<slug>"), if it has
+    # a page; reports link to it.
+    page_path: str = ""
 
 
 class LaunchRendered(BaseModel):
@@ -115,6 +135,10 @@ class BenchmarkLLMBenchOut(BaseModel):
     submission_id: str = ""
     submission_url: str = ""
     config_hash_frozen: str = ""
+    # The benchmark's config hash where the run's group recorded it, and
+    # whether the run measured against a different one (the benchmark moved).
+    config_hash_recorded: str = ""
+    drifted: bool = False
     dataset_build_id: str = ""
 
 
@@ -128,6 +152,9 @@ class BenchmarkPlatformOut(BaseModel):
     gate_text: str = ""
     max_run_minutes: int | None = None
     objective: dict[str, Any] = Field(default_factory=dict)
+    quality_floors: dict[str, float] = Field(default_factory=dict)
+    # What a plugin keeps about the benchmark on top (RunOverlay.platform).
+    extensions: dict[str, Any] = Field(default_factory=dict)
 
 
 class BenchmarkPart(BaseModel):
@@ -238,6 +265,7 @@ class RunDocument(BaseModel):
     environment: EnvironmentPart
     benchmark: BenchmarkPart
     results: ResultsPart
+    group: RunGroup | None = None
     links: dict[str, str] = Field(default_factory=dict)
 
 
@@ -390,6 +418,8 @@ class ComparisonDocument(BaseModel):
     schema_version: int = SCHEMA_VERSION
     comparable: bool
     reasons: list[NotComparableReason] = Field(default_factory=list)
+    # The group the compared runs belong to, when a plugin keeps them in one.
+    group: RunGroup | None = None
     benchmark: BenchmarkPart
     baseline: ComparisonRun
     attempts: list[ComparisonAttempt] = Field(default_factory=list)
@@ -409,6 +439,14 @@ class ReportAssetIn(BaseModel):
     data_base64: str
 
 
+class ScenarioLabel(BaseModel):
+    """What a report calls one scenario: a name a reader recognises and, for
+    the scenarios table, what the workload stands for."""
+
+    name: str = Field(default="", max_length=64)
+    description: str = Field(default="", max_length=400)
+
+
 class ReportCreate(BaseModel):
     title: str = Field(min_length=1, max_length=255)
     baseline_run_id: int
@@ -422,6 +460,8 @@ class ReportCreate(BaseModel):
     translation_of: int | None = None
     # Public names of the configs, baseline first. [] = Baseline / Optimized.
     labels: list[str] = Field(default_factory=list)
+    # Per scenario key; a scenario with no name goes by its token shape.
+    scenario_labels: dict[str, ScenarioLabel] = Field(default_factory=dict)
 
 
 class ReportBlock(BaseModel):
@@ -455,6 +495,9 @@ class ReportOut(BaseModel):
     lang: str = "en"
     translation_of: int | None = None
     labels: list[str] = Field(default_factory=list)
+    scenario_labels: dict[str, ScenarioLabel] = Field(default_factory=dict)
+    # The group the compared runs belong to, as frozen with the comparison.
+    group: RunGroup | None = None
 
 
 class ReportDetailOut(ReportOut):

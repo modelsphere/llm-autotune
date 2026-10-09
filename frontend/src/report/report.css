@@ -91,8 +91,27 @@
 .ar .ar-good { color: var(--ar-good); background: var(--ar-good-bg); }
 .ar .ar-bad { color: var(--ar-bad); background: var(--ar-bad-bg); }
 .ar .ar-flat { color: var(--ar-muted); background: var(--ar-soft); }
+/* definition tables (the SLO, the scenarios): prose in the last column, so
+   fixed widths and wrapping headers instead of the numeric layout */
+.ar .ar-table-defs { table-layout: fixed; min-width: 620px; }
+.ar .ar-table-defs th, .ar .ar-table-defs td {
+  white-space: normal; overflow-wrap: break-word; vertical-align: top;
+}
+.ar .ar-table-defs td:last-child { font-size: 13.5px; line-height: 1.6; color: var(--ar-text); }
+.ar .ar-table-slo th:nth-child(1) { width: 11%; }
+.ar .ar-table-slo th:nth-child(2) { width: 21%; }
+.ar .ar-table-slo th:nth-child(3) { width: 19%; }
+.ar .ar-table-slo th:nth-child(4) { width: 49%; }
+.ar .ar-table-scenarios th:nth-child(1) { width: 24%; }
+.ar .ar-table-scenarios th:nth-child(2) { width: 20%; }
+.ar .ar-table-scenarios th:nth-child(3) { width: 56%; }
+
 /* markdown tables the agent wrote itself */
 .ar > table { border: 1px solid var(--ar-border); border-radius: 10px; display: block; overflow-x: auto; }
+
+/* captions: numbered by the renderer — under a figure, over a results table */
+.ar .ar-caption { margin: 0.4em 0 1.4em; font-size: 14px; line-height: 1.65; color: var(--ar-text); }
+.ar .ar-block > .ar-caption:first-child { margin: 1.2em 0 0.4em; }
 
 /* charts */
 .ar .ar-chart { position: relative; }

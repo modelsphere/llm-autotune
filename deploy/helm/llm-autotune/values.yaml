@@ -5,8 +5,8 @@
 #   helm install autotune deploy/helm/llm-autotune \
 #     --set jwtSecret=$(openssl rand -hex 32) --set adminPassword=...
 #
-# For a cluster without GPUs, add `-f values-quickstart.yaml`; deploy/quickstart.sh
-# installs it that way next to LLMBench, in one command.
+# deploy/quickstart.sh installs it next to LLMBench in one command. For a
+# try-out on a cluster without GPUs, add `-f values-demo.yaml` (deploy/demo.sh).
 
 nameOverride: ""
 fullnameOverride: ""
@@ -190,11 +190,11 @@ mock:
 # platform refuses to start an engine on an empty model directory, and the
 # mock loads nothing, so one small file is all it needs. A DaemonSet writes it
 # (and so pulls the mock engine image onto each node ahead of the first run).
-# On in values-quickstart.yaml; leave it off on a GPU cluster.
+# On in values-demo.yaml; leave it off on a GPU cluster.
 mockModel:
   enabled: false
   path: /var/lib/llm-autotune/mock-model
   # The mock engine image. Empty = llm-autotune-mock-engine:<appVersion>, the
-  # name deploy/quickstart.sh builds it under from mock-engine/ and loads into
+  # name deploy/demo.sh builds it under from mock-engine/ and loads into
   # the cluster; no image of it is published.
   image: ""

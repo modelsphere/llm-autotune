@@ -180,6 +180,7 @@ class LLMBenchClient:
         extra_params: dict[str, Any] | None = None,
         contributor: str | None = None,
         source_url: str | None = None,
+        extra_body: dict[str, Any] | None = None,
     ) -> str:
         body: dict[str, Any] = {
             "endpoint_url": endpoint_url,
@@ -204,6 +205,11 @@ class LLMBenchClient:
             body["extra_params"] = extra_params
         if hardware:
             body.update({k: v for k, v in hardware.items() if v is not None})
+        # Fields a plugin adds to the submission (Plugin.submission_extras);
+        # never the endpoint under test itself.
+        for key, value in (extra_body or {}).items():
+            if key not in ("endpoint_url", "model", "api_key") and value is not None:
+                body[key] = value
 
         try:
             response = self._send(
@@ -661,6 +667,7 @@ class LLMBenchEvaluator(Evaluator):
             extra_params=context.get("extra_params"),
             contributor=context.get("contributor"),
             source_url=context.get("source_url"),
+            extra_body=context.get("extra_body"),
         )
 
     def _preflight_or_reject(self, endpoint_url: str, model_name: str, api_key: str) -> None:

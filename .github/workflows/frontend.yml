@@ -37,3 +37,11 @@ jobs:
           npm run build:report
           git diff --exit-code ../backend/app/agent/static/ \
             || { echo "::error::run 'npm run build:report' and commit the result"; exit 1; }
+      - name: The example plugin installs, type-checks and builds
+        # The frontend half of the plugin API's contract: a plugin folder in
+        # src/plugins/installed/ adds a page, nav, strings, a strategy and a
+        # page section (backend/tests/plugins/example/frontend).
+        run: |
+          cp -r ../backend/tests/plugins/example/frontend src/plugins/installed/example
+          npm run typecheck
+          npm run build

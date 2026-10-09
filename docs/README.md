@@ -1,31 +1,27 @@
 # Documentation
 
-Start here:
+Understanding it:
 
-- [Architecture](architecture.md) — what the system is, how it is shaped, and the
-  few choices that decide everything else. 中文：[架构概览](architecture.zh.md)
-- [How it works](workflow.md) — the same system without the code, for anyone
-  deciding whether it solves their problem. 中文：[产品视角](workflow.zh.md)
+- [How it works](workflow.md): the product view, no code. 中文：[产品视角](workflow.zh.md)
+- [Architecture](architecture.md): how it is built. 中文：[架构](architecture.zh.md)
+- [Platform architecture](api/platform-architecture.md): the policy and a
+  campaign, step by step. 中文：[平台架构](api/platform-architecture.zh.md)
 
 Running it:
 
-- [After the quickstart](after-the-quickstart.md) — from the demo install to
-  policies, real GPUs and your own settings, without starting over
-- [Deploying](deploying.md) — the Helm chart, GPU access, the benchmark
-  platform, and every other setting
-- [Upgrading](upgrading.md) — how the schema is applied, and what is not
-  upgradeable
+- [After installing](after-installing.md): settings, search policies, more
+  GPUs, ingress, datasets and promotion.
+- [Deploying](deploying.md): the Helm chart and every setting.
+- [Upgrading](upgrading.md): how the schema is applied.
 
-The contracts other systems build against:
+Building on it:
 
-- [Platform architecture](api/platform-architecture.md) — the pieces and how a
-  campaign flows through them. 中文：[平台架构](api/platform-architecture.zh.md)
-- [Policy contract](api/policy-contract.md) — the full HTTP contract a search
-  container implements. Narrative version: [policy API](api/policy-api.md)
-  (中文：[policy API](api/policy-api.zh.md))
-- [Machine lease API](api/machine-lease.md) — lending GPU machines to the
-  platform from another system, and taking them back
-- [Agent API](api/agent-api.md) — the read models an LLM writes performance
-  reports from
-- [Plugins](plugins.md) — adding routes, worker steps and tables from a
-  separately installed package
+- [Policy API](api/policy-api.md): what a search container implements, in
+  short. 中文：[policy API](api/policy-api.zh.md). The full contract:
+  [policy-contract.md](api/policy-contract.md).
+- [Machine lease API](api/machine-lease.md): lending GPU machines from
+  another system, and taking them back.
+- [Agent API](api/agent-api.md): what an LLM writes performance reports from.
+  [Prompting the report agent](perf-report-prompt.md).
+- [Plugins](plugins.md): routes, worker steps, tables, planners and pages from
+  a separately installed package.

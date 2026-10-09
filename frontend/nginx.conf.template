@@ -20,7 +20,19 @@ server {
         proxy_read_timeout 300s;
     }
 
+    # Hashed build output. A chunk that is not here (a tab still holding the
+    # index from before a redeploy asks for an old hash) must be a 404, not
+    # index.html served as JavaScript — the app reloads on that failure. The
+    # names change with the content, so they can be cached for good.
+    location /assets/ {
+        try_files $uri =404;
+        add_header Cache-Control "public, max-age=31536000, immutable";
+    }
+
+    # Everything else is the SPA shell. Never let a browser keep a stale
+    # index.html: it names the chunks, and after a redeploy the old ones are gone.
     location / {
         try_files $uri $uri/ /index.html;
+        add_header Cache-Control "no-cache";
     }
 }

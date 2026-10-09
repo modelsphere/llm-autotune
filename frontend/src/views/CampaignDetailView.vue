@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import PluginSlot from '../components/PluginSlot.vue'
+import { describeStrategy } from '../plugins'
 import {
   api,
   downloadText,
@@ -32,6 +34,7 @@ import { useI18n } from '../i18n'
 import { beatsBaselineRatio, fmtBaselineDelta } from '../utils/baseline'
 import { campaignToYaml } from '../utils/campaignYaml'
 import { copyText } from '../utils/clipboard'
+import { usePoll } from '../utils/poll'
 import { sweptKeysOf, type SpaceShape } from '../utils/space'
 import { campaignStatus, isLive, runLabel, runStatus } from '../utils/status'
 import { absoluteTime, duration, exactTime, relativeTime } from '../utils/time'
@@ -59,7 +62,6 @@ const parity = ref<{
 const selectedRun = ref<RunDetail | null>(null)
 const drawerOpen = ref(false)
 const runLog = ref('')
-let timer: number | undefined
 
 /** The external policy container that searches for this campaign, when one
  *  does — the campaign row only carries its id. */
@@ -512,9 +514,16 @@ const scheduleLine = computed(() => {
   return s.summary
 })
 
+/** Bumped per click: on a slow network a second row clicked before the first
+ *  one's answer arrived must not have its drawer replaced by the first. */
+let openSeq = 0
 async function openRun(run: Run) {
-  selectedRun.value = (await api.get(`/runs/${run.id}`)).data
-  runLog.value = await fetchRunLog(run.id)
+  const seq = ++openSeq
+  const detail = (await api.get(`/runs/${run.id}`)).data
+  const log = await fetchRunLog(run.id)
+  if (seq !== openSeq) return
+  selectedRun.value = detail
+  runLog.value = log
   drawerOpen.value = true
 }
 
@@ -614,7 +623,10 @@ const configRows = computed(() => {
                 .map(([k, v]) => `${k}=${v}`).join(', ')
             : 'default policy settings',
         }]
-      : [{ label: 'Search', value: 'every configuration in the space, in order' }]),
+      : [{
+          label: 'Search',
+          value: describeStrategy(c.extensions) ?? 'every configuration in the space, in order',
+        }]),
     { label: 'Max run minutes', value: String(c.max_run_minutes) },
     {
       label: 'Baseline canary',
@@ -841,15 +853,15 @@ const retryableCount = computed(() => {
   return n
 })
 
+const poll = usePoll(load, 10000) // polling for PoC; SSE later
 onMounted(() => {
   load()
   api.get('/objectives/metrics').then(({ data }) => {
     metricSpecs.value = data.metrics
     if (data.default_verify_target_metric) defaultVerifyMetric.value = data.default_verify_target_metric
   })
-  timer = window.setInterval(load, 10000) // polling for PoC; SSE later
+  poll.start()
 })
-onUnmounted(() => window.clearInterval(timer))
 </script>
 
 <template>
@@ -862,7 +874,9 @@ onUnmounted(() => window.clearInterval(timer))
           <template v-if="campaign.policy_id != null">
             {{ t('campaign.policy') }}: {{ policy?.name ?? `#${campaign.policy_id}` }} ·
           </template>
-          <template v-else>{{ t('campaign.enumerates') }} ·</template>
+          <template v-else>
+            {{ describeStrategy(campaign.extensions) ?? t('campaign.enumerates') }} ·
+          </template>
           {{ t('campaign.evaluated', { done: progress.done, total: progress.total }) }}
           <template v-if="spaceName"><br />{{ t('campaign.grid') }}: <b>{{ spaceName }}</b></template>
           <template v-if="objective.name"> · {{ t('campaign.objective') }}:
@@ -1061,6 +1075,9 @@ onUnmounted(() => window.clearInterval(timer))
     <MergeRequestDialog v-model="mrOpen" :preview-url="`/campaigns/${campaignId}/promote/preview`"
       :promote-url="`/campaigns/${campaignId}/promote`"
       :body="mrRunId ? { run_id: mrRunId } : {}" @promoted="loadPromotions" />
+
+    <!-- Sections installed plugins add about this campaign (src/plugins). -->
+    <PluginSlot name="campaign-detail.sections" :props="{ campaign, reload: load }" />
 
     <el-tabs>
       <el-tab-pane :label="t('campaign.tabs.leaderboard')">

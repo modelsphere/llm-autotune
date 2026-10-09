@@ -6,7 +6,7 @@
  *  Polls on its own while a run is live, so a page that mounts it needs no
  *  wiring beyond the campaign id. */
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import {
   api,
   downloadText,
@@ -17,6 +17,7 @@ import {
 } from '../api/client'
 import { useI18n } from '../i18n'
 import { apiErrorText } from '../utils/apiError'
+import { usePoll } from '../utils/poll'
 import { isLive, runLabel, runStatus } from '../utils/status'
 import { duration, exactTime, relativeTime } from '../utils/time'
 import LogDialog from './LogDialog.vue'
@@ -37,15 +38,18 @@ const drawerOpen = ref(false)
 const logOpen = ref(false)
 
 async function load() {
-  if (props.campaignId == null) {
+  const id = props.campaignId
+  if (id == null) {
     runs.value = []
     loaded.value = true
     return
   }
   try {
-    runs.value = (await api.get(`/campaigns/${props.campaignId}/runs`)).data
+    const data = (await api.get(`/campaigns/${id}/runs`)).data
+    // The campaign changed while this was in flight: its answer is stale.
+    if (id === props.campaignId) runs.value = data
   } catch {
-    runs.value = []
+    if (id === props.campaignId) runs.value = []
   } finally {
     loaded.value = true
   }
@@ -53,8 +57,14 @@ async function load() {
 
 const anyLive = computed(() => runs.value.some((r) => isLive(r.status)))
 
+/** Bumped per click: on a slow network a second row clicked before the first
+ *  one's answer arrived must not have its drawer replaced by the first. */
+let openSeq = 0
 async function openRun(run: Run) {
-  selectedRun.value = (await api.get(`/runs/${run.id}`)).data
+  const seq = ++openSeq
+  const detail = (await api.get(`/runs/${run.id}`)).data
+  if (seq !== openSeq) return
+  selectedRun.value = detail
   drawerOpen.value = true
   await reloadLog()
 }
@@ -64,9 +74,10 @@ async function reloadLog() {
   if (!r) return
   logBusy.value = true
   try {
-    runLog.value = await fetchRunLog(r.id)
+    const text = await fetchRunLog(r.id)
+    if (selectedRun.value?.id === r.id) runLog.value = text
   } catch {
-    runLog.value = ''
+    if (selectedRun.value?.id === r.id) runLog.value = ''
   } finally {
     logBusy.value = false
   }
@@ -110,15 +121,12 @@ function metricCount(metrics: Record<string, unknown> | undefined): number {
   return Object.keys(metrics ?? {}).length
 }
 
-let timer = 0
+// Poll only while something is live; a finished campaign's runs do not move.
+const poll = usePoll(() => (anyLive.value ? load() : undefined), 10_000)
 onMounted(async () => {
   await load()
-  // Poll only while something is live; a finished campaign's runs do not move.
-  timer = window.setInterval(() => {
-    if (anyLive.value) void load()
-  }, 10_000)
+  poll.start()
 })
-onUnmounted(() => window.clearInterval(timer))
 watch(() => props.campaignId, load)
 
 defineExpose({ reload: load })

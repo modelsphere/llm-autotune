@@ -267,7 +267,7 @@ done
 
 ## Related
 
-- [`/api/docs`](/api/docs) — every endpoint, with schemas you can call from the browser.
+- `/api/docs` on your install — every endpoint, with schemas you can call from the browser.
 - **Campaigns** carry their own nightly window (`daily_start` / `daily_end`),
   which is independent of the lease: a campaign stands down at 08:00 and the
   machine goes back to production, then both resume at 23:00.

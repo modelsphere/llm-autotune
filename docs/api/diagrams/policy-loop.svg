@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1040 330" font-family="-apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif">
+  <defs><marker id="a-grey" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#5b6b7a"/></marker><marker id="a-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#2f6f4f"/></marker><marker id="a-orange" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#c07a2c"/></marker><marker id="a-purple" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#8b72be"/></marker><marker id="a-red" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#c96161"/></marker><marker id="a-blue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#5b85c9"/></marker></defs>
+  <rect width="1040" height="330" fill="#ffffff"/>
+  <rect x="20" y="20" width="660" height="290" rx="10" fill="#f7f8fa" stroke="#c4ccd4" stroke-width="1.2" stroke-dasharray="6 4"/>
+  <text x="38" y="42" font-size="12.5" fill="#4a5a6a" font-weight="700" letter-spacing="0.6" text-anchor="start">POLICY CONTAINER</text>
+  <text x="662" y="42" font-size="12" fill="#7a8794" text-anchor="end">on the GPU machine</text>
+  <rect x="40" y="60" width="180" height="76" rx="8" fill="#ffffff" stroke="#9aa7b4" stroke-width="1.2"/>
+  <text x="130.0" y="93.5" font-size="15" fill="#1b2733" font-weight="700" text-anchor="middle">Read the manifest</text>
+  <text x="130.0" y="114.5" font-size="12.5" fill="#4a5a6a" text-anchor="middle">model, space, deadline</text>
+  <rect x="260" y="60" width="180" height="76" rx="8" fill="#d9f0e2" stroke="#2f6f4f" stroke-width="2.4"/>
+  <text x="350.0" y="84.5" font-size="15" fill="#1b2733" font-weight="700" text-anchor="middle">Pick configs</text>
+  <text x="350.0" y="105.5" font-size="12.5" fill="#2f4f3f" text-anchor="middle">random, rules, or</text>
+  <text x="350.0" y="123.5" font-size="12.5" fill="#2f4f3f" text-anchor="middle">a model of past results</text>
+  <rect x="480" y="60" width="180" height="76" rx="8" fill="#ffffff" stroke="#9aa7b4" stroke-width="1.2"/>
+  <text x="570.0" y="93.5" font-size="15" fill="#1b2733" font-weight="700" text-anchor="middle">Run them</text>
+  <text x="570.0" y="114.5" font-size="12.5" fill="#4a5a6a" text-anchor="middle">ask the platform</text>
+  <rect x="480" y="200" width="180" height="76" rx="8" fill="#ffffff" stroke="#9aa7b4" stroke-width="1.2"/>
+  <text x="570.0" y="233.5" font-size="15" fill="#1b2733" font-weight="700" text-anchor="middle">Record + rank</text>
+  <text x="570.0" y="254.5" font-size="12.5" fill="#4a5a6a" text-anchor="middle">update contenders</text>
+  <rect x="260" y="200" width="180" height="76" rx="8" fill="#fdf5e1" stroke="#d1a646" stroke-width="1.4"/>
+  <text x="350.0" y="233.5" font-size="15" fill="#1b2733" font-weight="700" text-anchor="middle">Deadline?</text>
+  <text x="350.0" y="254.5" font-size="12.5" fill="#7a5a1a" text-anchor="middle">heartbeat says</text>
+  <rect x="40" y="200" width="180" height="76" rx="8" fill="#eef1f5" stroke="#9aa7b4" stroke-width="1.2"/>
+  <text x="130.0" y="233.5" font-size="15" fill="#1b2733" font-weight="700" text-anchor="middle">Finalize</text>
+  <text x="130.0" y="254.5" font-size="12.5" fill="#5b6b7a" text-anchor="middle">clean up, exit</text>
+  <path d="M220 98 L258 98" fill="none" stroke="#5b6b7a" stroke-width="1.6" marker-end="url(#a-grey)"/>
+  <path d="M440 98 L478 98" fill="none" stroke="#5b6b7a" stroke-width="1.6" marker-end="url(#a-grey)"/>
+  <path d="M570 136 L570 198" fill="none" stroke="#5b6b7a" stroke-width="1.6" marker-end="url(#a-grey)"/>
+  <path d="M480 238 L442 238" fill="none" stroke="#5b6b7a" stroke-width="1.6" marker-end="url(#a-grey)"/>
+  <path d="M260 238 L222 238" fill="none" stroke="#5b6b7a" stroke-width="1.6" marker-end="url(#a-grey)"/>
+  <text x="241" y="229" font-size="12" fill="#5b6b7a" text-anchor="middle">yes</text>
+  <path d="M350 200 L350 138" fill="none" stroke="#5b6b7a" stroke-width="1.6" marker-end="url(#a-grey)"/>
+  <text x="360" y="174" font-size="12" fill="#5b6b7a" text-anchor="start">no</text>
+  <rect x="780" y="40" width="240" height="150" rx="8" fill="#e4edf9" stroke="#5b85c9" stroke-width="1.4"/>
+  <text x="900.0" y="83.5" font-size="15" fill="#1b2733" font-weight="700" text-anchor="middle">Platform API</text>
+  <text x="900.0" y="104.5" font-size="12.5" fill="#4a5a6a" text-anchor="middle">launches engines</text>
+  <text x="900.0" y="122.5" font-size="12.5" fill="#4a5a6a" text-anchor="middle">runs benchmarks</text>
+  <text x="900.0" y="140.5" font-size="12.5" fill="#4a5a6a" text-anchor="middle">sends commands</text>
+  <text x="900.0" y="158.5" font-size="12.5" fill="#4a5a6a" text-anchor="middle">validates the best</text>
+  <path d="M660 80 L778 80" fill="none" stroke="#2f6f4f" stroke-width="1.6" marker-end="url(#a-green)"/>
+  <text x="730" y="71" font-size="12" fill="#2f6f4f" text-anchor="middle">requests</text>
+  <path d="M780 116 L662 116" fill="none" stroke="#5b6b7a" stroke-width="1.6" marker-end="url(#a-grey)"/>
+  <text x="730" y="134" font-size="12" fill="#5b6b7a" text-anchor="middle">results</text>
+</svg>

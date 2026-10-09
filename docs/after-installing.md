@@ -1,10 +1,13 @@
-# After the quickstart
+# After installing
 
-[`deploy/quickstart.sh`](../deploy/quickstart.sh) leaves you with LLMBench and
-LLM AutoTune on one cluster, connected, with the mock engine and a demo
-campaign. This page takes that install further one piece at a time, without
-starting over: every step is a value you set, or a command run against the
-same install.
+[`deploy/quickstart.sh`](../deploy/quickstart.sh) leaves you with LLM AutoTune
+and LLMBench on one cluster, connected, with that cluster registered as the
+machine pool `local-cluster`. This page takes the install further one piece at
+a time: every step is a value you set, or a command run against the same
+install.
+
+Everything here works the same on the no-GPU demo: use `deploy/demo.sh` in
+place of `deploy/quickstart.sh`, and `.demo/` in place of `.quickstart/`.
 
 ## Changing a setting
 
@@ -17,8 +20,8 @@ everything it sets itself:
 | `.quickstart/llm-bench.custom.yaml` | LLMBench | LLMBench's [`values.yaml`](https://github.com/modelsphere/llm-bench/blob/main/deploy/helm/llm-bench/values.yaml) |
 
 Edit one, then run `deploy/quickstart.sh` again. It upgrades both releases in
-place and keeps their data. It does not recreate the demo campaign, and it
-never overwrites these two files; `deploy/quickstart.sh down` keeps them too.
+place and keeps their data. It never overwrites these two files;
+`deploy/quickstart.sh down` keeps them too.
 
 AutoTune settings the chart has no value for (promotion, timeouts, the default
 nightly window, pull secrets…) are environment variables, set through
@@ -56,9 +59,9 @@ the policy builds a new image and points the registration at it.
   and run `deploy/quickstart.sh policy path/to/it`. The contract it speaks is
   [policy-contract.md](api/policy-contract.md). A policy that starts engines
   itself, instead of asking the platform to, registers with `--gpus --needs-model`.
-- **On a cluster other than kind, minikube, k3d, Docker Desktop or OrbStack**,
-  the cluster pulls images from a registry: add `--registry <repo>` (one you can
+- **The image goes through a registry**: add `--registry <repo>` (one you can
   push to and the nodes can pull from) the first time; the script remembers it.
+  Local clusters (kind, minikube, k3d, Docker Desktop, OrbStack) need none.
 - **Without the script**, register an image with the API, using a key from the
   **API Keys** page:
 
@@ -70,36 +73,47 @@ the policy builds a new image and points the registration at it.
   ```
 
 A policy runs as a Job next to the runs and calls the platform back at
-`publicApiUrl`. On the quickstart that is the API's in-cluster address, which
-works because runs land in the same cluster; when they land elsewhere (below),
-set `publicApiUrl` to an address reachable from there.
+`publicApiUrl`. By default that is the API's in-cluster address, which works
+for runs in the same cluster; when they land elsewhere (below), set
+`publicApiUrl` to an address reachable from there.
 
-## Real GPUs
+## GPUs
 
-The quickstart's only machine, `local-cluster`, is the cluster itself with no
-cards. GPUs can come from three places, and one install can use all of them.
+`local-cluster` is the cluster the platform is installed in. On **Resources**,
+**Refresh capacity** reads its card count and type from the nodes, and **Lease
+to platform** lets campaigns use it. One install can also use other clusters
+and ssh machines.
 
-### GPU nodes in this cluster
+### This cluster
+
+The script runs engines on nodes that offer `nvidia.com/gpu`, with the
+`nvidia` RuntimeClass when the cluster has one. To pin runs to some nodes, or
+change either:
 
 ```yaml
 # .quickstart/llm-autotune.custom.yaml
 gpuCluster:
-  gpuResource: nvidia.com/gpu
-  runtimeClass: nvidia          # "" if the cluster has no RuntimeClass by that name
-  tolerateGpuTaint: true
-  # nodeSelector: "nvidia.com/gpu.product=NVIDIA-H100-80GB-HBM3"
+  nodeSelector: "nvidia.com/gpu.product=NVIDIA-H100-80GB-HBM3"
+  # gpuResource: nvidia.com/gpu
+  # runtimeClass: nvidia
 ```
 
-Run the script again, then on **Resources** use **Refresh capacity** on
-`local-cluster`: it reads the card count and type from the nodes.
-
 A run mounts its model weights from the node, as a hostPath at the campaign's
-model path, so the nodes it can land on must hold the weights there (pin them
-with `gpuCluster.nodeSelector`). To serve weights from one shared volume
-instead, set `gpuCluster.modelPvc` to a ReadOnlyMany/ReadWriteMany claim and
-`gpuCluster.modelPvcRoot` to the path the campaigns' model paths are relative
-to. Engine images that need credentials take a pull secret through `extraEnv`
-(`AUTOTUNE_K8S_IMAGE_PULL_SECRETS`).
+model path, so the nodes it can land on must hold the weights there. To serve
+weights from one shared volume instead, set `gpuCluster.modelPvc` to a
+ReadOnlyMany/ReadWriteMany claim and `gpuCluster.modelPvcRoot` to the path the
+campaigns' model paths are relative to. Engine images that need credentials
+take a pull secret through `extraEnv` (`AUTOTUNE_K8S_IMAGE_PULL_SECRETS`).
+
+Engine logs are off by default, because they need a ReadWriteMany volume. With
+such a storage class:
+
+```yaml
+# .quickstart/llm-autotune.custom.yaml
+runLogs:
+  enabled: true
+  storageClass: nfs-client
+```
 
 ### Another cluster
 
@@ -146,8 +160,8 @@ image (sglang or vLLM) and your search space. The usual path starts from the
 configuration production runs today: record it on **Baselines**, then **Tune
 from this** drafts a campaign from it. [How it works](workflow.md) describes the
 whole loop. Screen real engines with the default benchmark,
-`autotune-screen-v1`; the quickstart's `autotune-quickstart-v1` is sized for
-the mock.
+`autotune-screen-v1`; the demo's `autotune-quickstart-v1` is sized for the
+mock.
 
 ## Reaching the UIs without port-forward
 
@@ -174,7 +188,8 @@ ingress:
 
 ## Datasets
 
-The demo needs none: LLMBench's throughput sweep generates its prompts. For
+The default benchmark needs none: LLMBench's throughput sweep generates its
+prompts. For
 the academic suites, and for replaying captured or live gateway traffic, give
 LLMBench a datasets volume in `.quickstart/llm-bench.custom.yaml`
 (`datasets.enabled`) and follow LLMBench's
@@ -215,6 +230,7 @@ Deployments, install it ([operator/INSTALL.md](../operator/INSTALL.md)) and set
 
 ## Starting over
 
-`deploy/quickstart.sh down` removes both releases and their data (add `--kind`
-to delete the kind cluster too); the next `deploy/quickstart.sh` installs from
-scratch with new passwords, and still applies your `*.custom.yaml` files.
+`deploy/quickstart.sh down` removes both releases and their data; the next
+`deploy/quickstart.sh` installs from scratch with new passwords, and still
+applies your `*.custom.yaml` files. `deploy/demo.sh down --kind` also deletes
+the demo's kind cluster.

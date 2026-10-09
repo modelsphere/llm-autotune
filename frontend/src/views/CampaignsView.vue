@@ -1,12 +1,14 @@
 <script setup lang="ts">
+import { describeStrategy } from '../plugins'
 import { computed, onMounted, ref } from 'vue'
-import { useRouter } from 'vue-router'
 import { api, type Campaign } from '../api/client'
+import LinkButton from '../components/LinkButton.vue'
 import { useI18n } from '../i18n'
+import { useRowLink } from '../utils/nav'
 import { campaignStatus } from '../utils/status'
 import { exactTime, relativeTime } from '../utils/time'
 
-const router = useRouter()
+const campaignRows = useRowLink((row: Campaign) => `/campaigns/${row.id}`)
 const { t } = useI18n()
 const campaigns = ref<Campaign[]>([])
 
@@ -41,15 +43,18 @@ onMounted(load)
           }}<template v-if="waiting">{{ t('campaigns.waiting', { n: waiting }) }}</template>
         </span>
       </div>
-      <el-button type="primary" @click="router.push('/campaigns/new')">
+      <LinkButton type="primary" to="/campaigns/new">
         {{ t('campaigns.newCampaign') }}
-      </el-button>
+      </LinkButton>
     </div>
 
-    <el-table :data="campaigns" @row-click="(row: Campaign) => router.push(`/campaigns/${row.id}`)"
-      style="cursor: pointer">
+    <el-table :data="campaigns" v-bind="campaignRows" style="cursor: pointer">
       <el-table-column prop="id" :label="t('common.id')" width="70" />
-      <el-table-column prop="name" :label="t('common.name')" min-width="200" />
+      <el-table-column :label="t('common.name')" min-width="200">
+        <template #default="{ row }">
+          <router-link :to="`/campaigns/${row.id}`" class="nav-link">{{ row.name }}</router-link>
+        </template>
+      </el-table-column>
       <el-table-column :label="t('common.model')" min-width="150">
         <template #default="{ row }">
           {{ row.served_model_name }}
@@ -72,6 +77,8 @@ onMounted(load)
       <el-table-column :label="t('campaigns.search')" width="110">
         <template #default="{ row }">
           <span v-if="row.policy_id != null" class="mono">policy #{{ row.policy_id }}</span>
+          <span v-else-if="describeStrategy(row.extensions)" class="mono">
+            {{ describeStrategy(row.extensions) }}</span>
           <span v-else class="muted">{{ t('campaign.enumerates') }}</span>
         </template>
       </el-table-column>

@@ -5,17 +5,15 @@ object whether served alone or embedded in a document — that is the whole
 point of having parts.
 
 Sources, so nobody has to rediscover them:
-- launch: the measurement (frozen config) when the run was harvested, else
-  the submission, else the campaign + candidate. The docker line is the one
-  stored on the run; the engine command comes from the same adapter that
-  produced it.
+- launch: the campaign + candidate. The docker line is the one stored on the
+  run; the engine command comes from the same adapter that produced it.
 - environment: `Run.env_snapshot` (the in-container version probe) plus the
   machine row.
-- benchmark: the measurement's `module_reports` for frozen params, the raw
-  LLMBench submission for the full metric_configs, the track for the
-  platform's overlay.
-- results: the latest llmbench `Result` (metrics + raw), the board's own
-  scenario summary, the measurement's verdicts.
+- benchmark: the module verdicts recomputed from the raw LLMBench submission
+  for frozen params and the full metric_configs, the campaign's objective for
+  the platform's overlay.
+- results: the latest llmbench `Result` (metrics + raw), its scenario
+  summary and module verdicts.
 """
 
 from __future__ import annotations
@@ -118,8 +116,10 @@ def _llmbench_web_base() -> str:
 
 
 def launch_config_of(b: RunBundle) -> LaunchConfig:
-    snapshot = dict(b.run.env_snapshot or {})
-    if b.campaign is not None:
+    snapshot = _snapshot(b)
+    if b.overlay is not None and b.overlay.launch is not None:
+        cfg = b.overlay.launch
+    elif b.campaign is not None:
         args = dict(b.candidate.config or {}) if b.candidate is not None else None
         cfg = LaunchConfig.from_campaign(b.campaign, engine_args=args)
         if b.run.service_port:
@@ -137,11 +137,20 @@ def launch_config_of(b: RunBundle) -> LaunchConfig:
     return cfg
 
 
+def _snapshot(b: RunBundle) -> dict[str, Any]:
+    """The run's environment probe, else the one a plugin kept for it."""
+    return dict(b.run.env_snapshot or {}) or dict(b.overlay.env_snapshot if b.overlay else {})
+
+
 def cards_of(b: RunBundle, cfg: LaunchConfig | None = None) -> int:
+    """The cards the config occupies (tp×dp×pp), else the count a plugin
+    recorded for the run, else the cards the run was given."""
     cfg = cfg or launch_config_of(b)
     derived = cfg.cards
     if derived:
         return derived
+    if b.overlay is not None and b.overlay.cards:
+        return int(b.overlay.cards)
     return len(b.run.gpu_indices or []) or 1
 
 
@@ -228,12 +237,13 @@ def serve_command(cfg: LaunchConfig) -> str:
 
 def launch_part(b: RunBundle) -> LaunchPart:
     cfg = launch_config_of(b)
-    docker = b.run.launch_command or ""
+    docker = b.run.launch_command or (b.overlay.launch_command if b.overlay else "") or ""
     origin = LaunchOrigin(
-        source="campaign",
+        source=(b.overlay.source if b.overlay else "") or "campaign",
         campaign_id=b.campaign.id if b.campaign else None,
         campaign_name=b.campaign.name if b.campaign else "",
         candidate_id=b.candidate.id if b.candidate else None,
+        extensions=dict(b.overlay.origin if b.overlay else {}),
     )
     return LaunchPart(
         run_id=b.run.id,
@@ -250,7 +260,10 @@ def launch_part(b: RunBundle) -> LaunchPart:
 
 
 def run_label(b: RunBundle) -> str:
-    """How a run is named in a comparison: the campaign and the run id."""
+    """How a run is named in a comparison: what a plugin calls it, else the
+    campaign and the run id."""
+    if b.overlay is not None and b.overlay.label:
+        return b.overlay.label
     if b.campaign is not None:
         return f"{b.campaign.name} · run {b.run.id}"
     return f"run {b.run.id}"
@@ -266,7 +279,7 @@ def _duration(start: datetime | None, end: datetime | None) -> float | None:
 
 
 def environment_part(b: RunBundle) -> EnvironmentPart:
-    snapshot = dict(b.run.env_snapshot or {})
+    snapshot = _snapshot(b)
 
     def lifted(key: str) -> str | None:
         value = snapshot.get(key)
@@ -275,7 +288,7 @@ def environment_part(b: RunBundle) -> EnvironmentPart:
     return EnvironmentPart(
         run_id=b.run.id,
         machine=MachineOut(
-            name=b.machine.name if b.machine else "",
+            name=b.machine.name if b.machine else (b.overlay.machine_name if b.overlay else ""),
             gpu_type=b.machine.gpu_type if b.machine else "",
             gpu_count=b.machine.gpu_count if b.machine else 0,
             driver=(b.machine.driver if b.machine else "") or "ssh_docker",
@@ -298,7 +311,10 @@ def environment_part(b: RunBundle) -> EnvironmentPart:
 
 
 def frozen_reports(b: RunBundle) -> list[dict[str, Any]]:
-    """The module verdicts, recomputed from the raw benchmark payload."""
+    """The module verdicts as a plugin froze them at harvest, else recomputed
+    from the raw benchmark payload."""
+    if b.overlay is not None and b.overlay.module_reports:
+        return [r for r in b.overlay.module_reports if isinstance(r, dict)]
     if b.result is not None and b.result.raw:
         return module_reports(b.result.raw)
     return []
@@ -360,15 +376,18 @@ def platform_overlay(campaign) -> BenchmarkPlatformOut:
         slo=gate.to_dict() if gate else {},
         gate_text=gate.describe() if gate else "",
         max_run_minutes=campaign.max_run_minutes or 0,
+        quality_floors=_quality_floors(campaign),
     )
 
 
 def benchmark_part(b: RunBundle) -> BenchmarkPart:
     raw = (b.result.raw if b.result is not None else None) or {}
-    slug = (b.campaign.benchmark_slug if b.campaign else "") or ""
-    frozen = str(raw.get("benchmark_config_hash") or "")
+    told = dict(b.overlay.benchmark if b.overlay else {})
+    slug = str(told.get("slug") or "") or (b.campaign.benchmark_slug if b.campaign else "") or ""
+    frozen = str(told.get("config_hash_frozen") or raw.get("benchmark_config_hash") or "")
+    recorded = str(told.get("config_hash_recorded") or "")
     web = _llmbench_web_base()
-    llmbench_submission = b.run.llmbench_submission_id or ""
+    llmbench_submission = b.run.llmbench_submission_id or str(told.get("submission_id") or "")
     return BenchmarkPart(
         run_id=b.run.id,
         llmbench=BenchmarkLLMBenchOut(
@@ -378,11 +397,20 @@ def benchmark_part(b: RunBundle) -> BenchmarkPart:
             submission_url=(
                 f"{web}/submissions/{llmbench_submission}" if web and llmbench_submission else ""
             ),
+            benchmark_id=told.get("benchmark_id"),
             config_hash_frozen=frozen,
-            dataset_build_id=(b.campaign.dataset_build_id if b.campaign else "") or "",
+            config_hash_recorded=recorded,
+            drifted=bool(frozen and recorded and frozen != recorded),
+            dataset_build_id=str(told.get("dataset_build_id") or "")
+            or (b.campaign.dataset_build_id if b.campaign else "")
+            or "",
         ),
         modules=modules_of(b),
-        platform=platform_overlay(b.campaign),
+        platform=(
+            b.overlay.platform
+            if b.overlay is not None and b.overlay.platform is not None
+            else platform_overlay(b.campaign)
+        ),
     )
 
 
@@ -424,6 +452,22 @@ def _meets(level: dict[str, Any], gate: Gate | None, pct: str) -> bool:
     return not (gate.min_request_output_tps and (tps is None or tps < gate.min_request_output_tps))
 
 
+# The machine every throughput is normalized to: LLMBench's card-norm metrics
+# are "as if on 8 cards" (a replay's tpm_card_norm / 480 = per GPU per second),
+# and a report compares configs on one such machine, whatever cards each used.
+MACHINE_GPUS = 8
+
+
+def _per_machine(level: dict[str, Any]) -> dict[str, Any]:
+    """Add each per-GPU rate scaled to one MACHINE_GPUS-GPU machine — the
+    number a report quotes as total serving throughput, so the agent never
+    multiplies anything itself."""
+    for kind in ("total", "output", "input"):
+        v = level.get(f"{kind}_tps_per_gpu")
+        level[f"{kind}_tps_per_machine"] = v * MACHINE_GPUS if v is not None else None
+    return level
+
+
 def best_level_of(
     scenario: ScenarioOut, *, cards: int, ttft_percentile: str, gate: Gate | None
 ) -> dict[str, Any]:
@@ -439,14 +483,14 @@ def best_level_of(
         output = _number(scenario.summary.get("output_tpm_card_norm"))
         if total is None:
             return {}
-        return {
+        return _per_machine({
             "concurrency": _number(scenario.summary.get("concurrency")),
             "total_tps_per_gpu": total / 480.0,
             "output_tps_per_gpu": output / 480.0 if output is not None else None,
             "input_tps_per_gpu": (total - output) / 480.0 if output is not None else None,
             "ttft_ms": _number(scenario.summary.get("ttft_ms")),
             "request_output_tps": _number(scenario.summary.get("request_output_tps")),
-        }
+        })
     passing = [
         lv for lv in scenario.levels
         if _meets(lv.metrics, gate, ttft_percentile)
@@ -460,14 +504,14 @@ def best_level_of(
     output = _number(m.get("output_tps_mean"))  # the guidellm sweep's name
     if output is None:
         output = _number(m.get("output_tps"))
-    return {
+    return _per_machine({
         "concurrency": best.concurrency,
         "total_tps_per_gpu": total / per_gpu,
         "output_tps_per_gpu": output / per_gpu if output is not None else None,
         "input_tps_per_gpu": (total - output) / per_gpu if output is not None else None,
         "ttft_ms": _number(m.get(f"ttft_{ttft_percentile}_ms")),
         "request_output_tps": _number(m.get("request_output_tps")),
-    }
+    })
 
 
 def _levels(metrics_json: dict[str, Any]) -> list[ScenarioLevel]:
@@ -504,7 +548,17 @@ def _scalars(metrics_json: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _gate(b: RunBundle) -> Gate | None:
+    """The SLO a run's levels are judged against: a plugin's, else the
+    campaign objective's."""
+    if b.overlay is not None and b.overlay.gate is not None:
+        return b.overlay.gate
+    return gate_of(b.campaign)
+
+
 def ranking_metric_of(b: RunBundle) -> str:
+    if b.overlay is not None and b.overlay.ranking_metric:
+        return b.overlay.ranking_metric
     if b.campaign is not None:
         return target_metric(b.campaign.objective)
     return ""
@@ -533,10 +587,16 @@ def _quality_floors(campaign) -> dict[str, float]:
 def results_part(b: RunBundle) -> ResultsPart:
     status = results_status(b)
     links = links_for(b.run.id)
-    metrics: dict[str, Any] = (b.result.metrics if b.result is not None else None) or {}
+    # The raw result's metrics, and what a plugin harvested on top: it can
+    # carry more than the raw payload (a scenario completed from another run).
+    metrics: dict[str, Any] = {
+        **((b.result.metrics if b.result is not None else None) or {}),
+        **(b.overlay.metrics if b.overlay is not None else {}),
+    }
     reports = frozen_reports(b)
     raw_runs = _raw_runs(b)
-    pct = ttft_percentile_of(b.campaign)
+    gate = _gate(b)
+    pct = (gate.ttft_percentile if gate else "") or "p50"
     summaries = {s["key"]: s for s in scenarios_of(metrics, reports, pct)}
 
     scenarios: list[ScenarioOut] = []
@@ -602,7 +662,7 @@ def results_part(b: RunBundle) -> ResultsPart:
                 )
             )
             scenarios[-1].best_level = best_level_of(
-                scenarios[-1], cards=cards_of(b), ttft_percentile=pct, gate=gate_of(b.campaign)
+                scenarios[-1], cards=cards_of(b), ttft_percentile=pct, gate=gate
             )
         else:
             scores = {
@@ -626,7 +686,11 @@ def results_part(b: RunBundle) -> ResultsPart:
 
     # Quality floors the campaign's objective declares as redlines on a
     # non-scenario module, which the benchmark itself may not have judged.
-    floors = _quality_floors(b.campaign)
+    floors = (
+        b.overlay.quality_floors
+        if b.overlay is not None and b.overlay.quality_floors is not None
+        else _quality_floors(b.campaign)
+    )
     for full_key, floor in floors.items():
         module, _, metric = str(full_key).partition(".")
         actual = _number(metrics.get(full_key))
@@ -664,13 +728,18 @@ def results_part(b: RunBundle) -> ResultsPart:
             log=links["log"],
         )
     result = b.result
+    kept = dict(b.overlay.verdict if b.overlay is not None else {})
     return ResultsPart(
         run_id=b.run.id,
         status=status,  # type: ignore[arg-type]
-        passed=result.passed if result is not None else None,
-        feasible=bool(result.feasible) if result is not None else None,
-        score=result.score if result is not None else None,
-        objective_value=result.objective_value if result is not None else None,
+        passed=result.passed if result is not None else kept.get("passed"),
+        feasible=bool(result.feasible) if result is not None else kept.get("feasible"),
+        score=result.score if result is not None else kept.get("score"),
+        objective_value=(
+            result.objective_value
+            if result is not None and result.objective_value is not None
+            else kept.get("objective_value")
+        ),
         headline=headline,
         scenarios=scenarios,
         quality=quality,

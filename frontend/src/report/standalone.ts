@@ -17,6 +17,7 @@ interface Payload {
     markdown: string
     comparison: Comparison
     labels: string[]
+    scenarioLabels?: Record<string, { name?: string; description?: string }>
     assets: Record<string, string>
   }[]
 }
@@ -48,6 +49,7 @@ export function mountStandalone(rootId: string, dataId: string): void {
       comparison: report.comparison,
       lang: (report.lang === 'zh' ? 'zh' : 'en') as Lang,
       labels: report.labels,
+      scenarioLabels: report.scenarioLabels ?? {},
       resolveAsset: (name) => report.assets[name] ?? name,
     })
     document.title = report.title

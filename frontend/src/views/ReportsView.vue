@@ -1,12 +1,12 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
-import { useRouter } from 'vue-router'
 import { api, type AgentReport } from '../api/client'
 import { useI18n } from '../i18n'
+import { useRowLink } from '../utils/nav'
 import { exactTime, relativeTime } from '../utils/time'
 
 const { t } = useI18n()
-const router = useRouter()
+const reportRows = useRowLink((row: AgentReport) => `/reports/${row.id}`)
 const reports = ref<AgentReport[]>([])
 const loading = ref(true)
 
@@ -32,7 +32,7 @@ onMounted(load)
     </div>
 
     <el-table :data="reports" v-loading="loading" :empty-text="t('reports.empty')"
-      @row-click="(row: AgentReport) => router.push(`/reports/${row.id}`)" class="clickable">
+      v-bind="reportRows" class="clickable">
       <el-table-column :label="t('reports.title')" min-width="280">
         <template #default="{ row }">
           <router-link :to="`/reports/${row.id}`">{{ row.title }}</router-link>
@@ -47,6 +47,18 @@ onMounted(load)
           <router-link v-if="row.campaign_id" :to="`/campaigns/${row.campaign_id}`">
             #{{ row.campaign_id }}
           </router-link>
+          <span v-else class="muted">—</span>
+        </template>
+      </el-table-column>
+      <el-table-column v-if="reports.some((r) => r.group)" :label="t('reports.group')"
+        min-width="140">
+        <template #default="{ row }">
+          <template v-if="row.group">
+            <router-link v-if="row.group.page_path" :to="row.group.page_path">
+              {{ row.group.name || row.group.slug }}
+            </router-link>
+            <span v-else>{{ row.group.name || row.group.slug }}</span>
+          </template>
           <span v-else class="muted">—</span>
         </template>
       </el-table-column>

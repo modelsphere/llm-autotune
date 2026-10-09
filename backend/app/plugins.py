@@ -23,6 +23,7 @@ import logging
 import re
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
+from datetime import datetime
 from functools import lru_cache
 from importlib.metadata import EntryPoint, entry_points
 from typing import TYPE_CHECKING, Any
@@ -34,10 +35,12 @@ if TYPE_CHECKING:
     from sqlalchemy import Engine, MetaData
     from sqlalchemy.orm import Session
 
+    from app.agent.overlay import RunOverlay
+    from app.control.orchestrator.occupancy import Reservation
     from app.control.orchestrator.supervisor import Supervisor
     from app.control.search import CandidateConfig
     from app.control.search.history import RunRecord
-    from app.db.models import Campaign
+    from app.db.models import Campaign, Machine, Run
 
 logger = logging.getLogger(__name__)
 
@@ -108,6 +111,53 @@ CampaignCreated = Callable[["Session", "Campaign", dict[str, Any]], None]
 CampaignExtensions = Callable[["Session", "Sequence[Campaign]"], dict[int, dict[str, Any]]]
 
 
+@dataclass(frozen=True)
+class QueueWaiter:
+    """Something of a plugin's waiting for a machine in the machine queue.
+
+    It takes its turn in arrival order among the platform's own waiters
+    (campaigns with a run ready, policy sessions without a machine). On its
+    turn the platform calls `try_admit(session, blocked, busy)`: `blocked`
+    are machines an older waiter holds; return True once it took what it
+    needed (typically admitting a campaign to a machine, which then holds it
+    through `Plugin.reservations` until its run is placed), or False after
+    adding to `busy` the machines it could use once they free up, so nobody
+    behind it takes them. It runs in a savepoint; one that raises is logged
+    and counts as not admitted."""
+
+    arrival: datetime
+    try_admit: Callable[[Session, set[int], set[int]], bool]
+    label: str
+    # Breaks ties at the same instant, lowest first: a plugin's waiter 0 by
+    # default, a campaign 1, a policy session 2.
+    rank: int = 0
+    ident: int = 0
+
+
+@dataclass(frozen=True)
+class PromotionOrigin:
+    """What a campaign's winner stands for, when a plugin runs the campaign
+    for something of its own: what the merge request calls it, where it
+    links back to, and the release branch it goes onto when the campaign
+    names none."""
+
+    kind: str
+    page: str = ""
+    description: str = ""
+    deploy_branch: str = ""
+    # Whether a branch named on a promotion sticks to the campaign.
+    remember_branch: bool = True
+
+
+class SelectorRefused(ValueError):
+    """Raised by a run_selector to answer the agent API with this error:
+    `code` (machine-readable), `status` (HTTP), `detail`."""
+
+    def __init__(self, code: str, status: int = 404, detail: str = "") -> None:
+        super().__init__(detail or code)
+        self.code, self.status, self.detail = code, status, detail
+
+
 class ExtensionRefused(ValueError):
     """Raised by `on_campaign_created` to refuse what it was given; the
     campaign is not created, and the message is the API's 422 answer."""
@@ -121,6 +171,8 @@ class Plugin:
         lists, and the suffix of the plugin's migration version table.
     api_version: the PLUGIN_API_VERSION the plugin was written for.
     routers: FastAPI routers, mounted under /api after the platform's own.
+    openapi_tags: descriptions for the tags those routers use, as FastAPI's
+        `openapi_tags` entries, shown in the API docs with the platform's.
     tick_steps: functions the worker calls at the START of every tick, each
         as `step(supervisor, session)`, inside a savepoint: a step that raises
         is logged and rolled back, and the rest of the tick goes on. Running
@@ -150,17 +202,54 @@ class Plugin:
         `extensions[<plugin name>]`, and a spec or clone carries it back into
         `on_campaign_created`. One that raises is logged and left out: a
         plugin must not stop campaigns from being read.
+    queue_waiters: `(supervisor, session) -> [QueueWaiter]`, the plugin's
+        waiters in this tick's machine queue (see QueueWaiter).
+    reservations: `(session, machine) -> [Reservation]`, the machines the
+        plugin holds for campaigns whose run is not placed yet. Placement,
+        policy sessions and every waiter read them, so a held machine is held
+        for everyone.
+    submission_extras: `(session, run, context) -> dict`, fields for the
+        run's LLMBench submission, given what the platform will send
+        (`context`: benchmark_slug, hardware, contributor, source_url…).
+        `contributor` and `source_url` replace the platform's; anything else
+        is added to the submission body as is. One that raises is logged and
+        the submission goes out without it.
+    run_overlay: `(session, run, campaign) -> RunOverlay | None`, what the
+        plugin knows about a run it started on behalf of something of its own,
+        for the run's agent documents (app/agent/overlay.py). The first plugin
+        to answer anything but None describes it; one that raises is logged
+        and left out.
+    run_selector: `(session, token) -> run id | None`, for a run selector
+        the agent API does not know (`?baseline=` and friends take run ids;
+        a plugin may accept its own spelling, e.g. a request id). Raise
+        SelectorRefused to answer with a specific error.
+    promotion_origin: `(session, campaign, run_id) -> PromotionOrigin | None`,
+        what a winner of this campaign stands for in its merge request — its
+        name, its page, a fallback release branch — for a campaign the plugin
+        runs for something of its own. The first answer wins.
+    queue_arrival: `(session, campaign) -> datetime | None`, when a campaign
+        joined the machine queue, for a campaign that represents something
+        older than itself (a request made before its campaign existed). None
+        leaves the platform's own answer.
     """
 
     name: str
     api_version: int
     routers: Sequence[APIRouter] = ()
+    openapi_tags: Sequence[dict[str, Any]] = ()
     tick_steps: Sequence[TickStep] = ()
     migrations: str | None = None
     on_bootstrap: Callable[[Engine], None] | None = None
     propose_candidates: Proposer | None = None
     on_campaign_created: CampaignCreated | None = None
     campaign_extensions: CampaignExtensions | None = None
+    queue_waiters: Callable[[Supervisor, Session], Iterable[QueueWaiter]] | None = None
+    reservations: Callable[[Session, Machine], Iterable[Reservation]] | None = None
+    queue_arrival: Callable[[Session, Campaign], datetime | None] | None = None
+    submission_extras: Callable[[Session, Run, dict[str, Any]], dict[str, Any]] | None = None
+    run_overlay: Callable[[Session, Run, Campaign | None], RunOverlay | None] | None = None
+    run_selector: Callable[[Session, str], int | None] | None = None
+    promotion_origin: Callable[[Session, Campaign, int], PromotionOrigin | None] | None = None
 
     @property
     def version_table(self) -> str:
@@ -264,6 +353,57 @@ def read_campaign_extensions(
             if data and campaign_id in out:
                 out[campaign_id][plugin.name] = data
     return out
+
+
+def run_overlay(session: Session, run: Any, campaign: Any) -> RunOverlay | None:
+    """What the first plugin that knows this run says about it, or None."""
+    for plugin in enabled():
+        if plugin.run_overlay is None:
+            continue
+        try:
+            overlay = plugin.run_overlay(session, run, campaign)
+        except Exception:
+            logger.exception("plugin %s: describing run %s failed", plugin.name, run.id)
+            continue
+        if overlay is not None:
+            return overlay
+    return None
+
+
+def promotion_origin_of(session: Session, campaign: Any, run_id: int) -> PromotionOrigin | None:
+    """What the first plugin that knows this campaign says its winner is."""
+    for plugin in enabled():
+        if plugin.promotion_origin is None:
+            continue
+        try:
+            told = plugin.promotion_origin(session, campaign, run_id)
+        except Exception:
+            logger.exception("plugin %s: promotion origin failed", plugin.name)
+            continue
+        if told is not None:
+            return told
+    return None
+
+
+def resolve_run_selector(session: Session, token: str) -> int | None:
+    """A run id for a selector only a plugin knows, or None. SelectorRefused
+    propagates: the plugin knew the selector and refused it."""
+    for plugin in enabled():
+        if plugin.run_selector is None:
+            continue
+        run_id = plugin.run_selector(session, token)
+        if run_id is not None:
+            return run_id
+    return None
+
+
+def mount(app: Any, mounted: Iterable[Plugin], prefix: str) -> None:
+    """Each plugin's routers under `prefix`, and its tag descriptions in the
+    API docs next to the platform's."""
+    for plugin in mounted:
+        for router in plugin.routers:
+            app.include_router(router, prefix=prefix)
+        app.openapi_tags = [*(app.openapi_tags or []), *plugin.openapi_tags]
 
 
 def migration_env(metadata: MetaData, plugin_name: str) -> None:

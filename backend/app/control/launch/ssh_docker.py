@@ -162,6 +162,20 @@ DEFAULT_ENV = {
     "PYTORCH_ALLOC_CONF": "expandable_segments:True",
 }
 
+
+def pick_digest(digests: list[str], tag: str) -> str:
+    """The `repo@sha256:...` among an image's RepoDigests that belongs to the
+    repository `tag` names (a registry port or a nested path included), else
+    the first one, else ""."""
+    repo = tag.rsplit("@", 1)[0]
+    last = repo.rsplit("/", 1)[-1]
+    if ":" in last:
+        repo = repo[: len(repo) - len(last)] + last.split(":", 1)[0]
+    for d in digests:
+        if d.split("@", 1)[0] == repo:
+            return d
+    return digests[0] if digests else ""
+
 # Run inside the serving container to record what the numbers were produced
 # by. Every lookup is individually guarded: this must never raise, because a
 # container that answers nothing should still leave us the image digest, and
@@ -860,25 +874,37 @@ class SshDockerDriver(DeploymentDriver):
         """
         snapshot: dict = {}
         try:
+            # RepoDigests belongs to the IMAGE, not the container: asking the
+            # container for it fails the whole inspect, which is why no run
+            # recorded a digest. Container first (its image
+            # ID and tag), then that image's digests.
             inspected = self._ssh(
                 handle.machine,
                 self._q(
                     [
-                        "docker", "inspect", "-f",
-                        "{{index .RepoDigests 0}}\t{{.Image}}\t{{.Config.Image}}",
+                        "docker", "inspect", "-f", "{{.Image}}\t{{.Config.Image}}",
                         handle.container_name,
                     ]
                 ),
             )
             if inspected.returncode == 0:
-                digest, image_id, tag = (
-                    inspected.stdout.strip().split("\t") + ["", "", ""]
-                )[:3]
-                # RepoDigests is empty for a locally-built image; the image ID
-                # still pins the exact bits, which is what reproduction needs.
-                snapshot["image_digest"] = digest
+                image_id, tag = (inspected.stdout.strip().split("\t") + ["", ""])[:2]
                 snapshot["image_id"] = image_id
                 snapshot["image_tag"] = tag
+                digests = self._ssh(
+                    handle.machine,
+                    self._q(
+                        [
+                            "docker", "image", "inspect", "-f",
+                            "{{range .RepoDigests}}{{.}} {{end}}", image_id,
+                        ]
+                    ),
+                )
+                if digests.returncode == 0:
+                    # RepoDigests is empty for a locally-built image; the image
+                    # ID still pins the exact bits, which is what reproduction
+                    # needs. With several, keep the one of the tag's repository.
+                    snapshot["image_digest"] = pick_digest(digests.stdout.split(), tag)
 
             versions = self._ssh(
                 handle.machine,

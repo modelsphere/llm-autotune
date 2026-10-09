@@ -18,6 +18,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app import plugins
 from app.agent import blocks as report_blocks
 from app.agent import comparison as cmp
 from app.agent import export as report_export
@@ -50,6 +51,8 @@ from app.schemas.agent import (
     ReportTranslation,
     ResultsPart,
     RunDocument,
+    RunGroup,
+    ScenarioLabel,
 )
 
 router = APIRouter(prefix="/agent/v1", tags=["agent"])
@@ -85,6 +88,7 @@ async def run_document(
         environment=environment_part(b),
         benchmark=benchmark_part(b),
         results=results_part(b),
+        group=b.overlay.group if b.overlay is not None else None,
         links=links_for(run_id),
     )
 
@@ -292,11 +296,18 @@ async def campaign_document(
 async def _resolve(session: AsyncSession, selector: str) -> int:
     """A run id. Its own function because a comparison names runs as text in a
     query string, and a bad name should be one clear 422 rather than a parse
-    error somewhere deeper."""
+    error somewhere deeper. A selector that is not a number may still be one
+    an enabled plugin knows (Plugin.run_selector)."""
     token = selector.strip()
-    if not token.isdigit():
+    if token.isdigit():
+        return int(token)
+    try:
+        run_id = await session.run_sync(lambda sync: plugins.resolve_run_selector(sync, token))
+    except plugins.SelectorRefused as exc:
+        raise _error(exc.status, exc.code, selector=selector, detail=exc.detail) from exc
+    if run_id is None:
         raise _error(status.HTTP_422_UNPROCESSABLE_ENTITY, "bad_selector", selector=selector)
-    return int(token)
+    return run_id
 
 
 async def _load_comparison(
@@ -359,8 +370,14 @@ def _campaign_of(doc: ComparisonDocument) -> int | None:
     return next(iter(ids)) if len(ids) == 1 else None
 
 
+def _group_of(r: AgentReport) -> RunGroup | None:
+    raw = (r.comparison or {}).get("group")
+    return RunGroup.model_validate(raw) if isinstance(raw, dict) else None
+
+
 def _report_out(r: AgentReport) -> ReportOut:
     return ReportOut(
+        group=_group_of(r),
         id=r.id, title=r.title, baseline_run_id=r.baseline_run_id,
         attempt_run_ids=list(r.attempt_run_ids or []), campaign_id=r.campaign_id,
         comparable=r.comparable, generator=dict(r.generator or {}),
@@ -370,6 +387,10 @@ def _report_out(r: AgentReport) -> ReportOut:
         lang=r.lang or "en",
         translation_of=r.translation_of,
         labels=list(r.labels or []),
+        scenario_labels={
+            k: ScenarioLabel(**v) if isinstance(v, dict) else ScenarioLabel(name=str(v))
+            for k, v in (r.scenario_labels or {}).items()
+        },
     )
 
 
@@ -398,13 +419,19 @@ def _detail(r: AgentReport, translations: list[AgentReport]) -> ReportDetailOut:
 @router.get("/reports", response_model=list[ReportOut])
 async def list_reports(
     campaign_id: int | None = Query(default=None),
+    group: str = Query(
+        default="", description="only reports whose runs belong to this group (its slug)"
+    ),
     _: Principal = Depends(get_principal),
     session: AsyncSession = Depends(get_async_session),
 ):
     stmt = select(AgentReport).order_by(AgentReport.id.desc())
     if campaign_id is not None:
         stmt = stmt.where(AgentReport.campaign_id == campaign_id)
-    return [_report_out(r) for r in (await session.execute(stmt)).scalars().all()]
+    reports = [_report_out(r) for r in (await session.execute(stmt)).scalars().all()]
+    if group:
+        reports = [r for r in reports if r.group is not None and r.group.slug == group]
+    return reports
 
 
 @router.post("/reports", response_model=ReportDetailOut, status_code=status.HTTP_201_CREATED)
@@ -470,6 +497,13 @@ async def create_report(
             status.HTTP_422_UNPROCESSABLE_ENTITY, "bad_labels",
             detail=f"labels needs {1 + len(body.attempt_run_ids)} names, baseline first",
         )
+    keys = {s.key for s in doc.baseline.results.scenarios}
+    unknown = sorted(set(body.scenario_labels) - keys)
+    if unknown:
+        raise _error(
+            status.HTTP_422_UNPROCESSABLE_ENTITY, "bad_scenario_labels", unknown,
+            detail=f"no such scenario: {', '.join(unknown)}; have {', '.join(sorted(keys))}",
+        )
     translation_of = None
     if body.translation_of is not None:
         original = await session.get(AgentReport, body.translation_of)
@@ -493,6 +527,7 @@ async def create_report(
         lang=body.lang,
         translation_of=translation_of,
         labels=list(body.labels),
+        scenario_labels={k: v.model_dump() for k, v in body.scenario_labels.items()},
         baseline_run_id=body.baseline_run_id,
         attempt_run_ids=list(body.attempt_run_ids),
         campaign_id=_campaign_of(doc),

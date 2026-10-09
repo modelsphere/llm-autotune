@@ -54,6 +54,14 @@ Every hook is optional:
 | `propose_candidates(ctx)` | plans a campaign in-process, in place of the default enumeration of its space. See [Planning](#planning) |
 | `on_campaign_created(session, campaign, data)` | receives `extensions[<plugin name>]` of a new campaign, in the same transaction; raising `ExtensionRefused` refuses the campaign with that message. See [Campaign extensions](#campaign-extensions) |
 | `campaign_extensions(session, campaigns)` | returns `{campaign_id: data}`, shown on the campaign as `extensions[<plugin name>]` |
+| `queue_waiters(supervisor, session)` | the plugin's waiters (`QueueWaiter`) in the machine queue, served in arrival order with the platform's own. See [The machine queue](#the-machine-queue) |
+| `reservations(session, machine)` | machines the plugin holds (`Reservation`) for a campaign whose run is not placed yet; everyone else treats them as taken |
+| `queue_arrival(session, campaign)` | when a campaign joined the queue, for one that stands for an older request |
+| `submission_extras(session, run, context)` | fields for the run's LLMBench submission; `contributor` and `source_url` replace the platform's, anything else is added to the body |
+| `run_overlay(session, run, campaign)` | what the plugin knows about a run it started for a request of its own, for the run's agent documents (`RunOverlay`, see [Runs in the agent API](#runs-in-the-agent-api)) |
+| `run_selector(session, token)` | a run id for an agent API run selector of the plugin's own spelling; raise `SelectorRefused` to answer with a specific error |
+| `promotion_origin(session, campaign, run_id)` | what a winner of a campaign the plugin runs stands for in its merge request (`PromotionOrigin`: its name, its page, a fallback release branch) |
+| `openapi_tags` | descriptions of the plugin's API tags, shown in the API docs with the platform's |
 
 `name` is lowercase letters, digits and underscores, and must equal the
 entry-point name.
@@ -110,6 +118,95 @@ POST /api/campaigns
 - **Copying:** `GET /api/campaigns/{id}/spec`, YAML export and clone carry
   the extensions, so a copy is created with them again. A clone can override
   them like any other field.
+
+## The machine queue
+
+The worker hands machines out through one queue, oldest waiter first, one
+run per turn: campaigns with a run ready, policy sessions without a machine,
+and whatever plugins add. A campaign that places a run goes to the back, so
+two campaigns on one machine alternate. A waiter that cannot fit a machine it
+could use holds that machine for the rest of the pass, so a wide request is
+not starved by a stream of narrow ones.
+
+A plugin joins the queue with `queue_waiters`. Each `QueueWaiter` has an
+`arrival` time and a `try_admit(session, blocked, busy)`:
+- `blocked` holds the machines older waiters are holding;
+- return True once the waiter took what it needed;
+- otherwise add to `busy` the machines it could use once they free up, and
+  return False.
+
+A waiter that admits a campaign to a machine usually reports that machine
+through `reservations` until the campaign's first run is placed. Placement,
+policy sessions and every other waiter count a reservation as taken.
+`busy_reason(session, machine, cards=, share=)` answers "why can't a run of
+this width go here right now" from the same accounting.
+
+## Runs in the agent API
+
+A plugin that starts runs for requests of its own describes them with
+`run_overlay`: a `RunOverlay` whose every field is optional, and whatever it
+says replaces what the platform would build from its own rows. That covers:
+- the launch configuration and how the run is named in a comparison;
+- where it came from (`source`, plus `origin` details under
+  `launch.origin.extensions`);
+- the module verdicts and metrics the plugin froze when it harvested the
+  result;
+- the SLO, quality floors and ranking metric it holds the run to;
+- the benchmark's recorded config hash, so a document says when the
+  benchmark has `drifted` since;
+- the `group` the run belongs to.
+
+Runs of one group compare by the group's rules: two runs of the same group
+are comparable whatever else differs, and runs of two groups are not
+(`group_differs`). A saved report records the group of the runs it compares,
+and `GET /api/agent/v1/reports?group=<slug>` lists by it. A group with a
+`page_path` (its page in the web UI, usually a plugin route) is linked from
+the report pages.
+
+## Frontend
+
+A plugin's pages live in a folder compiled into the frontend at build time:
+copy it to `frontend/src/plugins/installed/<name>/` before `npm run build`.
+Its `index.ts` default-exports a `FrontendPlugin`:
+
+```ts
+import type { FrontendPlugin } from '@/plugins/api'
+
+const plugin: FrontendPlugin = {
+  name: 'example',
+  routes: [{ path: '/example', component: () => import('./TicksView.vue') }],
+  nav: [{ path: '/example', label: 'example.nav', group: 'top', order: 45 }],
+  messages: { en: { example: { nav: 'Example' } }, zh: { example: { nav: '示例' } } },
+  slots: { 'account.cards': AccountCard },
+  strategies: { group: 'Example plugin', options: [...], apply, selected, describe },
+}
+export default plugin
+```
+
+- **`routes`** are added after the app's own. List a literal path before a
+  parameter one (`/things/new` before `/things/:id`).
+- **`nav`** entries go under the Tuning menu (`group: 'tuning'`) or on the top
+  row (`'top'`), placed by `order` among the app's own entries (10, 20, 30…).
+- **`messages`** are merged into the app's dictionaries, so `t('example.nav')`
+  works anywhere.
+- **`slots`** fill the places the app marks with `<PluginSlot>`:
+  - `account.cards`: cards on the account page, with props `me` and `reload`;
+  - `campaign-detail.sections`: sections above a campaign's tabs, with props
+    `campaign` and `reload`.
+- **`strategies`** add options to New campaign ▸ Search ▸ Strategy, for a
+  campaign the backend half plans with `propose_candidates`:
+  - `apply(extensions, value)` writes the choice into the campaign's
+    `extensions`, or clears it when another strategy is picked;
+  - `selected(extensions)` reads the choice back, for an imported or cloned
+    campaign;
+  - `describe(extensions)` is how the campaign's strategy reads in lists and on
+    its page.
+
+A frontend plugin imports from `@/plugins/api` only: the API client, `useI18n`,
+`usePoll`, the link helpers, the report renderer and the shared components
+(`MergeRequestDialog`, `CampaignRuns`, `LogDialog`, `LinkButton`, …). CI builds
+the frontend with `backend/tests/plugins/example/frontend` installed on every
+change.
 
 ## Turning one on
 

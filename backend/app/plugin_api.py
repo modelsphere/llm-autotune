@@ -11,6 +11,9 @@ Names are added here when a plugin needs them, not ahead of time: each one
 is something the platform can no longer change freely.
 """
 
+from app.agent.overlay import RunOverlay
+from app.control.launch_config import LaunchConfig
+from app.control.orchestrator.occupancy import Reservation, busy_reason
 from app.control.orchestrator.supervisor import Supervisor
 from app.control.search import CandidateConfig
 from app.control.search.history import RunRecord
@@ -41,6 +44,7 @@ from app.db.models import (
     User,
     UserRole,
 )
+from app.evaluation.gate import Gate
 from app.objective import direction
 from app.plugins import (
     PLUGIN_API_VERSION,
@@ -49,14 +53,19 @@ from app.plugins import (
     ExtensionRefused,
     PlanContext,
     Plugin,
+    PromotionOrigin,
     Proposer,
+    QueueWaiter,
+    SelectorRefused,
     TickStep,
     migration_env,
 )
+from app.schemas.agent import BenchmarkPlatformOut, RunGroup
 
 __all__ = [
     "PLUGIN_API_VERSION",
     "Baseline",
+    "BenchmarkPlatformOut",
     "Campaign",
     "CampaignCreated",
     "CampaignExtensions",
@@ -66,21 +75,30 @@ __all__ = [
     "CandidateStatus",
     "Event",
     "ExtensionRefused",
+    "Gate",
+    "LaunchConfig",
     "Machine",
     "MachineState",
     "PlanContext",
     "Plugin",
     "PolicySession",
+    "PromotionOrigin",
     "Proposer",
+    "QueueWaiter",
     "RangeSpec",
+    "Reservation",
     "Run",
+    "RunGroup",
+    "RunOverlay",
     "RunRecord",
     "RunStatus",
+    "SelectorRefused",
     "Supervisor",
     "TickStep",
     "User",
     "UserRole",
     "axes",
+    "busy_reason",
     "direction",
     "expand",
     "get_async_session",

@@ -259,8 +259,8 @@ class Settings(BaseSettings):
     k8s_runtime_class: str = "nvidia"
     # Engine container requests/limits. Historically the engine asked for ONLY
     # `limits: nvidia.com/gpu`; a namespace with a LimitRange or quota that
-    # demands cpu/memory requests rejects such a pod outright, and the B300
-    # cluster's deployment standard mandates them. Empty = omitted, so the
+    # demands cpu/memory requests rejects such a pod outright, and some
+    # clusters' deployment standards mandate them. Empty = omitted, so the
     # default keeps today's manifests byte-identical.
     k8s_engine_cpu_request: str = ""
     k8s_engine_memory_request: str = ""

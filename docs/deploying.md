@@ -4,10 +4,9 @@ One Helm chart brings up everything: the API, the orchestrator worker, the UI
 and Postgres. Two questions decide the rest of the values — where the GPUs
 are, and what measures a run.
 
-To try it first, [deploy/quickstart.sh](../deploy/quickstart.sh) installs it
-next to LLMBench on any cluster, GPUs or not, and starts a demo campaign (see
-the [README](../README.md#quickstart--both-platforms-no-gpus)). This page is
-for an install you keep.
+[deploy/quickstart.sh](../deploy/quickstart.sh) installs it next to LLMBench
+with these choices made for you (see the [README](../README.md#install)). This
+page is for installing the chart yourself.
 
 ```bash
 helm install autotune deploy/helm/llm-autotune \
@@ -46,7 +45,7 @@ capacity* there to fill in its GPUs, then **Lease to platform** to let campaigns
 use it. Set `gpuCluster.autoRegister=false` to skip this.
 
 A cluster without GPUs (kind, a CPU-only test cluster) takes
-`-f deploy/helm/llm-autotune/values-quickstart.yaml`: runs then request no
+`-f deploy/helm/llm-autotune/values-demo.yaml`: runs then request no
 cards, and campaigns run the mock engine
 ([mock-engine/](../mock-engine/README.md)).
 
@@ -132,7 +131,7 @@ address, so set it to LLMBench's ingress.
 
 Without a benchmark platform, runs launch and then have nothing to measure
 them. To work on AutoTune without one, layer `values-mock.yaml` on
-`values-quickstart.yaml`: it replaces LLMBench with a fake that probes the
+`values-demo.yaml`: it replaces LLMBench with a fake that probes the
 endpoint and reports invented numbers.
 
 If you measure some other way, `Evaluator` in `backend/app/evaluation/base.py` is

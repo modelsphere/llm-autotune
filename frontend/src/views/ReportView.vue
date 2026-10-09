@@ -63,6 +63,7 @@ async function load() {
     comparison: detail.comparison as unknown as Comparison,
     lang: detail.lang === 'zh' ? 'zh' : 'en',
     labels: detail.labels,
+    scenarioLabels: detail.scenario_labels ?? {},
     resolveAsset: (name) => urls[name] ?? name,
   })
 }
@@ -136,6 +137,14 @@ onBeforeUnmount(cleanup)
             <router-link :to="`/campaigns/${report.campaign_id}`">
               #{{ report.campaign_id }}
             </router-link>
+            ·
+          </template>
+          <template v-if="report.group">
+            {{ t('reports.group') }}:
+            <router-link v-if="report.group.page_path" :to="report.group.page_path">
+              {{ report.group.name || report.group.slug }}
+            </router-link>
+            <span v-else>{{ report.group.name || report.group.slug }}</span>
             ·
           </template>
           {{ t('reports.inputs') }}:

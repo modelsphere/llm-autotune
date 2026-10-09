@@ -1549,6 +1549,9 @@ class AgentReport(Base):
     translation_of: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     # Public names of the configs, baseline first; [] = Baseline / Optimized.
     labels: Mapped[list] = mapped_column(JsonCol, default=list)
+    # What this report calls its scenarios, per scenario key:
+    # {"perf_guidellm_sweep": {"name": ..., "description": ...}}
+    scenario_labels: Mapped[dict] = mapped_column(JsonCol, default=dict)
     created_by: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_by_name: Mapped[str] = mapped_column(String(64), default="")
     created_at: Mapped[datetime] = mapped_column(

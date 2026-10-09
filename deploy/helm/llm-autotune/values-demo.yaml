@@ -1,8 +1,8 @@
 # A cluster with no GPUs: kind, a laptop, a CPU-only test cluster. Runs launch
 # the mock engine — an image that answers the same endpoints sglang does and
 # needs no weights and no cards — so the whole loop runs for real: scheduling,
-# launch, health checks, benchmarking and ranking. deploy/quickstart.sh
-# installs with this file, next to a real LLMBench.
+# launch, health checks, benchmarking and ranking. deploy/demo.sh installs
+# with this file, next to a real LLMBench.
 #
 # It proves the platform, not a model: nothing measured this way means
 # anything about performance. For GPUs, install without this file.

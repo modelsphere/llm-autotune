@@ -23,6 +23,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app import plugins
 from app.api.campaigns import leaderboard
 from app.control.gitlab_client import GitLabError, GitLabUnavailable
 from app.control.launch_config import LaunchConfig
@@ -36,7 +37,12 @@ from app.control.promotion import (
     get_target,
 )
 from app.control.promotion.merge_request import MergeRequestDraft, Origin, build_merge_request
-from app.control.promotion.winner import baseline_lookup_order, evidence_of
+from app.control.promotion.winner import (
+    baseline_lookup_order,
+    deploy_branch_of,
+    evidence_of,
+    origin_of,
+)
 from app.core.auth import get_current_user
 from app.core.config import get_settings
 from app.db.base import get_async_session
@@ -239,10 +245,11 @@ async def _resolve_campaign(
         target_metric=entry.target_metric if entry is not None and entry.target_metric else None,
         score=entry.score if entry is not None else None,
     )
-    origin = Origin(
-        kind="campaign", campaign_id=campaign.id, campaign_name=campaign.name, run_id=run.id
+    told = await session.run_sync(
+        lambda sync: plugins.promotion_origin_of(sync, campaign, run.id)
     )
-    deploy_branch = campaign.deploy_branch
+    origin = origin_of(campaign, run.id, told)
+    deploy_branch = deploy_branch_of(campaign, told)
     return _Resolved(
         campaign, run, config, target, baseline, origin, evidence, holds, deploy_branch
     )
@@ -331,9 +338,8 @@ async def _promote(
             raise HTTPException(status.HTTP_409_CONFLICT, draft.reason)
         # A branch named on the request sticks to the campaign: the next winner
         # of the same tuning goes to the same release branch without anyone
-        # having to remember which one it was. Not for a Hub measurement — its
-        # campaign is a hidden one-config row nobody reads.
-        if branch:
+        # having to remember which one it was.
+        if branch and resolved.origin.remember_branch:
             resolved.campaign.deploy_branch = branch.strip()
 
     promotion = Promotion(

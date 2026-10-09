@@ -1,77 +1,24 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1180 470" font-family="Helvetica, Arial, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif">
-  <defs>
-    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-      <path d="M0,0 L10,5 L0,10 z" fill="#4a4f5a"/>
-    </marker>
-  </defs>
-  <style>
-    .zoneA { fill:#fdf3e0; stroke:#d0a85a; stroke-width:1.2; }
-    .zoneB { fill:#e6f4ea; stroke:#57a06a; stroke-width:1.2; }
-    .zoneC { fill:#eef0fb; stroke:#8f96d8; stroke-width:1.2; }
-    .zlab  { font-size:13px; font-weight:bold; fill:#1f2430; text-anchor:middle; }
-    .zsub  { font-size:11px; fill:#3a4050; text-anchor:middle; }
-    .edge  { stroke:#4a4f5a; stroke-width:1.8; fill:none; }
-    .cut   { stroke:#c96b6b; stroke-width:1.6; fill:none; stroke-dasharray:6 4; }
-    .flag  { fill:#fbeaea; stroke:#c96b6b; stroke-width:1.3; }
-    .flagt { font-size:11.5px; font-weight:bold; fill:#a23b3b; text-anchor:middle; }
-    .note  { font-size:11px; fill:#3a4050; text-anchor:middle; }
-    .tick  { font-size:11.5px; font-weight:bold; fill:#5c6270; text-anchor:middle; }
-    .lab   { font-size:11px; fill:#333; text-anchor:middle; paint-order:stroke; stroke:#ffffff; stroke-width:3.5; }
-    .dbox  { fill:#faf6df; stroke:#c8bd8a; stroke-width:1.2; }
-    .dtitle{ font-size:11.5px; font-weight:bold; fill:#5c5320; text-anchor:middle; }
-    .dsub  { font-size:10.5px; fill:#3a4050; text-anchor:middle; }
-  </style>
-  <rect x="0" y="0" width="1180" height="470" fill="#ffffff"/>
-
-  <!-- 搜索区上方的循环 -->
-  <path class="edge" d="M580,208 C580,156 380,156 380,208" marker-end="url(#arr)"/>
-  <text class="lab" x="480" y="148">提议 → 启动 → 压测 → 排名 · 循环</text>
-
-  <!-- 夜晚开始时，先把 dataset 滚到最新流量 -->
-  <rect class="dbox" x="40" y="146" width="220" height="46" rx="6"/>
-  <text class="dtitle" x="150" y="166">先滚动 dataset</text>
-  <text class="dsub" x="150" y="182">一份当天流量的新鲜样本</text>
-  <path class="edge" d="M150,192 V208" marker-end="url(#arr)"/>
-
-  <!-- 夜间时间条 -->
-  <rect class="zoneA" x="60"  y="210" width="180" height="80" rx="8"/>
-  <text class="zlab" x="150" y="245">接管</text>
-  <text class="zsub" x="150" y="266">交接 + 捕获</text>
-
-  <rect class="zoneB" x="240" y="210" width="540" height="80"/>
-  <text class="zlab" x="510" y="245">搜索轮次</text>
-  <text class="zsub" x="510" y="266">baseline canary · 漏斗在此运行</text>
-
-  <rect class="zoneC" x="780" y="210" width="180" height="80"/>
-  <text class="zlab" x="870" y="245">收尾</text>
-  <text class="zsub" x="870" y="266">清理</text>
-
-  <rect class="zoneA" x="960" y="210" width="160" height="80" rx="8"/>
-  <text class="zlab" x="1040" y="245">归还</text>
-  <text class="zsub" x="1040" y="266">恢复 + 验证</text>
-
-  <!-- 硬截止 -->
-  <path class="cut" d="M780,164 V300"/>
-  <rect class="flag" x="636" y="162" width="288" height="44" rx="6"/>
-  <text class="flagt" x="780" y="181">硬截止</text>
-  <text class="note" x="780" y="198">只有能在天亮前完成的运行才会启动</text>
-
-  <!-- 时间轴 -->
-  <path class="edge" d="M60,314 H1120" marker-end="url(#arr)"/>
-  <text class="tick" x="60"   y="336">23:00</text>
-  <text class="tick" x="590"  y="336">· · ·  夜间  · · ·</text>
-  <text class="tick" x="1120" y="336">08:00</text>
-
-  <!-- 下方说明 -->
-  <text class="note" x="150" y="372">机器从生产退役。</text>
-  <text class="note" x="150" y="390">捕获生产，</text>
-  <text class="note" x="150" y="408">以便之后恢复。</text>
-
-  <text class="note" x="510" y="372">baseline canary 用生产自己的配置做对照重跑；每个候选先便宜筛选，</text>
-  <text class="note" x="510" y="390">只有最好的几个才在当晚刚滚动出的 dataset 上验证。</text>
-  <text class="note" x="510" y="408">任何用于决策的测量进行时，两个实验绝不共用一台机器。</text>
-
-  <text class="note" x="1040" y="372">恢复生产并验证健康后</text>
-  <text class="note" x="1040" y="390">才归还机器。</text>
-  <text class="note" x="1040" y="408">晨报随即生成。</text>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 210" font-family="-apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif">
+  <defs><marker id="a-grey" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#5b6b7a"/></marker><marker id="a-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#2f6f4f"/></marker><marker id="a-orange" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#c07a2c"/></marker><marker id="a-purple" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#8b72be"/></marker><marker id="a-red" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#c96161"/></marker><marker id="a-blue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#5b85c9"/></marker></defs>
+  <rect width="1000" height="210" fill="#ffffff"/>
+  <rect x="20" y="50" width="150" height="70" rx="8" fill="#fdf5e1" stroke="#d1a646" stroke-width="1.4"/>
+  <text x="95.0" y="80.5" font-size="15" fill="#1b2733" font-weight="700" text-anchor="middle">接管</text>
+  <text x="95.0" y="101.5" font-size="12.5" fill="#7a5a1a" text-anchor="middle">捕获、清空</text>
+  <rect x="176" y="50" width="140" height="70" rx="8" fill="#e4edf9" stroke="#5b85c9" stroke-width="1.4"/>
+  <text x="246.0" y="80.5" font-size="15" fill="#1b2733" font-weight="700" text-anchor="middle">Baseline</text>
+  <text x="246.0" y="101.5" font-size="12.5" fill="#4a5a6a" text-anchor="middle">测量生产配置</text>
+  <rect x="322" y="50" width="352" height="70" rx="8" fill="#d9f0e2" stroke="#2f6f4f" stroke-width="2.4"/>
+  <text x="498.0" y="80.5" font-size="15" fill="#1b2733" font-weight="700" text-anchor="middle">Search</text>
+  <text x="498.0" y="101.5" font-size="12.5" fill="#2f4f3f" text-anchor="middle">policy 挑选，平台测量</text>
+  <rect x="680" y="50" width="150" height="70" rx="8" fill="#e4edf9" stroke="#5b85c9" stroke-width="1.4"/>
+  <text x="755.0" y="80.5" font-size="15" fill="#1b2733" font-weight="700" text-anchor="middle">验证</text>
+  <text x="755.0" y="101.5" font-size="12.5" fill="#4a5a6a" text-anchor="middle">重新测量最优配置</text>
+  <rect x="836" y="50" width="144" height="70" rx="8" fill="#fdf5e1" stroke="#d1a646" stroke-width="1.4"/>
+  <text x="908.0" y="80.5" font-size="15" fill="#1b2733" font-weight="700" text-anchor="middle">归还</text>
+  <text x="908.0" y="101.5" font-size="12.5" fill="#7a5a1a" text-anchor="middle">恢复并验证</text>
+  <path d="M677 30 L677 140" fill="none" stroke="#c96161" stroke-width="1.6" stroke-dasharray="5 4"/>
+  <text x="677" y="22" font-size="12" fill="#c96161" font-weight="700" text-anchor="middle">search 截止</text>
+  <path d="M20 160 L978 160" fill="none" stroke="#5b6b7a" stroke-width="1.6" marker-end="url(#a-grey)"/>
+  <text x="20" y="184" font-size="12" fill="#5b6b7a" text-anchor="start">时间窗开始</text>
+  <text x="980" y="184" font-size="12" fill="#5b6b7a" text-anchor="end">时间窗结束</text>
 </svg>

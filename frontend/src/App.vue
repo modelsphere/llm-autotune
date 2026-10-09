@@ -2,6 +2,8 @@
 import { computed, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n, type Locale } from './i18n'
+import { pluginNav, type NavItem } from './plugins'
+import { navigating } from './router'
 import { useAuthStore } from './stores/auth'
 
 const auth = useAuthStore()
@@ -15,8 +17,23 @@ const activeMenu = computed(() => '/' + route.path.split('/')[1])
  *  from its child being active the way a top-level item does, and a nav that
  *  forgets where you are is worse than one with more entries — so the group
  *  is marked active by hand. */
-const TUNING = ['/campaigns', '/search-spaces', '/objectives', '/baselines']
-const inTuning = computed(() => TUNING.includes(activeMenu.value))
+/** The menu, with whatever installed plugins add, each group in `order`. */
+const NAV: NavItem[] = [
+  { path: '/campaigns', label: 'nav.campaigns', group: 'tuning', order: 10 },
+  { path: '/search-spaces', label: 'nav.searchSpaces', group: 'tuning', order: 30 },
+  { path: '/objectives', label: 'nav.objectives', group: 'tuning', order: 40 },
+  { path: '/baselines', label: 'nav.baselines', group: 'tuning', order: 50 },
+  { path: '/runs', label: 'nav.runs', group: 'top', order: 20 },
+  { path: '/resources', label: 'nav.resources', group: 'top', order: 30 },
+  { path: '/reports', label: 'nav.reports', group: 'top', order: 50 },
+]
+function navOf(group: NavItem['group']): NavItem[] {
+  return [...NAV.filter((n) => n.group === group), ...pluginNav(group)]
+    .sort((a, b) => a.order - b.order)
+}
+const tuningNav = navOf('tuning')
+const topNav = navOf('top')
+const inTuning = computed(() => tuningNav.some((n) => n.path === activeMenu.value))
 
 /** The store only learned who you are at login, so a reload left `user` null
  *  and the menu had no name to show. Fetch it whenever there is a token and no
@@ -43,6 +60,20 @@ function onCommand(command: string) {
   else if (command === 'logout') logout()
 }
 
+/** The nav entries (and the account menu's pages) are <a href>s so a
+ *  middle-click, a Ctrl/Cmd+click or the browser's "Open link in new tab"
+ *  work on them. A plain click is left to the menu (router mode / command,
+ *  which also covers keyboard use), so the anchor cancels its own default; a
+ *  modified click is the browser's, and must not reach the menu, or it would
+ *  mark that entry active in THIS tab. */
+function href(path: string): string {
+  return router.resolve(path).href
+}
+function onNavLinkClick(event: MouseEvent) {
+  if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) event.stopPropagation()
+  else event.preventDefault()
+}
+
 function logout() {
   auth.logout()
   router.push('/login')
@@ -62,14 +93,15 @@ function logout() {
         class="nav-menu">
         <el-sub-menu index="tuning" :class="{ 'is-active-group': inTuning }">
           <template #title>{{ t('nav.tuning') }}</template>
-          <el-menu-item index="/campaigns">{{ t('nav.campaigns') }}</el-menu-item>
-          <el-menu-item index="/search-spaces">{{ t('nav.searchSpaces') }}</el-menu-item>
-          <el-menu-item index="/objectives">{{ t('nav.objectives') }}</el-menu-item>
-          <el-menu-item index="/baselines">{{ t('nav.baselines') }}</el-menu-item>
+          <el-menu-item v-for="item in tuningNav" :key="item.path" :index="item.path">
+            <a :href="href(item.path)" class="menu-link" @click="onNavLinkClick">{{
+              t(item.label) }}</a>
+          </el-menu-item>
         </el-sub-menu>
-        <el-menu-item index="/runs">{{ t('nav.runs') }}</el-menu-item>
-        <el-menu-item index="/resources">{{ t('nav.resources') }}</el-menu-item>
-        <el-menu-item index="/reports">{{ t('nav.reports') }}</el-menu-item>
+        <el-menu-item v-for="item in topNav" :key="item.path" :index="item.path">
+          <a :href="href(item.path)" class="menu-link" @click="onNavLinkClick">{{
+            t(item.label) }}</a>
+        </el-menu-item>
       </el-menu>
       <span class="spacer" />
       <!-- Two languages, so a segmented control rather than a dropdown: the
@@ -104,8 +136,14 @@ function logout() {
                   style="margin-left: 6px">{{ auth.user.role }}</el-tag>
               </span>
             </el-dropdown-item>
-            <el-dropdown-item divided command="account">{{ t('nav.account') }}</el-dropdown-item>
-            <el-dropdown-item command="keys">{{ t('nav.apiKeys') }}</el-dropdown-item>
+            <el-dropdown-item divided command="account">
+              <a :href="href('/account')" class="dropdown-link"
+                @click="onNavLinkClick">{{ t('nav.account') }}</a>
+            </el-dropdown-item>
+            <el-dropdown-item command="keys">
+              <a :href="href('/api-keys')" class="dropdown-link"
+                @click="onNavLinkClick">{{ t('nav.apiKeys') }}</a>
+            </el-dropdown-item>
             <el-dropdown-item divided command="logout">
               {{ t('nav.logOut') }}
             </el-dropdown-item>
@@ -113,8 +151,16 @@ function logout() {
         </template>
       </el-dropdown>
     </el-header>
+    <!-- A page chunk on its way: without this a click on a slow network looks
+         like it did nothing. -->
+    <div v-show="navigating" class="nav-progress" />
     <el-main>
-      <router-view />
+      <!-- Keyed by path, so /campaigns/1 → /campaigns/2 (or back/forward
+           between two runs) mounts the page afresh. Views load
+           in onMounted and read their id once; a reused instance kept showing
+           — and polling — the page you had left. Query changes (?tab=) do not
+           remount. -->
+      <router-view :key="route.path" />
     </el-main>
   </el-container>
 </template>
@@ -144,6 +190,29 @@ function logout() {
 }
 .spacer {
   flex: 1;
+}
+.nav-progress {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  z-index: 3000;
+  overflow: hidden;
+  pointer-events: none;
+}
+.nav-progress::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 40%;
+  background: var(--el-color-primary);
+  animation: nav-progress 1.1s ease-in-out infinite;
+}
+@keyframes nav-progress {
+  from { left: -40%; }
+  to { left: 100%; }
 }
 .lang {
   margin-right: 4px;
@@ -185,4 +254,29 @@ function logout() {
   font-size: 10px;
 }
 
+</style>
+
+<!-- Not scoped: the tuning sub-menu and the account menu are teleported to
+     <body>, and these must style the links inside them too. -->
+<style>
+/* The anchor inside each nav entry: looks like the entry's text, and its
+   ::after covers the whole entry (the <li> is position: relative), so a
+   middle-click anywhere on the entry lands on the link. */
+a.menu-link {
+  color: inherit;
+  text-decoration: none;
+}
+a.menu-link::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+}
+/* Same for the account menu's links: the item's padding is part of the link. */
+a.dropdown-link {
+  color: inherit;
+  text-decoration: none;
+  margin: -5px -16px;
+  padding: 5px 16px;
+  flex: 1;
+}
 </style>

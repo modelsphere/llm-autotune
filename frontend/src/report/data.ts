@@ -1,6 +1,6 @@
 /** Reading the frozen ComparisonDocument (docs/api/agent-api.md) for display.
  *  Values and percentages are copied from it; the only arithmetic here is
- *  unit conversion (per minute to per second, per server to per GPU). */
+ *  unit conversion (per minute to per second) and normalizing to 8 GPUs. */
 
 import { tr, type Lang } from './strings'
 
@@ -61,7 +61,8 @@ export interface Attempt extends Run {
   deltas: { scenarios: ScenarioDeltas[]; quality: Record<string, Delta> }
 }
 export interface Comparison {
-  track: { model_name: string; precision: string; gpu_type: string } | null
+  /** The group the compared runs belong to (a plugin's), when there is one. */
+  group?: { model_name: string; precision: string; gpu_type: string } | null
   benchmark: {
     modules: { key: string; module_name: string; is_scenario: boolean; params: Record<string, unknown> }[]
     platform: { slo: { ttft_ms?: number; ttft_percentile?: string; min_request_output_tps?: number } }
@@ -108,12 +109,29 @@ export function num(v: unknown): string {
   return x.toFixed(3)
 }
 
+/** A percentage to one decimal, half away from zero: 119.85 is +119.9%, as a
+ *  reader (or the report's prose) rounds it — `toFixed` alone reads the binary
+ *  119.8499… and says 119.8. Signed, with a real minus. */
+export function pctText(pct: number): string {
+  const r = Math.round(Math.abs(pct) * 10 + 1e-6) / 10
+  const sign = r === 0 ? '' : pct > 0 ? '+' : '−'
+  return `${sign}${r.toFixed(1)}%`
+}
+
 export function concurrencyText(c: unknown): string {
   const v = Number(c)
   return Number.isFinite(v) ? String(Number(v.toPrecision(6))) : '?'
 }
 
-export function scenarioName(s: Scenario, lang: Lang): string {
+/** What a report calls its scenarios: a name a reader recognises ("Agent
+ *  long-context") and, for the scenarios table, what it stands for. Saved with
+ *  the report, per language; without it a scenario goes by its token shape. */
+export interface ScenarioLabel { name?: string; description?: string }
+export type ScenarioLabels = Record<string, ScenarioLabel>
+
+export function scenarioName(s: Scenario, lang: Lang, names: ScenarioLabels = {}): string {
+  const given = names[s.key]?.name
+  if (given) return given
   if (s.kind === 'replay') {
     const c = s.best_level?.concurrency ?? (s.summary?.concurrency as number | undefined)
     return tr(lang, 'agentic', { c: concurrencyText(c) })
@@ -148,4 +166,29 @@ export function heldQuality(doc: Comparison): string[] {
 
 export function cardsOf(run: Run): number {
   return Math.max(1, Number(run.launch.cards) || 1)
+}
+
+/** Every throughput a report shows is for one machine of this many GPUs —
+ *  LLMBench's card-norm basis — so configs on different GPU counts compare:
+ *  a 2-GPU config counts as four copies filling the machine. */
+export const MACHINE_GPUS = 8
+
+/** The machine the numbers are normalized to, as captions name it: "8 × H100". */
+export function hardwareText(doc: Comparison): string {
+  const card = doc.group?.gpu_type
+  return card ? `${MACHINE_GPUS} × ${card}` : `${MACHINE_GPUS} GPUs`
+}
+
+/** The 8-GPU normalized throughput, from the document's per-GPU field (the
+ *  document also carries it as `*_per_machine` since 2026-09-28). */
+export function perMachine(perGpuValue: unknown): number | null {
+  const v = Number(perGpuValue)
+  return perGpuValue == null || Number.isNaN(v) ? null : v * MACHINE_GPUS
+}
+
+/** Whether every config ran on the same number of GPUs; when not, tables
+ *  say how many each used. */
+export function sameCards(doc: Comparison): boolean {
+  const runs = runsOf(doc)
+  return runs.every((r) => cardsOf(r) === cardsOf(runs[0]))
 }

@@ -327,6 +327,8 @@ export interface MachineLifecycle {
 export interface Campaign {
   id: number
   owner_id: number
+  /** What installed plugins keep about the campaign, by plugin name. */
+  extensions?: Record<string, Record<string, unknown>>
   name: string
   engine: string
   image: string
@@ -837,12 +839,27 @@ export function downloadText(filename: string, text: string): void {
 
 // -- agent API (reports an LLM wrote from finished runs) -----------------------
 
+/** Runs a plugin keeps together as one comparable set. */
+export interface RunGroup {
+  kind: string
+  slug: string
+  name: string
+  model_name: string
+  served_model_name: string
+  precision: string
+  gpu_type: string
+  /** The group's page in this app, or '' when it has none. */
+  page_path: string
+}
+
 export interface AgentReport {
   id: number
   title: string
   baseline_run_id: number
   attempt_run_ids: number[]
   campaign_id: number | null
+  /** The group every run of the comparison belongs to, when there is one. */
+  group?: RunGroup | null
   comparable: boolean
   generator: Record<string, unknown>
   created_by_name: string
@@ -852,6 +869,8 @@ export interface AgentReport {
   lang: string
   translation_of: number | null
   labels: string[]
+  /** What this report calls its scenarios, per scenario key. */
+  scenario_labels: Record<string, { name?: string; description?: string }>
 }
 
 export interface AgentReportDetail extends AgentReport {

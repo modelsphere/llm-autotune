@@ -5,7 +5,7 @@
  *  self-contained HTML export — so a published report looks exactly like the
  *  one reviewed on the platform. The block vocabulary is the backend's
  *  (app/agent/blocks.py): `chart` summary|sweep|agentic, `table`
- *  setup|summary|quality|diff|scenarios, `command` baseline|<attempt>.
+ *  setup|slo|summary|quality|diff|scenarios, `command` baseline|<attempt>.
  *
  *  Safety: the markdown comes from an LLM. markdown-it runs with raw HTML off,
  *  every table cell is escaped, and link/image URLs are filtered, so nothing
@@ -21,11 +21,15 @@ import {
   agenticChart, chartHeight, mountChart, PERCENTILES, sloPercentile, summaryChart,
   sweepLatencyChart, sweepThroughputChart, type Percentile,
 } from './charts'
-import { labelsFor, type Comparison } from './data'
+import {
+  hardwareText, labelsFor, scenarioName, scenarioOf, type Comparison, type ScenarioLabels,
+} from './data'
 import css from './report.css?inline'
 import { tr, type Lang } from './strings'
 import { highlightShell } from './shell'
-import { diffTable, esc, qualityTable, scenariosTable, setupTable, summaryTable } from './tables'
+import {
+  diffTable, esc, qualityTable, scenariosTable, setupTable, sloTable, summaryTable,
+} from './tables'
 
 hljs.registerLanguage('json', json)
 hljs.registerLanguage('python', python)
@@ -37,6 +41,8 @@ export interface ReportInput {
   comparison: Comparison
   lang: Lang
   labels?: string[]
+  /** What this report calls its scenarios, per scenario key. */
+  scenarioLabels?: ScenarioLabels
   /** An asset name (a legacy report's PNG) to a URL the page can load. */
   resolveAsset?: (name: string) => string
 }
@@ -99,6 +105,12 @@ function markdownIt(resolveAsset: (name: string) => string): MarkdownIt {
   return md
 }
 
+/** A figure's or table's caption: the numbered title in bold, then how to
+ *  read it. Platform text, so it reads the same in every report. */
+function caption(title: string, reading = ''): string {
+  return `<p class="ar-caption"><b>${esc(title)}</b>${reading ? ` ${esc(reading)}` : ''}</p>`
+}
+
 /** p50 | p90 | p99 buttons over a latency figure. */
 function percentileSwitch(label: string, initial: Percentile, pick: (p: Percentile) => void): HTMLElement {
   const bar = document.createElement('div')
@@ -148,10 +160,18 @@ export function renderReport(root: HTMLElement, input: ReportInput): () => void 
   const lang = input.lang
   const doc = input.comparison
   const labels = labelsFor(doc, lang, input.labels ?? [])
+  const names = input.scenarioLabels ?? {}
   const md = markdownIt(input.resolveAsset ?? ((name) => name))
   root.innerHTML = `<article class="ar">${md.render(input.markdown)}</article>`
 
   const disposers: (() => void)[] = []
+  // Figures and results tables are numbered in document order, by the platform.
+  let figures = 0
+  let tables = 0
+  const nameOf = (key: string) => {
+    const s = scenarioOf(doc.baseline, key)
+    return s ? scenarioName(s, lang, names) : key
+  }
   root.querySelectorAll<HTMLElement>('.ar-block').forEach((el) => {
     const kind = el.dataset.kind ?? ''
     const params: Record<string, string> = JSON.parse(el.dataset.params ?? '{}')
@@ -162,14 +182,17 @@ export function renderReport(root: HTMLElement, input: ReportInput): () => void 
     try {
       if (kind === 'table') {
         const html = {
-          setup: () => setupTable(doc, lang),
-          summary: () => summaryTable(doc, lang, labels),
+          setup: () => setupTable(doc, lang, labels),
+          slo: () => sloTable(doc, lang),
+          summary: () => summaryTable(doc, lang, labels, names),
           quality: () => qualityTable(doc, lang, labels),
           diff: () => diffTable(doc, lang, labels, Number(params.attempt ?? 1)),
-          scenarios: () => scenariosTable(doc, lang),
+          scenarios: () => scenariosTable(doc, lang, names),
         }[params.type as 'setup']?.()
         if (html == null) return fail(`table type ${params.type}`)
-        el.innerHTML = html
+        const title = html && params.type === 'summary' ? 'tabSummary'
+          : html && params.type === 'quality' ? 'tabQuality' : null
+        el.innerHTML = title ? caption(tr(lang, title, { n: ++tables })) + html : html
       } else if (kind === 'chart') {
         const type = params.type
         const figure = (build: (w: number) => ReturnType<typeof summaryChart>) => {
@@ -180,19 +203,28 @@ export function renderReport(root: HTMLElement, input: ReportInput): () => void 
           disposers.push(chart.dispose)
           return { div, chart }
         }
+        const captionAfter = (title: string, reading: string) =>
+          el.insertAdjacentHTML('beforeend', caption(title, reading))
         if (type === 'summary') {
-          figure(() => summaryChart(doc, lang, labels))
+          figure(() => summaryChart(doc, lang, labels, names))
+          captionAfter(tr(lang, 'figSummary', { n: ++figures, hw: hardwareText(doc) }),
+            tr(lang, 'figSummaryRead'))
         } else if (type === 'agentic') {
-          figure((w) => agenticChart(doc, lang, labels, params.scenario, w))
+          figure((w) => agenticChart(doc, lang, labels, params.scenario, w, names))
+          captionAfter(tr(lang, 'figAgentic', { n: ++figures, name: nameOf(params.scenario) }),
+            tr(lang, 'figAgenticRead'))
         } else if (type === 'sweep') {
           // two figures: throughput, then latency at one percentile with a switch
-          figure((w) => sweepThroughputChart(doc, lang, labels, params.scenario, w))
+          figure((w) => sweepThroughputChart(doc, lang, labels, params.scenario, w, names))
           let pct: Percentile = sloPercentile(doc)
-          const { div, chart } = figure((w) => sweepLatencyChart(doc, lang, labels, params.scenario, w, pct))
+          const { div, chart } = figure((w) =>
+            sweepLatencyChart(doc, lang, labels, params.scenario, w, pct, names))
           div.append(percentileSwitch(tr(lang, 'percentile'), pct, (next) => {
             pct = next
             chart.update()
           }))
+          captionAfter(tr(lang, 'figSweep', { n: ++figures, name: nameOf(params.scenario) }),
+            tr(lang, 'figSweepRead'))
         } else {
           return fail(`chart type ${type}`)
         }

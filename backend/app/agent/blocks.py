@@ -27,8 +27,12 @@ from app.schemas.agent import ComparisonDocument, ReportBlock
 
 BLOCK_KINDS = ("chart", "table", "command")
 CHART_TYPES = ("summary", "sweep", "agentic")
-TABLE_TYPES = ("setup", "summary", "quality", "diff", "scenarios")
+TABLE_TYPES = ("setup", "slo", "summary", "quality", "diff", "scenarios")
 
+# A caption the agent wrote itself ("**Figure 2. …**", "表 1 · …"). Figures
+# and results tables are captioned and numbered by the renderer, in fixed words,
+# so a report's captions read the same in every report.
+_CAPTION = re.compile(r"^\s*(?:\*\*|__)?\s*(?:Figure|Fig\.|Table|图|表)\s*\d+\s*[.:·、]", re.M)
 _FENCE = re.compile(r"^```[ \t]*(chart|table|command)[ \t]*\n(.*?)^```[ \t]*$", re.M | re.S)
 _LINE = re.compile(r"^\s*([A-Za-z_]+)\s*:\s*(.*?)\s*$")
 
@@ -77,25 +81,31 @@ def available(doc: ComparisonDocument) -> list[ReportBlock]:
                                description=description, markdown=_snippet(kind, params)))
 
     add("chart", {"type": "summary"},
-        "Bars: total throughput per GPU at the best concurrency within SLO, per scenario, "
+        "Bars: normalized throughput (8 GPUs) at the best concurrency within SLO, per scenario, "
         "baseline next to each attempt, change on the bar.")
     for s in doc.baseline.results.scenarios:
         if s.kind == "replay":
             add("chart", {"type": "agentic", "scenario": s.key},
-                "Agentic dataset: input (uncached/cached) and output throughput per GPU, "
+                "Agentic dataset: input (uncached/cached) and output normalized throughput, "
                 "TTFT p50/p90/p99.")
         else:
             add("chart", {"type": "sweep", "scenario": s.key},
-                f"Sweep {s.label}: throughput per GPU and TTFT against concurrency, SLO line, "
-                "best concurrency within SLO marked.")
+                f"Sweep {s.label}: two figures — total and output throughput against "
+                "concurrency (best concurrency within SLO marked), then TTFT (with the SLO "
+                "line) and TPOT at a percentile the reader can switch.")
     add("table", {"type": "setup"}, "Model, precision, hardware, image, SLO.")
+    add("table", {"type": "slo"},
+        "What the SLO constrains and what is maximized within it, each metric defined.")
     add("table", {"type": "summary"},
-        "Per scenario: throughput per GPU at the best concurrency within SLO, with the change.")
-    add("table", {"type": "quality"}, "Quality scores held to a floor, with the change.")
+        "One row per scenario and config: the best concurrency within SLO and the normalized "
+        "throughput measured there, with the change.")
+    add("table", {"type": "quality"},
+        "Quality scores held to a floor: both values, the absolute and the relative change.")
     for a in doc.attempts:
         add("table", {"type": "diff", "attempt": str(a.position)},
             f"Launch settings that differ between the baseline and attempt {a.position}.")
-    add("table", {"type": "scenarios"}, "What each scenario runs and how it is measured.")
+    add("table", {"type": "scenarios"},
+        "Each scenario: its name, its input/output shape, and what it stands for.")
     add("command", {"config": "baseline"}, "The baseline's serving command, with a copy button.")
     for a in doc.attempts:
         add("command", {"config": str(a.position)},
@@ -112,6 +122,16 @@ def problems(markdown: str, doc: ComparisonDocument) -> list[dict[str, object]]:
 
     def bad(b: Block, message: str) -> None:
         out.append({"line": b.line, "block": b.kind, "params": b.params, "problem": message})
+
+    fenced = [(m.start(), m.end()) for m in _FENCE.finditer(markdown)]
+    for m in _CAPTION.finditer(markdown):
+        if any(a <= m.start() < z for a, z in fenced):
+            continue
+        out.append({
+            "line": markdown.count("\n", 0, m.start()) + 1, "block": "caption", "params": {},
+            "problem": "captions are drawn and numbered by the platform under each chart and over "
+                       "each results table; remove this one",
+        })
 
     for b in parse(markdown):
         if "_bad" in b.params:

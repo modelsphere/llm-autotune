@@ -1,128 +1,97 @@
-# How LLM Autotune Works — a Product Walkthrough
+# How it works
 
-*For product managers and anyone who wants the what-and-why without the code.
-Engineering companion: [architecture-overview.md](architecture-overview.md).*
+For anyone deciding whether LLM AutoTune solves their problem; no code. The
+engineering view: [Architecture](architecture.md). 中文：[产品视角](workflow.zh.md)
 
-## The problem it solves
+## The problem
 
-Serving an LLM well depends on getting a pile of deployment parameters right — how
-many GPUs a copy of the model spans, how much memory it reserves, which scheduler
-and decoding tricks are on. The right settings differ per model and per GPU, they
-interact, and the only way to know is to try them. Today an engineer does this by
-hand and records results in a shared doc.
+How well an LLM serves depends on a pile of engine settings: how many GPUs one
+copy spans, how much memory it reserves, which scheduler and decoding options
+are on. The right values differ per model and per GPU, they interact, and the
+only way to know is to try them. LLM AutoTune does the trying: on real GPUs,
+measured the same way every time, ranked against what production runs today.
 
-LLM Autotune automates that loop. The user declares **what to tune** and **what
-"good" means**; the platform tries configurations on real GPUs overnight, measures
-each against a real benchmark, and each morning reports which settings beat
-production — with the evidence.
+## A campaign, end to end
 
-## The journey, end to end
+![Define, lend machines, tune night after night, read the report, promote the winner](assets/campaign-journey.svg)
 
-A unit of work is a **campaign**: "find the best settings for *this* model on
-*these* machines." A user sets it up once; the platform works on it night after night.
+1. **Define** the model and engine, the **search space** (the settings and
+   values to try), the **objective** (one metric to improve, plus **redlines**
+   such as a latency limit that a config must hold), and a schedule.
+2. **Lend machines.** Production machines join for a nightly window, or a
+   Kubernetes cluster lends idle GPUs.
+3. **Tune.** A **policy**, the search algorithm, picks configs; the platform
+   runs and measures them. A large search spans several nights and resumes
+   where it stopped.
+4. **Read the report** each morning.
+5. **Promote** the winner as a merge request against your deploy repo.
 
-![The campaign journey: define → borrow machines → tune night after night → read the report → promote the winner](assets/campaign-journey.svg)
+## One night
 
-**What the user sets up (step 1):** the model & engine · the **search space** (the knobs
-and values to try) · the **objective** and its **redlines** (limits a config must
-respect — a fast config that breaks one is disqualified, not a winner) · the
-machines to borrow · the nightly schedule. Most of these are reusable across
-campaigns.
+![Take over, baseline, search until the deadline, validate the best, hand back](assets/tuning-night.svg)
 
-## What happens each night
+The platform captures the production service so it can be put back exactly,
+then measures production's own config as the **baseline** to beat. The policy
+searches until the deadline; the platform then re-measures the policy's best
+configs itself, restores production, checks it answers, and hands the machine
+back. Nothing starts that cannot finish inside the window, and a measurement
+that decides anything gets its machine to itself.
 
-![One tuning night: take over → search rounds (with a hard cutoff) → wind down → hand back](assets/tuning-night.svg)
+## How a config earns its place
 
-Machines leave production; the platform captures the production service so it can
-be put back exactly, re-runs production's own settings as a **baseline** to beat,
-then tries candidates until morning. Two things protect production: a **hard
-cutoff** (nothing starts that can't finish, and production is restored and
-verified before hand-back), and **clean measurements** (two experiments share a
-machine only during quick checks — anything that decides something gets a machine
-to itself). A large search simply spans several nights.
+![Paper check, launch and health, benchmark, optional confirm, optional verify, winner](assets/eval-funnel.svg)
 
-## How a config earns its keep
+Cheap checks run first, so the expensive ones are spent on configs that might
+win. A config that fails is recorded with why (crashed, out of memory, wrong
+answers, crossed a redline), and the policy sees that too.
 
-The platform runs only so many experiments a night, so cheap checks eliminate bad
-configs first and only survivors reach the costly tests.
+## Testing against today's traffic
 
-![The evaluation funnel: paper check → launch & health → screening benchmark → confirm the best → verify on real traffic → recommended config](assets/eval-funnel.svg)
+The most telling benchmark replays real production traffic, and that traffic
+changes month to month. So the replay dataset is **fresh across campaigns**
+(a new campaign can rebuild it from the latest traffic) and **frozen within
+one** (every config in a campaign faces the same requests). Each result records
+the dataset it ran on, so numbers from different datasets are never compared.
 
-Nothing is wasted: a config that fails is **classified and recorded** (crashed,
-out of memory, garbage output, missed a redline), and that steers the search away
-from similar dead-ends.
+## The report
 
-## Testing against today's traffic, not last month's
+Markdown that pastes into chat or a ticket:
 
-The expensive test replays **real production traffic** — but production traffic
-is a moving target. What users ask the model to do this month is not what they
-asked last month, and a config tuned against a stale sample wins a race nobody is
-running. So the replay dataset is a **rolling** one: a fresh sample of live
-production requests, and *the platform triggers its rebuild* rather than waiting
-on anyone else's schedule. That is how we keep the test meaningful to the latest
-data pattern — every campaign measures against how the model is actually used
-**now**. (This is the loop beneath the journey diagram above: after step 5 the
-winner serves live in production, a collector samples that live traffic, and the
-fresh dataset feeds back in just before step 3.)
+```markdown
+# qwen3-8b-tp-sweep
 
-Two things have to be true at once, and they pull in opposite directions:
+- **Objective**: maximize `output_tps`
+- **Model**: `/models/Qwen3-8B` on `sglang` (`lmsysorg/sglang:v0.5.4`)
+- **Runs**: 14 succeeded, 2 failed, 1 baseline
 
-- **Fresh**, so the test reflects current reality — the platform triggers a new
-  build from the latest traffic when a campaign needs one.
-- **Frozen**, so a campaign's candidates are comparable — ranking configs only
-  means something if every one of them faced the *same* requests, so a campaign
-  **pins** one build for its whole life and never lets it change underneath a
-  measurement.
+## Verdict
 
-The resolution is fresh *between* campaigns, frozen *within* one: each campaign
-locks onto a single dataset for its own leaderboard, and the next campaign rolls
-forward to a newer sample. Every result also records exactly which dataset it was
-measured on, so two campaigns are never quietly compared across different traffic.
+**mem_fraction_static=0.9, tp=2** beats production by **+12.0%** (6,858.7 vs 6,124.0), on a single measurement
 
-## What comes back — the morning report
+## Results
 
-Plain text that pastes straight into chat or a ticket. It leads with a **verdict**, ranks
-the configs **against production**, lists what was **disqualified** or **failed**
-and why, and suggests a **next step**:
+| Config | output_tps | vs production | Runs |
+|---|---|---|---|
+| production (as handed over) | 6,124.0 | — | 41 |
+| mem_fraction_static=0.9, tp=2 | 6,858.7 | +12.0% | 47 |
+| mem_fraction_static=0.85, tp=2 | 6,840.6 | +11.7% | 45 |
 
-![An example morning report: a green verdict, a leaderboard vs production, a disqualified row, a failed row, and a suggested next step](assets/report-card.svg)
+## Ran, but crossed one of the objective's redlines
+## Failures
+## Suggested next steps
+```
 
-Two honest non-answers it gives instead of a false win: *"no meaningful
-difference"* (the lead is inside the measurement-noise band) and *"unstable"* (the
-repeated measurements disagree by more than the lead itself).
+It will not call a win it cannot back: a lead inside the noise band is
+reported as **no meaningful difference**, and repeats that disagree by more
+than the lead as **unstable**.
 
-## Promoting a winner
+## What you can rely on
 
-A campaign's winner is a single, **exact, reproducible** configuration that can be
-handed to the deployment pipeline. Today that's a config applied by hand; the platform
-is built to plug into the team's CICD (a GitLab merge request, and eventually an
-automated A/B test that graduates the winner) without changing anything upstream.
-
-## The guarantees that matter
-
-- **Production is protected** — captured before it's touched, restored and
-  verified before hand-back; nothing destroyed that can't be put back.
-- **Results are comparable across nights** — a campaign scores every config on
-  one frozen sample of real production traffic, with production re-measured each
-  night as the reference point; fresh campaigns roll that sample forward, and
-  each result records which sample it used so cross-campaign comparisons stay honest.
-- **Honest about noise** — it won't call a sub-noise difference a win, and repeats
-  measurements before crowning anything.
-- **Everything is recorded** — settings, versions, exact command, results, failure
-  cause — enough to reproduce any run and audit every decision.
-- **One clear authority** — the part that picks what to try never touches
-  machines; a single component may start, stop, or occupy anything.
-
-## A few terms
-
-- **Campaign** — one tuning job: a model, a search space, an objective, a schedule.
-- **Config** — one specific set of engine settings being tested.
-- **Baseline / canary** — production's current settings, re-measured as the thing
-  to beat and as a health check on the machine.
-- **Redline** — a hard limit (latency, correctness) a config must respect to count.
-- **Screening vs. verification** — the cheap benchmark everyone runs vs. the
-  expensive real-traffic replay reserved for finalists.
-- **Rolling dataset** — the real-traffic sample the verification replays;
-  refreshed from live production so tests track current usage, frozen within a
-  campaign so that campaign's configs stay comparable.
-- **Promotion** — handing a winning config to the pipeline that deploys it.
+- **Production is protected.** Captured before it is touched, restored and
+  checked before the machine goes back.
+- **The platform measures.** Every config is benchmarked the same way, and a
+  policy's own numbers never decide the result.
+- **Results are comparable.** One frozen dataset per campaign, production
+  measured the same way, and the dataset recorded on every result.
+- **Everything is recorded.** Settings, versions, the exact launch command,
+  results and failure causes: enough to reproduce any run.

@@ -42,6 +42,24 @@ export function setLocale(next: Locale): void {
   document.documentElement.lang = next === 'zh' ? 'zh-CN' : 'en'
 }
 
+function merge(into: Record<string, unknown>, from: Record<string, unknown>): void {
+  for (const [key, value] of Object.entries(from)) {
+    const here = into[key]
+    if (value && typeof value === 'object' && here && typeof here === 'object') {
+      merge(here as Record<string, unknown>, value as Record<string, unknown>)
+    } else {
+      into[key] = value
+    }
+  }
+}
+
+/** A plugin's strings (src/plugins), merged into a locale's dictionary: new
+ *  keys are added, nested groups are merged, and the app's own keys stay
+ *  unless the plugin defines them too. */
+export function registerMessages(locale: Locale, messages: Record<string, unknown>): void {
+  merge(DICTS[locale], messages)
+}
+
 function lookup(dict: Record<string, unknown>, key: string): string | undefined {
   let node: unknown = dict
   for (const part of key.split('.')) {

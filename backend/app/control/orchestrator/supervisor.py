@@ -12,6 +12,7 @@ Each tick (non-blocking per run):
 import logging
 import os
 import traceback
+from collections import deque
 from datetime import datetime, timedelta
 
 from sqlalchemy import func, select
@@ -65,6 +66,8 @@ from app.control.orchestrator.lifecycle import (
 from app.control.orchestrator.lifecycle import (
     now as _now,
 )
+from app.control.orchestrator.machine_queue import campaign_key, session_key, waiter_key
+from app.control.orchestrator.occupancy import holds, reservations_on
 from app.control.orchestrator.packing import Placement, choose_next, free_indices
 from app.control.orchestrator.states import can_transition
 from app.control.promotion import winner as winner_of
@@ -1055,11 +1058,7 @@ class Supervisor:
         supervisor's drivers and evaluators, and constructing it per tick
         would re-resolve both every 10 seconds.
         """
-        if self._policy_engine is None:
-            from app.control.orchestrator.policy_session import PolicySessionEngine
-
-            self._policy_engine = PolicySessionEngine(self)
-        self._policy_engine.advance_all(session)
+        self._sessions().advance_all(session)
 
     def _release_machine_if_idle(self, session: Session, machine: Machine) -> None:
         """RESERVED → AVAILABLE, but only when nothing is left holding the box:
@@ -1368,6 +1367,21 @@ class Supervisor:
     # -------------------------------------------------------------- schedule
 
     def _schedule(self, session: Session) -> None:
+        """The machine queue: everything waiting to run, oldest first, one run
+        per turn.
+
+        Waiters are every ACTIVE campaign with a run ready to place, every
+        pending policy session without a machine, and whatever enabled plugins
+        add (`Plugin.queue_waiters`). A campaign that places a run goes to the
+        back, so two campaigns on one machine alternate run by run in arrival
+        order rather than whichever the database lists first draining the queue.
+
+        No queue-jumping: a waiter that cannot fit on a machine it could use
+        (busy, or not enough free cards) holds that machine for the rest of the
+        pass, and nobody behind it may take the cards it is waiting for. That
+        is what lets an 8-card ask ever start next to a stream of 2-card ones.
+        """
+        waiting: list[tuple[tuple, str, object]] = []
         campaigns = session.scalars(
             select(Campaign).where(Campaign.status == CampaignStatus.ACTIVE.value)
         ).all()
@@ -1410,14 +1424,73 @@ class Supervisor:
             # No shortcut applied — measure the baseline by relaunching it, as
             # one more config the pipeline screens (and later verifies).
             self._ensure_relaunch_baseline(session, campaign)
+            waiting.append((campaign_key(session, campaign), "campaign", campaign))
 
-            # Keep placing until the machines are full: an 8-card node running a
-            # single tp=2 config leaves six cards idle all night.
-            while self._start_one(session, campaign):
-                pass
+        for plugin in plugins.enabled():
+            if plugin.queue_waiters is None:
+                continue
+            try:
+                for waiter in plugin.queue_waiters(self, session):
+                    waiting.append((waiter_key(waiter), "plugin", waiter))
+            except Exception:
+                logger.exception("plugin %s: listing queue waiters failed", plugin.name)
+        engine = self._sessions()
+        for row in engine.waiting(session):
+            waiting.append((session_key(row), "session", row))
 
-    def _start_one(self, session: Session, campaign: Campaign) -> bool:
-        """Place one candidate on one machine, if anything fits. True if it did."""
+        queue = deque(sorted(waiting, key=lambda entry: entry[0]))
+        blocked: set[int] = set()
+        while queue:
+            key, kind, item = queue.popleft()
+            busy: set[int] = set()
+            if kind == "plugin":
+                # A plugin's waiter takes its turn like any other: admitted, it
+                # holds what it took (a reservation, say); not, it holds the
+                # machines it reported busy against everyone behind it.
+                try:
+                    with session.begin_nested():
+                        admitted = item.try_admit(session, blocked, busy)
+                except Exception:
+                    logger.exception("queue waiter %s failed", item.label)
+                    admitted = False
+                if not admitted:
+                    blocked |= busy
+                continue
+            if kind == "session":
+                # Reserved = the session holds its machine and cards; the
+                # pending step launches its container next tick.
+                if not engine.try_reserve(session, item, blocked, busy):
+                    blocked |= busy
+                continue
+            if self._start_one(session, item, blocked=blocked, busy=busy):
+                # Keep placing until the machines are full — but its next run
+                # waits behind everyone already waiting, not in front of them.
+                queue.append((key, kind, item))
+            else:
+                blocked |= busy
+
+    def _sessions(self):
+        if self._policy_engine is None:
+            from app.control.orchestrator.policy_session import PolicySessionEngine
+
+            self._policy_engine = PolicySessionEngine(self)
+        return self._policy_engine
+
+
+    def _start_one(
+        self,
+        session: Session,
+        campaign: Campaign,
+        *,
+        blocked: set[int] | frozenset[int] = frozenset(),
+        busy: set[int] | None = None,
+    ) -> bool:
+        """Place one candidate on one machine, if anything fits. True if it did.
+
+        `blocked` are machines an older waiter is holding; `busy` collects the
+        machines this campaign could use but found occupied, so the queue can
+        hold them for it against everyone behind."""
+        busy = set() if busy is None else busy
         pending = session.scalars(
             select(Candidate)
             .where(
@@ -1467,7 +1540,7 @@ class Supervisor:
         # on one box (or refuse it) — the exact deployment the operator did not
         # ask for. Handled entirely separately so the two paths cannot half-apply.
         if campaign.node_group:
-            return self._start_gang(session, campaign, pending, by_id)
+            return self._start_gang(session, campaign, pending, by_id, blocked=blocked, busy=busy)
 
         for machine in self._usable_machines(session, campaign):
             # Experiments need production off the machine: captured (so it can
@@ -1481,6 +1554,16 @@ class Supervisor:
             # experiments next to whatever is already serving.
             if machine.baseline_status != BaselineStatus.CLEARED.value:
                 continue
+            if machine.id in blocked and not holds(session, machine, campaign.id):
+                busy.add(machine.id)
+                continue
+            # Admitted to another campaign whose run is not placed yet: held,
+            # exactly as if that run were already here.
+            held = reservations_on(session, machine, exclude_campaign=campaign.id)
+            if held and (not campaign.share_machine or any(not r.share for r in held)):
+                busy.add(machine.id)
+                continue
+            reserved_cards = sum(r.cards for r in held)
 
             # A machine deployed as part of a live multi-node run is closed to
             # single-node work even on cards the gang is not using: its ranks
@@ -1492,10 +1575,12 @@ class Supervisor:
             # grouping a pair of boxes does not reserve them against the
             # single-node work they do the rest of the night.
             if machine_hosts_live_gang(session, machine.id):
+                busy.add(machine.id)
                 continue
 
             live = self._live_runs_on(session, machine)
             if live and not self._may_share(session, campaign, live):
+                busy.add(machine.id)
                 continue
             # A container still tearing down holds its cards and port until the
             # janitor confirms it gone — count it alongside live runs so the
@@ -1514,19 +1599,27 @@ class Supervisor:
             # must read as "all", not "none": read as none, the scheduler
             # placed two experiments on top of a run using the whole machine.
             if machine.gpu_count > 0 and any(not (n.gpu_indices or []) for n in nodes):
+                busy.add(machine.id)
                 continue
 
             if machine.gpu_count <= 0:
                 # A CPU-only box (the mock/test host) has no cards to divide, so
                 # it hosts exactly one run and pins nothing.
-                if blockers:
+                if blockers or held:
+                    busy.add(machine.id)
                     continue
                 chosen, cards = by_id[placements[0].candidate_id], []
             else:
                 taken = {index for node in nodes for index in (node.gpu_indices or [])}
                 free = free_indices(machine.gpu_count, taken)
+                # Cards a sharing reservation will take are not ours to use.
+                free = free[: max(0, len(free) - reserved_cards)]
                 placement = choose_next(len(free), placements)
                 if placement is None:
+                    # Wait for it only if something pending fits the machine
+                    # at all; a config wider than the box is not a waiter here.
+                    if choose_next(machine.gpu_count, placements) is not None:
+                        busy.add(machine.id)
                     continue  # nothing pending fits in what is left
                 chosen = by_id[placement.candidate_id]
                 cards = free[: placement.cards]
@@ -1541,6 +1634,9 @@ class Supervisor:
         campaign: Campaign,
         pending: list[Candidate],
         by_id: dict[int, Candidate],
+        *,
+        blocked: set[int] | frozenset[int] = frozenset(),
+        busy: set[int] | None = None,
     ) -> bool:
         """Place one candidate across the WHOLE node group, or nothing at all.
 
@@ -1565,9 +1661,21 @@ class Supervisor:
             # Leaving it to the single-node packer would be right, but the
             # campaign pinned a group, so say so instead of silently ignoring it.
             return False
-        if not self._group_is_idle(session, group):
-            return False
         members = [machine for _, machine in ranked]
+        if (
+            not self._group_is_idle(session, group)
+            or any(m.id in blocked and not holds(session, m, campaign.id) for m in members)
+            or any(reservations_on(session, m, exclude_campaign=campaign.id) for m in members)
+        ):
+            # Hold every member it could use: a single-node run slipping onto
+            # one as it frees would push the gang back indefinitely.
+            if busy is not None and all(
+                accepts_new_work(m) and not m.needs_attention
+                and m.baseline_status == BaselineStatus.CLEARED.value
+                for m in members
+            ):
+                busy.update(m.id for m in members)
+            return False
         # Defensive: campaign save refuses a non-ssh group, but a machine's
         # substrate can be edited afterwards. Launching N separate k8s
         # Deployments would be N single-node engines, not a gang, so wait rather
@@ -2341,6 +2449,21 @@ class Supervisor:
         ui = self.settings.public_ui_url.rstrip("/")
         if ui:
             context["source_url"] = f"{ui}/campaigns/{campaign.id}"
+        # What plugins add to the submission (`Plugin.submission_extras`): a
+        # different listing name or way back, or fields of their own.
+        if session is not None:
+            for plugin in plugins.enabled():
+                if plugin.submission_extras is None:
+                    continue
+                try:
+                    extra = dict(plugin.submission_extras(session, run, dict(context)) or {})
+                except Exception:
+                    logger.exception("plugin %s: submission extras failed", plugin.name)
+                    continue
+                for key in ("contributor", "source_url"):
+                    if key in extra:
+                        context[key] = extra.pop(key)
+                context.setdefault("extra_body", {}).update(extra)
         return context
 
     def _node_assignments(self, session: Session, run: Run) -> list[NodeAssignment]:

@@ -206,3 +206,131 @@ def test_bootstrap_builds_plugin_schemas_after_the_platforms_and_seeds_them_last
         "broken seed",
     ]
     assert "plugin second: bootstrap failed" in caplog.text
+
+
+# ------------------------------------------------------------------ routes, docs
+
+
+def test_routes_are_mounted_and_their_tags_described():
+    from fastapi import APIRouter, FastAPI
+    from fastapi.testclient import TestClient
+
+    router = APIRouter(prefix="/things", tags=["things"])
+
+    @router.get("")
+    def things():
+        return ["a"]
+
+    app = FastAPI(openapi_tags=[{"name": "core"}])
+    plugins.mount(app, [Plugin(
+        name="things", api_version=PLUGIN_API_VERSION, routers=(router,),
+        openapi_tags=({"name": "things", "description": "Things a plugin keeps."},),
+    )], "/api")
+
+    client = TestClient(app)
+    assert client.get("/api/things").json() == ["a"]
+    tags = {t["name"]: t.get("description") for t in client.get("/openapi.json").json()["tags"]}
+    assert tags == {"core": None, "things": "Things a plugin keeps."}
+
+
+# ------------------------------------------------------------------ submissions
+
+
+def _run_on_a_machine():
+    from app.db.models import Campaign, Candidate, Machine, MachineState, Run, User
+
+    supervisor, factory = _supervisor()
+    with factory() as session:
+        session.add(User(id=1, username="alice", password_hash="x"))
+        session.add(Machine(id=1, name="node-1", host="h", gpu_count=8, gpu_type="H100",
+                            state=MachineState.AVAILABLE.value))
+        session.add(Campaign(id=1, owner_id=1, name="c", engine="sglang", image="i",
+                             model_path="/m", served_model_name="m", search_space={}))
+        session.add(Candidate(id=1, campaign_id=1, config={"tp": 2}, config_hash="h"))
+        session.add(Run(id=1, campaign_id=1, candidate_id=1, machine_id=1, status="benching"))
+        session.commit()
+    return supervisor, factory
+
+
+def test_a_plugin_adds_to_what_a_submission_carries(monkeypatch):
+    from app.db.models import Run
+
+    supervisor, factory = _run_on_a_machine()
+    seen = {}
+
+    def extras(session, run, context):
+        seen.update(context)
+        return {"contributor": "Team A", "board_token": "t0k"}
+
+    monkeypatch.setattr(plugins, "enabled", lambda: (
+        Plugin(name="boards", api_version=PLUGIN_API_VERSION, submission_extras=extras),
+    ))
+    with factory() as session:
+        context = supervisor._bench_context(session.get(Run, 1))
+
+    assert seen["hardware"]["card_type"] == "H100", "the plugin sees what will be sent"
+    assert context["contributor"] == "Team A"
+    assert context["extra_body"] == {"board_token": "t0k"}
+
+
+def test_a_failing_plugin_leaves_the_submission_as_it_was(monkeypatch, caplog):
+    from app.db.models import Run
+
+    supervisor, factory = _run_on_a_machine()
+
+    def broken(session, run, context):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(plugins, "enabled", lambda: (
+        Plugin(name="boards", api_version=PLUGIN_API_VERSION, submission_extras=broken),
+    ))
+    with factory() as session:
+        context = supervisor._bench_context(session.get(Run, 1))
+
+    assert context["contributor"] == "autotune:alice" and "extra_body" not in context
+    assert "plugin boards: submission extras failed" in caplog.text
+
+
+def test_extra_fields_reach_the_body_but_never_replace_the_endpoint():
+    import json
+
+    import httpx
+
+    from app.evaluation import LLMBenchClient
+
+    seen: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(json.loads(request.content))
+        return httpx.Response(202, json={"id": 1})
+
+    client = LLMBenchClient(base_url="http://t", api_key="llmb_k",
+                            transport=httpx.MockTransport(handler), sleep=lambda _s: None)
+    client.submit("b", "http://engine", "m",
+                  extra_body={"board_token": "t0k", "endpoint_url": "http://elsewhere"})
+
+    assert seen[0]["board_token"] == "t0k"
+    assert seen[0]["endpoint_url"] == "http://engine"
+
+
+# ------------------------------------------------------------------ promotion
+
+
+def test_a_plugin_names_the_winner_of_a_campaign_it_runs():
+    from types import SimpleNamespace
+
+    from app.control.promotion.winner import deploy_branch_of, origin_of
+    from app.plugins import PromotionOrigin
+
+    campaign = SimpleNamespace(id=3, name="entrant", deploy_branch="")
+    told = PromotionOrigin(kind="study", page="/studies/9", description="study **X**",
+                           deploy_branch="release/x", remember_branch=False)
+
+    origin = origin_of(campaign, 812, told)
+    assert origin.kind == "study" and origin.page == "/studies/9"
+    assert origin.describe() == "study **X**" and origin.remember_branch is False
+    assert deploy_branch_of(campaign, told) == "release/x"
+
+    plain = origin_of(campaign, 812)
+    assert plain.page == "/campaigns/3" and "campaign **entrant**" in plain.describe()
+    assert deploy_branch_of(SimpleNamespace(deploy_branch="release/own"), told) == "release/own"

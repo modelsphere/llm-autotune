@@ -35,3 +35,4 @@ deploy/helm/**/*.tgz
 .vscode/
 .idea/
 .quickstart/
+.demo/

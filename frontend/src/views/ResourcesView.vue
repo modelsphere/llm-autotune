@@ -1,16 +1,16 @@
 <script setup lang="ts">
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { computed, onMounted, onUnmounted, ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { computed, onMounted, ref } from 'vue'
 import { api, type Cluster, type Machine, type MachineGroup, type MachineGroupPreflight, type MachineLifecycle } from '../api/client'
 import InfoHint from '../components/InfoHint.vue'
+import LinkButton from '../components/LinkButton.vue'
+import { usePoll } from '../utils/poll'
 import { relativeTime } from '../utils/time'
 
 /** Reaching `window` from a template needs it bound explicitly under
  *  `<script setup>`; the component instance is not the global object. */
 const openDocs = () => window.open('/api/docs', '_blank')
 
-const router = useRouter()
 const machines = ref<Machine[]>([])
 const groups = ref<MachineGroup[]>([])
 /** The Kubernetes clusters a k8s machine may land in. `cluster_id === null` on
@@ -24,7 +24,7 @@ const autoRestore = ref(true)
 const lifecycle = ref<Record<number, MachineLifecycle>>({})
 const showAdd = ref(false)
 const busy = ref(false)
-let timer: number | undefined
+const poll = usePoll(() => load(), 10000)
 
 const emptyForm = () => ({
   name: '',
@@ -481,6 +481,44 @@ function menu(machine: Machine, command: string) {
   return baselineAction(machine, command as 'capture' | 'clear' | 'restore')
 }
 
+/** "Can the platform reach this machine at all?" The backend walks the path a
+ *  launch takes (ssh → docker → GPUs, or credential → RBAC → node → endpoint)
+ *  and stops at the first step a launch could not get past. A k8s machine may
+ *  also place a throwaway pod on its node — the only way a guest credential,
+ *  which cannot read nodes, can confirm the node is there. */
+type SmokeCheck = { name: string; status: string; detail: string }
+const smoke = ref<{
+  machine: Machine | null
+  pod: boolean
+  running: boolean
+  result: { ok: boolean; checks: SmokeCheck[] } | null
+  error: string
+}>({ machine: null, pod: false, running: false, result: null, error: '' })
+const showSmoke = ref(false)
+function openSmoke(machine: Machine) {
+  smoke.value = { machine, pod: false, running: false, result: null, error: '' }
+  showSmoke.value = true
+  void runSmoke()
+}
+async function runSmoke() {
+  const machine = smoke.value.machine
+  if (!machine) return
+  smoke.value.running = true
+  smoke.value.result = null
+  smoke.value.error = ''
+  try {
+    const { data } = await api.post(`/machines/${machine.id}/smoke-test`, null, {
+      params: { pod: smoke.value.pod },
+      timeout: 120_000,
+    })
+    smoke.value.result = data
+  } catch (error: any) {
+    smoke.value.error = error.response?.data?.detail ?? 'Smoke test failed to run'
+  } finally {
+    smoke.value.running = false
+  }
+}
+
 /** Re-read a k8s machine's GPU count and card type from the cluster. The
  *  capacity behind a node-slice drifts as nodes are added/drained/relabelled,
  *  so this is the "read it from the source of truth" button. Surfaces the
@@ -640,9 +678,8 @@ onMounted(async () => {
     gpuTypes.value = []
   }
   load()
-  timer = window.setInterval(load, 10000)
+  poll.start()
 })
-onUnmounted(() => window.clearInterval(timer))
 </script>
 
 <template>
@@ -799,6 +836,7 @@ onUnmounted(() => window.clearInterval(timer))
           </el-button>
           <span v-else class="muted tiny">handing back…</span>
 
+          <el-button size="small" text @click="openSmoke(m)">Smoke test</el-button>
           <el-dropdown trigger="click" @command="(a: any) => menu(m, a)">
             <el-button size="small" text :loading="busyBaseline === m.id">More ▾</el-button>
             <template #dropdown>
@@ -867,10 +905,10 @@ onUnmounted(() => window.clearInterval(timer))
 
       <div v-if="stageOf(m)?.campaigns?.length" class="for">
         <span class="muted tiny">for</span>
-        <el-button v-for="c in stageOf(m)!.campaigns" :key="c.id" link type="primary"
-          size="small" @click="router.push(`/campaigns/${c.id}`)">
+        <LinkButton v-for="c in stageOf(m)!.campaigns" :key="c.id" link type="primary"
+          size="small" :to="`/campaigns/${c.id}`">
           {{ c.name || `campaign ${c.id}` }}
-        </el-button>
+        </LinkButton>
       </div>
 
       <p v-if="m.baseline_status === 'cleared' && !m.baseline?.services?.length"
@@ -926,12 +964,11 @@ onUnmounted(() => window.clearInterval(timer))
         </div>
         <div class="grid-2">
           <el-form-item :label="form.driver === 'k8s' ? 'GPU count (pool to borrow)' : 'GPU count'">
-            <el-input-number v-model="form.gpu_count" :min="1" :max="64"
-              :disabled="form.driver === 'k8s'" />
+            <el-input-number v-model="form.gpu_count" :min="1" :max="64" />
           </el-form-item>
           <el-form-item label="GPU type">
             <el-select v-model="form.gpu_type" clearable placeholder="(any card)"
-              :disabled="form.driver === 'k8s'" style="width: 100%">
+              style="width: 100%">
               <el-option v-for="t in gpuTypes" :key="t" :label="t" :value="t" />
             </el-select>
           </el-form-item>
@@ -949,7 +986,10 @@ onUnmounted(() => window.clearInterval(timer))
         </el-form-item>
         <div v-if="form.driver === 'k8s'" class="muted tiny" style="margin: -6px 0 10px">
           GPU count and type are read from the cluster on save (and via
-          <strong>Refresh capacity</strong> later) — no need to type them.
+          <strong>Refresh capacity</strong> later) and overwrite what is set here. Set
+          them anyway: a credential that cannot read nodes (a cluster we are a guest
+          on) leaves these values as the only record, and a machine with no GPU type
+          is passed over by anything that matches machines by card type.
         </div>
         <template v-if="form.driver !== 'k8s'">
           <el-form-item label="Interior address (multi-node)">
@@ -1065,6 +1105,40 @@ onUnmounted(() => window.clearInterval(timer))
       </template>
       <template #footer>
         <el-button @click="showGroupPreflight = false">Close</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="showSmoke" :title="`Smoke test · ${smoke.machine?.name ?? ''}`" width="640px">
+      <div v-if="smoke.running" class="muted">
+        {{ smoke.pod
+          ? 'Checking the path a launch takes, then placing a probe pod (up to ~40 s)…'
+          : 'Checking the path a launch takes…' }}
+      </div>
+      <el-alert v-else-if="smoke.error" type="error" :closable="false" :title="smoke.error" />
+      <template v-else-if="smoke.result">
+        <el-alert v-if="smoke.result.ok" type="success" :closable="false" show-icon
+          title="The platform can reach this machine"
+          description="Reachability only — a campaign's preflight still checks the model, image and ports."
+          style="margin-bottom: 12px" />
+        <el-alert v-else type="error" :closable="false" show-icon
+          title="A launch on this machine would fail"
+          description="The first failed step is the one to fix; later steps were not tried."
+          style="margin-bottom: 12px" />
+        <div v-for="c in smoke.result.checks" :key="c.name" class="pf-check">
+          <el-tag size="small" :type="(checkTag[c.status] as any)" effect="plain">
+            {{ c.status }}
+          </el-tag>
+          <span class="pf-label">{{ c.name }}</span>
+          <span class="muted tiny">{{ c.detail }}</span>
+        </div>
+      </template>
+      <template #footer>
+        <el-checkbox v-if="smoke.machine?.driver === 'k8s'" v-model="smoke.pod"
+          :disabled="smoke.running" style="margin-right: 12px">
+          Also place a probe pod on the node (created and deleted; asks for no GPUs)
+        </el-checkbox>
+        <el-button :loading="smoke.running" @click="runSmoke">Run again</el-button>
+        <el-button @click="showSmoke = false">Close</el-button>
       </template>
     </el-dialog>
 

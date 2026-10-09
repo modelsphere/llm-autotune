@@ -204,6 +204,64 @@ class PolicySessionEngine:
 
     # -- machine allocation ------------------------------------------------------
 
+    def waiting(self, db: Session) -> list[PolicySession]:
+        """Pending sessions with no machine yet — waiters in the machine queue.
+        One the pending step is about to fail (no API URL, no policy row) or a
+        human is aborting is not waiting for hardware."""
+        if not self.sup.settings.public_api_url:
+            return []
+        out = []
+        for row in db.scalars(
+            select(PolicySession)
+            .where(
+                PolicySession.status == PolicySessionStatus.PENDING.value,
+                PolicySession.machine_id.is_(None),
+                PolicySession.abort_requested_at.is_(None),
+            )
+            .order_by(PolicySession.id)
+        ).all():
+            campaign = db.get(Campaign, row.campaign_id)
+            if campaign is None or campaign.status != CampaignStatus.ACTIVE.value:
+                continue
+            if db.get(Policy, row.policy_id) is None:
+                continue
+            out.append(row)
+        return out
+
+    def try_reserve(
+        self, db: Session, session: PolicySession, blocked: set[int], busy: set[int]
+    ) -> bool:
+        """Take the first machine this session fits and no older waiter holds,
+        or report through `busy` the ones it could use once they free up."""
+        campaign = db.get(Campaign, session.campaign_id)
+        policy = db.get(Policy, session.policy_id)
+        if campaign is None or policy is None:
+            return False
+        needed = settings_of(campaign).cards if campaign.share_machine else 0
+        for m in self.sup._usable_machines(db, campaign):
+            if m.baseline_status != BaselineStatus.CLEARED.value:
+                continue  # the baseline lifecycle's to move, not the queue's
+            if m.id in blocked:
+                busy.add(m.id)
+                continue
+            allocation = self._allocation_on(db, campaign, policy, m)
+            if allocation is None:
+                if (needed or 0) <= (m.gpu_count or 0):
+                    busy.add(m.id)
+                continue
+            cards, ports = allocation
+            session.machine_id = m.id
+            session.gpu_indices = cards
+            session.ports = ports
+            session.container_name = f"autotune-policy-{session.id}"
+            self.sup._event(
+                db, "policy_session_reserved", campaign_id=campaign.id,
+                payload={"session_id": session.id, "machine": m.name,
+                         "gpus": cards, "ports": ports},
+            )
+            return True
+        return False
+
     def _allocation_on(
         self, db: Session, campaign: Campaign, policy: Policy, machine: Machine
     ) -> tuple[list[int], list[int]] | None:
@@ -220,13 +278,17 @@ class PolicySessionEngine:
         a dying engine has not released.
         """
         from app.control.orchestrator.lifecycle import machine_has_live_session
+        from app.control.orchestrator.occupancy import reservations_on
 
         live_runs = self.sup._live_runs_on(db, machine)
         dying = self.sup._teardown_pending_on(db, machine)
+        # A campaign admitted to this machine whose run is not placed yet holds
+        # it as surely as that run would (orchestrator/occupancy.py).
+        held = reservations_on(db, machine, exclude_campaign=campaign.id)
         n_ports = policy.ports or 1
         base = campaign.service_port or 28200
         if not campaign.share_machine:
-            if machine_has_live_session(db, machine) or live_runs:
+            if machine_has_live_session(db, machine) or live_runs or held:
                 return None
             return list(range(machine.gpu_count or 0)), [base + i for i in range(n_ports)]
 
@@ -242,6 +304,8 @@ class PolicySessionEngine:
             others = db.scalars(select(Campaign).where(Campaign.id.in_(tenant_campaigns))).all()
             if not all(o.share_machine for o in others):
                 return None  # someone here wanted the box to themselves
+        if any(not r.share for r in held):
+            return None
         held_cards = {i for t in tenants for i in (t.gpu_indices or [])}
         held_cards |= {i for r in live_runs + dying for i in (r.gpu_indices or [])}
         held_ports = {p for t in tenants for p in (t.ports or [])}
@@ -250,6 +314,7 @@ class PolicySessionEngine:
         total = machine.gpu_count or 0
         needed = settings_of(campaign).cards or total
         free = [i for i in range(total) if i not in held_cards]
+        free = free[: max(0, len(free) - sum(r.cards for r in held))]
         if total and len(free) < max(1, needed):
             return None
         ports: list[int] = []
@@ -311,33 +376,20 @@ class PolicySessionEngine:
             )
             return
 
-        # Reserve a machine once. A prior attempt that set machine_id but did not
-        # finish launching (a worker restart mid-tick) resumes on the SAME
-        # machine — re-selecting would exclude it, since this still-pending
-        # session now counts as a live session on it.
+        # The machine is the machine queue's to hand out (Supervisor._schedule
+        # calls try_reserve in arrival order, alongside every campaign's next
+        # run). Once it has, the reservation is durable: a launch interrupted by
+        # a worker restart resumes on the SAME machine, which this still-pending
+        # session now holds as a live session.
         if session.machine_id is None:
-            target, cards, ports = None, [], []
-            for m in self.sup._usable_machines(db, campaign):
-                if m.baseline_status != BaselineStatus.CLEARED.value:
-                    continue
-                allocation = self._allocation_on(db, campaign, policy, m)
-                if allocation is not None:
-                    target, cards, ports = m, *allocation
-                    break
-            if target is None:
-                return  # baseline lifecycle still busy, or no room on a shared box
-            session.machine_id = target.id
-            session.gpu_indices = cards
-            session.ports = ports
-            session.container_name = f"autotune-policy-{session.id}"
-        else:
-            target = db.get(Machine, session.machine_id)
-            if target is None:
-                self._terminate(
-                    db, session, PolicySessionStatus.FAILED,
-                    "reserved machine vanished before launch", failure_class="launch",
-                )
-                return
+            return
+        target = db.get(Machine, session.machine_id)
+        if target is None:
+            self._terminate(
+                db, session, PolicySessionStatus.FAILED,
+                "reserved machine vanished before launch", failure_class="launch",
+            )
+            return
 
         token, prefix, key_hash = apikeys.mint()
         # The key rides the MAIN transaction, alongside the session row it points

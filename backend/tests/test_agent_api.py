@@ -25,7 +25,7 @@ _counter = count()
 
 IMAGE = "registry.example.com/sglang:v0.5.15-cu129"
 SWEEP = "perf_guidellm_sweep"
-SLUG = "bh-glm-h100"
+SLUG = "glm-h100-screen"
 
 SWEEP_PARAMS = {
     "input_tokens": 8000, "output_tokens": 1000, "concurrencies": "1,2,4,8",
@@ -487,6 +487,10 @@ async def test_markdown_rendering(stack):
     assert best["output_tps_per_gpu"] == 90.0 and best["input_tps_per_gpu"] == 10.0
     d_best = next(a for a in doc["attempts"] if a["run_id"] == ids["D"])
     assert d_best["deltas"]["scenarios"][0]["best_level"]["total_tps_per_gpu"]["pct"] == 50.0
+    # ...and the same rate on one 8-GPU machine, whatever cards the config used
+    assert best["total_tps_per_machine"] == 800.0 and best["output_tps_per_machine"] == 720.0
+    machine = d_best["deltas"]["scenarios"][0]["best_level"]["total_tps_per_machine"]
+    assert machine["pct"] == 50.0 and machine["improved"] is True
 
 
 async def test_failed_attempts_stay_in_the_comparison(stack):
@@ -726,6 +730,14 @@ async def test_report_blocks_are_listed_checked_and_saved(stack):
     assert any("no scenario 'nope'" in x for x in problems)
     assert any("no attempt '7'" in x for x in problems)
 
+    captioned = BLOCKED_REPORT + "\n**Figure 1. Throughput on 8 × H100.** Read it left to right.\n"
+    bad = await http.post("/api/agent/v1/reports", json={**body, "markdown": captioned})
+    assert bad.status_code == 422
+    assert [x["block"] for x in bad.json()["detail"]["reasons"]] == ["caption"]
+    zh_caption = BLOCKED_REPORT + "\n**图 2 · 吞吐随并发的变化。**\n"
+    bad = await http.post("/api/agent/v1/reports", json={**body, "markdown": zh_caption})
+    assert bad.status_code == 422
+
     labels = await http.post("/api/agent/v1/reports", json={**body, "labels": ["only one"]})
     assert labels.status_code == 422 and labels.json()["detail"]["error"] == "bad_labels"
 
@@ -750,6 +762,23 @@ async def test_report_blocks_are_listed_checked_and_saved(stack):
 
     detail = (await http.get(f"/api/agent/v1/reports/{en['id']}")).json()
     assert [x["lang"] for x in detail["translations"]] == ["en", "zh"]
+
+
+async def test_a_report_may_name_its_scenarios(stack):
+    http, factory = stack
+    ids = await _seed_five(factory)
+    body = {"title": "t", "baseline_run_id": ids["A"],
+            "attempt_run_ids": [ids["C"], ids["D"]], "markdown": BLOCKED_REPORT}
+    named = {"perf_guidellm_sweep": {
+        "name": "Agent long-context", "description": "One call carrying a long task context."}}
+    saved = await http.post("/api/agent/v1/reports", json={**body, "scenario_labels": named})
+    assert saved.status_code == 201, saved.text
+    assert saved.json()["scenario_labels"] == named
+
+    unknown = await http.post("/api/agent/v1/reports", json={
+        **body, "scenario_labels": {"not_a_scenario": {"name": "x"}}})
+    assert unknown.status_code == 422
+    assert unknown.json()["detail"]["error"] == "bad_scenario_labels"
 
 
 async def test_a_report_exports_as_one_self_contained_html_file(stack, tmp_path, monkeypatch):
@@ -854,3 +883,11 @@ def test_the_fixture_payload_is_what_the_harvest_would_freeze():
     assert reports[0]["params"]["input_tokens"] == 8000
 
 
+
+
+def test_a_flag_stored_as_text_is_not_a_change():
+    from app.agent.comparison import _dict_diff
+
+    diff = _dict_diff({"tp": 2, "mem_fraction_static": 0.9, "fp8": True, "x": "a"},
+                      {"tp": "2", "mem_fraction_static": "0.90", "fp8": "true", "x": "b"})
+    assert diff["changed"] == {"x": {"from": "a", "to": "b"}}

@@ -53,3 +53,13 @@ body {
   --el-tag-border-color: #bfdbfe;
   --el-tag-text-color: #1d4ed8;
 }
+
+/* An in-app link that used to be a bare click handler (a name in a table, a
+   card title, a campaign reference). It is a real <a href> now so a middle-
+   click or Ctrl/Cmd+click opens a new tab — but it keeps the look of whatever
+   it replaced: no browser link blue, no underline. A scoped colour (e.g. a
+   view's `.link`) still wins over this. */
+a.nav-link {
+  color: inherit;
+  text-decoration: none;
+}

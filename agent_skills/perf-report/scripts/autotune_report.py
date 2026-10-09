@@ -3,15 +3,22 @@
 
     autotune_report.py campaigns
     autotune_report.py campaign <id>
-    autotune_report.py compare --baseline s1 --attempts s3,s4 --out work/ [--force]
+    autotune_report.py compare --baseline 41 --attempts 47,52 --out work/ [--force]
     autotune_report.py check --markdown work/report.en.md --comparison work/comparison.json
     autotune_report.py save --title T --markdown work/report.en.md
         --comparison work/comparison.json [--lang en] [--translation-of ID] [--labels A,B]
+        [--scenarios work/scenarios.en.json]
 
 `compare` writes work/comparison.json (the facts) and work/blocks.md (every
 chart/table/command block these runs can draw, ready to paste). `check` runs
 every save-time check without saving. `save` prints the report id — pass it
 as --translation-of when saving the other language.
+
+`--scenarios` takes a JSON file naming the scenarios in this report's
+language, so every chart and table calls them what the prose does:
+
+    {"perf_guidellm_sweep": {"name": "Agent long-context",
+                             "description": "One agent call carrying a long task context."}}
 
 Environment: AUTOTUNE_URL (the platform API), AUTOTUNE_API_KEY, and optionally
 AUTOTUNE_UI_URL (the web UI, for full report links). Standard library only.
@@ -107,9 +114,25 @@ def cmd_campaign(args: argparse.Namespace) -> None:
         print(json.dumps(doc, indent=2, ensure_ascii=False))
 
 
+def _fresh(out: Path) -> None:
+    """Start the work dir empty. Whatever an earlier report left there (its
+    markdown, scenario names, comparison) is moved to .previous/<time>/, not
+    deleted — and not read: a report is written from this comparison only."""
+    out.mkdir(parents=True, exist_ok=True)
+    old = [p for p in out.iterdir() if p.name != ".previous"]
+    if not old:
+        return
+    import time
+    dest = out / ".previous" / time.strftime("%Y%m%dT%H%M%S")
+    dest.mkdir(parents=True, exist_ok=True)
+    for p in old:
+        p.rename(dest / p.name)
+    print(f"moved {len(old)} earlier file(s) out of {out} to {dest} — do not read them")
+
+
 def cmd_compare(args: argparse.Namespace) -> None:
     out = Path(args.out)
-    out.mkdir(parents=True, exist_ok=True)
+    _fresh(out)
     doc = _get(
         "/api/agent/v1/comparison",
         baseline=args.baseline, attempts=args.attempts,
@@ -121,11 +144,25 @@ def cmd_compare(args: argparse.Namespace) -> None:
     print(f"wrote {out / 'comparison.json'}")
     print(f"baseline: {doc['baseline']['label']} (run {doc['baseline']['run_id']})")
     for a in doc["attempts"]:
-        head = a["deltas"]["headline"].get("ranking_value") or {}
-        pct = head.get("pct")
         print(f"attempt {a['position']}: {a['label']} (run {a['run_id']}) "
-              f"status={a['results']['status']} "
-              f"{'Δ ' + format(pct, '+.1f') + '%' if pct is not None else ''}")
+              f"status={a['results']['status']}")
+    # The numbers a report leads with: normalized throughput (8 GPUs) at each
+    # config's best concurrency within SLO, and its change.
+    print("\nnormalized throughput (8 GPUs) at the best concurrency within SLO:")
+    runs = [doc["baseline"], *doc["attempts"]]
+    for s0 in doc["baseline"]["results"]["scenarios"]:
+        parts = []
+        for r in runs:
+            s = next((x for x in r["results"]["scenarios"] if x["key"] == s0["key"]), None)
+            best = (s or {}).get("best_level") or {}
+            v = best.get("total_tps_per_machine")
+            text = f"{v:,.0f} tok/s @ c{best.get('concurrency'):g}" if v is not None else "—"
+            if r is not doc["baseline"]:
+                d = next((x for x in r["deltas"]["scenarios"] if x["key"] == s0["key"]), {})
+                pct = ((d.get("best_level") or {}).get("total_tps_per_machine") or {}).get("pct")
+                text += f" ({pct:+.2f}%)" if pct is not None else ""
+            parts.append(text)
+        print(f"  {s0['key']} ({s0['label']}): " + "  →  ".join(parts))
     if not doc["comparable"]:
         print("\nNOT COMPARABLE — the report must say so. Reasons:")
         for r in doc["reasons"]:
@@ -177,6 +214,8 @@ def _report_body(args: argparse.Namespace) -> dict[str, Any]:
         body["translation_of"] = int(args.translation_of)
     if args.labels:
         body["labels"] = [x.strip() for x in args.labels.split(",")]
+    if getattr(args, "scenarios", ""):
+        body["scenario_labels"] = json.loads(Path(args.scenarios).read_text(encoding="utf-8"))
     return body
 
 
@@ -222,6 +261,8 @@ def main() -> None:
         x.add_argument("--lang", default="en", choices=("en", "zh"))
         x.add_argument("--labels", default="", help="public config names, baseline first "
                        "(default: Baseline, Optimized)")
+        x.add_argument("--scenarios", default="", help="JSON file: scenario key -> "
+                       "{name, description}, in this report's language")
         x.set_defaults(fn=fn)
     args = p.parse_args()
     args.fn(args)

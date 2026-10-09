@@ -7,7 +7,7 @@ name: release
 #   v0.1.0-rc1  -> 4pdosc/<image>:0.1.0-rc1 only; a candidate never takes latest
 #
 # The mock engine, the operator and the policies are built from source by
-# whoever uses them (deploy/quickstart.sh builds the first and loads it into the
+# whoever uses them (deploy/demo.sh builds the first and loads it into the
 # cluster); none of them is published.
 #
 # Credentials are the org secrets DOCKERHUB_USERNAME and DOCKERHUB_TOKEN.
