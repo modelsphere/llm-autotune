@@ -390,7 +390,13 @@ else
   src="$STATE/llm-bench-$LLMBENCH_VERSION"
   if [ ! -d "$src" ]; then
     say "Fetching the LLMBench $LLMBENCH_VERSION chart"
-    git clone -q --depth 1 --branch "v$LLMBENCH_VERSION" https://github.com/modelsphere/llm-bench "$src"
+    # Fetched by tag rather than cloned: a shallow clone of an annotated tag
+    # warns, and a checkout of one prints git's detached-HEAD advice.
+    rm -rf "$src.partial"
+    git init -q "$src.partial"
+    git -C "$src.partial" fetch -q --depth 1 https://github.com/modelsphere/llm-bench tag "v$LLMBENCH_VERSION"
+    git -C "$src.partial" -c advice.detachedHead=false checkout -q "v$LLMBENCH_VERSION"
+    mv "$src.partial" "$src"
   fi
   bench_chart="$src/deploy/helm/llm-bench"
 fi

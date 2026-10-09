@@ -93,9 +93,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   updates for the backend, frontend and operator dependencies and the Actions.
 - `NOTICE` lists every third-party component the images ship, with corrected
   licenses (Starlette and Uvicorn are BSD-3-Clause).
+- The `policies` submodule points at llm-autotune-policies 5e6f62b: its README
+  shows how to register a policy with `POST /api/policies`, and it gains a
+  NOTICE and a CHANGELOG. The policies themselves are unchanged.
 
 ### Fixed
 
+- `deploy/quickstart.sh` no longer prints git's "is not a commit" warning and
+  detached-HEAD advice while fetching the LLMBench chart, and a fetch that
+  fails part-way is retried on the next run instead of leaving an empty
+  directory the script then takes for the chart.
 - Runs record the image digest they ran: over ssh the platform asked the
   container for `RepoDigests` and recorded nothing; on Kubernetes it now
   records the pod's `imageID`.
