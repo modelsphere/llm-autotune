@@ -565,6 +565,17 @@ const logSources = computed<LogSource[]>(() => {
 /** Every setting the campaign was created with, in one place — so a night can
  *  be reproduced, compared against another campaign, or have one field lifted
  *  out of it without reading the database. */
+/** "≈ 6 min startup + 22 min benchmark", or a note that nothing ran yet. */
+function learnedRunLength(c: Campaign): string {
+  const t = c.learned_timing
+  if (!t || t.bench_minutes == null) return 'not measured yet'
+  const parts = [
+    t.startup_minutes != null ? `${Math.round(t.startup_minutes)} min startup` : '',
+    `${Math.round(t.bench_minutes)} min benchmark`,
+  ].filter(Boolean)
+  return `≈ ${parts.join(' + ')}`
+}
+
 const configRows = computed(() => {
   const c = campaign.value
   if (!c) return [] as { label: string; value: string; hint?: string }[]
@@ -627,7 +638,11 @@ const configRows = computed(() => {
           label: 'Search',
           value: describeStrategy(c.extensions) ?? 'every configuration in the space, in order',
         }]),
-    { label: 'Max run minutes', value: String(c.max_run_minutes) },
+    {
+      label: 'Run length',
+      value: learnedRunLength(c),
+      hint: `learned from this campaign's runs; capped at ${c.max_run_minutes} min`,
+    },
     {
       label: 'Baseline canary',
       value: c.run_baseline_canary ? 'yes' : 'no',

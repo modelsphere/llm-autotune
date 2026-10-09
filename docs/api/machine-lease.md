@@ -115,9 +115,9 @@ scheduler has:
 | `idle` | Ours, nothing running — but production may still be stopped, so **not yet yours**. |
 | `returnable` | Production is back up. Take the machine whenever you like. |
 
-`returnable_at` is a **bound, not an estimate**: each live run's own cutoff
-(`started_at + max_run_minutes`), so you can plan against it. A typical run is
-far shorter.
+`returnable_at` is each live run's start plus how long that campaign's runs
+have taken so far (with headroom), never more than its `max_run_minutes`
+cap. Before a campaign has finished any run, it is the cap.
 
 `GET /api/machines/lease` returns the same shape for every machine at once.
 
@@ -136,7 +136,7 @@ This returns immediately. It records the request; the worker carries it out.
 
 No new runs start. Runs already in flight finish normally and their
 measurements are kept. Use `returnable_at` from the status call to see the
-worst case — up to a campaign's `max_run_minutes`, typically ~20 minutes.
+expected wait — how long that campaign's runs usually take, typically ~20 minutes.
 
 ### `eager` — the machine matters more than the data
 

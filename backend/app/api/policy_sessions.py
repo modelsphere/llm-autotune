@@ -26,6 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.control.orchestrator.policy_lifecycle import (
     PENDING_CONTENDER_STATES,
     command_for,
+    contender_parts,
     deadlines,
     settings_of,
 )
@@ -466,7 +467,7 @@ async def manifest(
         contenders=ManifestContenders(
             max=knobs.max_contenders,
             validation_suite=VERIFY,
-            approx_minutes_each=knobs.approx_minutes_each,
+            approx_minutes_each=contender_parts(campaign)[0],
         ),
         services=ManifestServices(
             launch=True,

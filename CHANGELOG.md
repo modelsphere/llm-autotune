@@ -59,6 +59,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- A campaign learns how long its runs take — the engine coming up, and each
+  benchmark coming back — and plans its window from that (`run_timing` on the
+  campaign, migration `004`; shown on the campaign page as "Run length").
+  Nothing has to be guessed up front:
+  - a policy campaign's validation reserve is learned rather than set;
+    `policy_settings.approx_minutes_each` and `model_startup_minutes` still pin
+    it when given;
+  - `max_run_minutes` is now only a cap, default 720: a new run needs as much
+    window as this campaign's runs have taken (the server default before the
+    first one), and a lease's `returnable_at` follows the same figure.
+- `served_model_name` is optional when creating a campaign: empty means the
+  last part of `model_path`.
+- New campaign form: the served model name, launch extras, engine port, max
+  minutes per run, re-runs of the best and the two-stage benchmark sit under
+  an Advanced section of their step; a policy campaign asks only how many
+  finalists to re-measure; the merge-request and production-canary settings
+  are gone from the form (the API still takes them).
+
 - `deploy/quickstart.sh` now installs a deployment you keep: LLM AutoTune and
   LLMBench on the cluster kubectl points at (`--context` to pick one), with
   runs on its GPU nodes. It warns when no node offers GPUs. The no-GPU

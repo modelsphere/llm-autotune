@@ -14,7 +14,7 @@ from app import plugins
 from app.campaign_spec import SPEC_KEYS, DraftRequest, draft_campaign, spec_of
 from app.control.launch import MachineInfo, get_driver
 from app.control.launch import preflight as pf
-from app.control.orchestrator import lifecycle
+from app.control.orchestrator import lifecycle, timing
 from app.control.orchestrator import schedule as sched
 from app.control.search.parity import missing_flags
 from app.control.search.space import candidate_count, expand, space_errors, swept_keys
@@ -56,6 +56,7 @@ from app.schemas.core import (
     LeaderboardEntry,
     MachineWarningOut,
     RunOut,
+    served_name_for,
 )
 from app.schemas.policy import PolicySettings
 
@@ -441,6 +442,7 @@ async def _campaign_out(session: AsyncSession, campaign: Campaign) -> CampaignOu
     (only while the campaign can still run — a finished one's pool is
     history), and what plugins keep about it."""
     out = CampaignOut.model_validate(campaign)
+    out.learned_timing = timing.summary(campaign)
     out.extensions = (await _extensions_of(session, [campaign]))[campaign.id]
     if campaign.status in _LIVE_CAMPAIGN_STATES:
         machines = (await session.execute(select(Machine))).scalars().all()
@@ -697,7 +699,8 @@ def _run_preflight(body: PreflightRequest, machines: list[Machine]) -> list[dict
         # same list rather than in a banner people close.
         base = (body.search_space or {}).get("base") or {}
         config = {**base, **dict.fromkeys(swept_keys(body.search_space or {}))}
-        missing = missing_flags(config, machine.baseline, body.served_model_name)
+        served = body.served_model_name or served_name_for(body.model_path)
+        missing = missing_flags(config, machine.baseline, served)
         container = missing[0]["container"] if missing else ""
         checks.append(pf.parity_check(missing, container))
         checks.append(space_check)

@@ -21,7 +21,6 @@ import {
   type Policy,
   type SearchSpace,
 } from '../api/client'
-import DeployBranchSelect from '../components/DeployBranchSelect.vue'
 import InfoHint from '../components/InfoHint.vue'
 import NightlyWindow from '../components/NightlyWindow.vue'
 import SpaceMap from '../components/SpaceMap.vue'
@@ -63,8 +62,13 @@ const policies = ref<Policy[]>([])
 const selectedSpaceId = ref<number | null>(null)
 const selectedObjectiveId = ref<number | null>(null)
 const verifyObjectiveId = ref<number | null>(null)
-// The two-stage split is an opt-in disclosure, collapsed until someone opens it.
-const advancedNames = ref<string[]>([])
+// The settings most campaigns never touch, one disclosure per step, collapsed
+// until opened. Separate lists: an el-collapse replaces its whole v-model, so a
+// shared one would close every other step's section.
+const advancedNames = ref<string[]>([]) // 'split' — the two-stage benchmark
+const modelAdvanced = ref<string[]>([])
+const machinesAdvanced = ref<string[]>([])
+const searchAdvanced = ref<string[]>([])
 
 const form = ref({
   name: '',
@@ -77,9 +81,11 @@ const form = ref({
   // A node group each run deploys ACROSS. '' = single-node. Setting it makes
   // the group's members the pin; the Machines select is ignored.
   node_group: '',
+  // Where the search for a free port starts; each run takes the next free one.
   service_port: 28200,
   share_machine: true,
-  max_run_minutes: 150,
+  // A safety bound only: the window plans from what runs have actually taken.
+  max_run_minutes: 720,
   benchmark_slug: '',
   // '' = no policy: the campaign tries every configuration in the space, in
   // order. `policy:<id>` = an external policy container searches it instead.
@@ -88,10 +94,11 @@ const form = ref({
   // What installed plugins keep about the campaign, by plugin name; the
   // Strategy select writes a plugin strategy into it on create.
   extensions: {} as Extensions,
-  // Only sent for a policy campaign — the budget the platform holds it to.
-  policy_max_contenders: 1,
-  policy_approx_minutes_each: 30,
-  policy_model_startup_minutes: 5,
+  // Only sent for a policy campaign: how many of its finalists the platform
+  // re-measures at the end. Their benchmark and startup time are learned.
+  policy_max_contenders: 2,
+  // Timings an imported campaign pinned, carried through untouched.
+  policy_pinned: {} as Record<string, number>,
   confirm_top_k: 0,
   confirm_repeats: 3,
   // The expensive second stage. Off by default: it is only worth turning on
@@ -105,15 +112,6 @@ const form = ref({
   // is fine for one night and not for several.
   dataset_profile: '',
   dataset_policy: 'rebuild_at_start',
-  // Which release branch of the deploy repo this campaign's winner is proposed
-  // onto. The repo keeps one per model x card x engine, so it is a choice —
-  // empty means the branch the bound baseline already tracks.
-  deploy_branch: '',
-  // Open the winner's merge request the moment the campaign finishes. Off by
-  // default: a proposal that appears while nobody is watching is only welcome
-  // when it was asked for.
-  auto_promote: false,
-  run_baseline_canary: true,
   daily_start: '23:00',
   daily_end: '08:00',
   schedule_timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
@@ -128,6 +126,12 @@ const STEPS = [
   { title: 'Schedule', hint: 'when' },
   { title: 'Check', hint: 'before committing a night' },
 ]
+
+/** What the engine serves the model as: the typed name, else the last part of
+ *  the model path — the same rule the API applies to an empty field. */
+const servedName = computed(() =>
+  form.value.served_model_name.trim() ||
+  form.value.model_path.trim().replace(/\/+$/, '').split('/').pop() || '')
 
 const selectedSpace = computed(
   () => searchSpaces.value.find((s) => s.id === selectedSpaceId.value) ?? null)
@@ -187,7 +191,6 @@ const problems = computed<string[][]>(() => [
     !form.value.name.trim() && 'a name',
     !form.value.image.trim() && 'a container image',
     !form.value.model_path.trim() && 'the model path on the machine',
-    !form.value.served_model_name.trim() && 'the served model name',
   ].filter(Boolean) as string[],
   [] as string[], // machines may be left empty (= any), so nothing is required
   [!selectedSpace.value && 'a search space'].filter(Boolean) as string[],
@@ -238,7 +241,7 @@ async function runPreflight() {
       engine: form.value.engine,
       image: form.value.image.trim(),
       model_path: form.value.model_path,
-      served_model_name: form.value.served_model_name,
+      served_model_name: servedName.value,
       machine_names: form.value.machine_names,
       node_group: form.value.node_group,
       service_port: form.value.service_port,
@@ -506,14 +509,10 @@ function applyImport() {
   form.value.strategy = typeof policyId === 'number'
     ? `policy:${policyId}`
     : strategyFromExtensions(form.value.extensions)
-  const settings = (parsed.fields.policy_settings ?? {}) as Record<string, number>
-  if (settings.max_contenders) form.value.policy_max_contenders = settings.max_contenders
-  if (settings.approx_minutes_each) {
-    form.value.policy_approx_minutes_each = settings.approx_minutes_each
-  }
-  if (settings.model_startup_minutes) {
-    form.value.policy_model_startup_minutes = settings.model_startup_minutes
-  }
+  const { max_contenders, ...pinned } =
+    (parsed.fields.policy_settings ?? {}) as Record<string, number>
+  if (max_contenders) form.value.policy_max_contenders = max_contenders
+  form.value.policy_pinned = pinned
   if (parsed.fields.extra_env || parsed.fields.extra_volumes) {
     form.value.extras_text = toYaml({
       env: parsed.fields.extra_env ?? {},
@@ -544,6 +543,8 @@ function applyImport() {
   // so an imported two-stage campaign is not hidden behind a collapsed panel.
   form.value.verify_enabled = !!String(form.value.verify_benchmark_slug ?? '').trim()
   advancedNames.value = form.value.verify_enabled ? ['split'] : []
+  if (form.value.served_model_name || Object.keys(parsed.fields.extra_env ?? {}).length ||
+    Object.keys(parsed.fields.extra_volumes ?? {}).length) modelAdvanced.value = ['model']
 
   importOpen.value = false
   importText.value = ''
@@ -639,7 +640,7 @@ async function create() {
       engine: form.value.engine,
       image: form.value.image.trim(),
       model_path: form.value.model_path,
-      served_model_name: form.value.served_model_name,
+      served_model_name: servedName.value,
       extra_env: extras.env ?? {},
       extra_volumes: extras.volumes ?? {},
       machine_names: form.value.machine_names,
@@ -651,15 +652,10 @@ async function create() {
       policy_id: selectedPolicy.value?.id ?? null,
       extensions: applyStrategy(form.value.extensions, form.value.strategy),
       policy_settings: selectedPolicy.value
-        ? {
-            max_contenders: form.value.policy_max_contenders,
-            approx_minutes_each: form.value.policy_approx_minutes_each,
-            model_startup_minutes: form.value.policy_model_startup_minutes,
-          }
+        ? { ...form.value.policy_pinned, max_contenders: form.value.policy_max_contenders }
         : {},
       confirm_top_k: form.value.confirm_top_k,
       confirm_repeats: form.value.confirm_repeats,
-      run_baseline_canary: form.value.run_baseline_canary,
       daily_start: form.value.daily_start,
       daily_end: form.value.daily_end,
       schedule_timezone: form.value.schedule_timezone,
@@ -691,8 +687,6 @@ async function create() {
       // replay, and a replay needs its dataset pinned to stay comparable.
       dataset_profile: form.value.dataset_profile.trim(),
       dataset_policy: form.value.dataset_policy,
-      deploy_branch: form.value.deploy_branch.trim(),
-      auto_promote: form.value.auto_promote,
     })
     router.push(`/campaigns/${data.id}`)
   } catch (error: any) {
@@ -742,17 +736,12 @@ onMounted(async () => {
             <el-form-item label="Campaign name">
               <el-input v-model="form.name" placeholder="node-24 prefill sweep, week 32" />
             </el-form-item>
-            <div class="grid-2">
-              <el-form-item label="Engine">
-                <el-select v-model="form.engine" style="width: 100%">
-                  <el-option label="sglang" value="sglang" />
-                  <el-option label="vllm" value="vllm" />
-                </el-select>
-              </el-form-item>
-              <el-form-item label="Served model name">
-                <el-input v-model="form.served_model_name" placeholder="glm-5" />
-              </el-form-item>
-            </div>
+            <el-form-item label="Engine">
+              <el-select v-model="form.engine" style="width: 100%">
+                <el-option label="sglang" value="sglang" />
+                <el-option label="vllm" value="vllm" />
+              </el-select>
+            </el-form-item>
             <el-form-item label="Container image">
               <el-input v-model="form.image" class="mono"
                 placeholder="lmsysorg/sglang:v0.5.13.post1" />
@@ -764,16 +753,31 @@ onMounted(async () => {
               </template>
               <el-input v-model="form.model_path" class="mono" placeholder="/data/models/qwen3.6" />
             </el-form-item>
-            <el-form-item>
-              <template #label>
-                <span>Launch extras</span>
-                <InfoHint>
-                  YAML. Env vars and bind mounts every container gets — what the model needs
-                  beyond the engine flags.
-                </InfoHint>
-              </template>
-              <el-input v-model="form.extras_text" type="textarea" :rows="4" class="mono" />
-            </el-form-item>
+            <el-collapse v-model="modelAdvanced" class="advanced">
+              <el-collapse-item name="model" title="Advanced">
+                <el-form-item>
+                  <template #label>
+                    <span>Served model name</span>
+                    <InfoHint>
+                      The name the engine answers to. Only the platform and LLMBench use it,
+                      so by default it is the last part of the model path.
+                    </InfoHint>
+                  </template>
+                  <el-input v-model="form.served_model_name"
+                    :placeholder="servedName || 'from the model path'" />
+                </el-form-item>
+                <el-form-item>
+                  <template #label>
+                    <span>Launch extras</span>
+                    <InfoHint>
+                      YAML. Env vars and bind mounts every container gets — what the model
+                      needs beyond the engine flags.
+                    </InfoHint>
+                  </template>
+                  <el-input v-model="form.extras_text" type="textarea" :rows="4" class="mono" />
+                </el-form-item>
+              </el-collapse-item>
+            </el-collapse>
           </el-form>
         </template>
 
@@ -815,38 +819,42 @@ onMounted(async () => {
                   :label="`${m.name} (${m.gpu_count}× ${m.gpu_type || 'GPU'})`" />
               </el-select>
             </el-form-item>
-            <div class="grid-2">
-              <el-form-item>
-                <template #label>
-                  <span>Engine port</span>
-                  <InfoHint>
-                    Avoid 30000–32767 on k8s nodes: kube-proxy hijacks that range on the node
-                    IP, leaving the engine reachable only from localhost.
-                  </InfoHint>
-                </template>
-                <el-input-number v-model="form.service_port" :min="1024" :max="65535" />
-              </el-form-item>
-              <el-form-item>
-                <template #label>
-                  <span>Max minutes per run</span>
-                  <InfoHint>
-                    A run past this is killed. Also the bound the platform promises a lease
-                    holder when they ask for the machine back politely.
-                  </InfoHint>
-                </template>
-                <el-input-number v-model="form.max_run_minutes" :min="10" :max="1440" />
-              </el-form-item>
-            </div>
             <el-form-item>
-              <el-checkbox v-model="form.share_machine">
-                Run several candidates at once, each pinned to its own GPUs
-              </el-checkbox>
+              <el-checkbox v-model="form.share_machine">Run candidates in parallel</el-checkbox>
               <InfoHint :width="340">
-                An 8-card node running one tp=2 config leaves six cards idle. Widest
-                candidates are placed first. Turn off if a config is sensitive to
-                host-level contention.
+                Several candidates share a machine at once, each pinned to its own GPUs:
+                an 8-card node running one tp=2 config would otherwise leave six cards
+                idle. Widest candidates are placed first. Turn off if a config is
+                sensitive to host-level contention.
               </InfoHint>
             </el-form-item>
+            <el-collapse v-model="machinesAdvanced" class="advanced">
+              <el-collapse-item name="machines" title="Advanced">
+                <div class="grid-2">
+                  <el-form-item>
+                    <template #label>
+                      <span>First engine port</span>
+                      <InfoHint>
+                        Each run takes the first free port from here. 30000–32767 is
+                        skipped: on k8s nodes kube-proxy hijacks that range.
+                      </InfoHint>
+                    </template>
+                    <el-input-number v-model="form.service_port" :min="1024" :max="65535" />
+                  </el-form-item>
+                  <el-form-item>
+                    <template #label>
+                      <span>Max minutes per run</span>
+                      <InfoHint>
+                        A safety bound. The window is planned from how long this campaign's
+                        runs actually take, never more than this.
+                      </InfoHint>
+                    </template>
+                    <el-input-number v-model="form.max_run_minutes" :min="10" :max="1440"
+                      :step="60" />
+                  </el-form-item>
+                </div>
+              </el-collapse-item>
+            </el-collapse>
           </el-form>
         </template>
 
@@ -912,69 +920,42 @@ onMounted(async () => {
 
             <el-form-item v-if="selectedPolicy" class="spaced">
               <template #label>
-                <span>Policy budget</span>
+                <span>Finalists to re-measure</span>
                 <InfoHint :width="360">
-                  How much of the window the platform reserves at the end to validate
-                  the policy's contenders: each one costs about
-                  <b>approx minutes + startup minutes</b>. A policy campaign needs a
-                  window to activate — set a nightly schedule or a one-off window on the
-                  next step, or use <b>Force start</b> on the campaign page.
+                  When the window nears its end the policy names its best configs, and the
+                  platform launches and benchmarks each one itself — that measurement
+                  decides the winner. The time this needs is held back from the search,
+                  learned from how long this campaign's runs take.
                 </InfoHint>
               </template>
-              <div class="stack">
-                <div class="sentence">
-                  <span>Validate up to</span>
-                  <el-input-number v-model="form.policy_max_contenders" :min="1" :max="8"
-                    size="small" controls-position="right" class="inline-num" />
-                  <span>contenders, about</span>
-                  <el-input-number v-model="form.policy_approx_minutes_each" :min="5" :max="240"
-                    size="small" controls-position="right" class="inline-num" />
-                  <span>minutes each, plus</span>
-                  <el-input-number v-model="form.policy_model_startup_minutes" :min="0" :max="120"
-                    size="small" controls-position="right" class="inline-num" />
-                  <span>minutes of model startup.</span>
-                </div>
-                <div class="muted tiny mono">{{ selectedPolicy.image }}</div>
-              </div>
+              <el-input-number v-model="form.policy_max_contenders" :min="1" :max="8"
+                size="small" />
             </el-form-item>
 
-            <el-form-item>
-              <template #label>
-                <span>Confirming the winner</span>
-                <InfoHint :width="360">
-                  One benchmark is a signal, not a decision. A config can be fastest on
-                  average and still miss a redline on a second run — and on this rig the
-                  run-to-run spread is about 0.25%, so a 0.5% win is not a win yet.
-                </InfoHint>
-              </template>
-              <!-- The numbers sit inside the sentence they belong to. As two bare
-                   spinners under "Confirm the best N, M times" nobody could tell
-                   which box was N.
-                   Wrapped in a block: el-form-item's content is a flex ROW, so
-                   the sentence and its footnote were laid out side by side. -->
-              <div class="stack">
-                <div class="sentence">
-                  <span>Before finishing, re-run the best</span>
-                  <el-input-number v-model="form.confirm_top_k" :min="0" :max="10"
-                    size="small" controls-position="right" class="inline-num" />
-                  <span>configurations</span>
-                  <el-input-number v-model="form.confirm_repeats" :min="2" :max="10"
-                    size="small" controls-position="right" class="inline-num"
-                    :disabled="form.confirm_top_k === 0" />
-                  <span>times each.</span>
-                </div>
-                <div class="muted hint">
-                  <template v-if="form.confirm_top_k === 0">
-                    Off — whatever wins once, wins.
+            <el-collapse v-if="!selectedPolicy" v-model="searchAdvanced" class="advanced">
+              <el-collapse-item name="search" title="Advanced">
+                <el-form-item>
+                  <template #label>
+                    <span>Re-run the best</span>
+                    <InfoHint :width="360">
+                      One benchmark is a signal, not a decision: a config can lead by noise.
+                      Before finishing, re-run the best few configs so the winner is backed
+                      by several measurements and reports its spread.
+                    </InfoHint>
                   </template>
-                  <template v-else>
-                    Adds up to {{ form.confirm_top_k * (form.confirm_repeats - 1) }} extra
-                    run(s) at the end, and reports each winner's spread instead of a single
-                    number.
-                  </template>
-                </div>
-              </div>
-            </el-form-item>
+                  <div class="sentence">
+                    <el-input-number v-model="form.confirm_top_k" :min="0" :max="10"
+                      size="small" controls-position="right" class="inline-num" />
+                    <span>configs,</span>
+                    <el-input-number v-model="form.confirm_repeats" :min="2" :max="10"
+                      size="small" controls-position="right" class="inline-num"
+                      :disabled="form.confirm_top_k === 0" />
+                    <span>times each</span>
+                    <span class="muted tiny">{{ form.confirm_top_k === 0 ? '(off)' : '' }}</span>
+                  </div>
+                </el-form-item>
+              </el-collapse-item>
+            </el-collapse>
           </el-form>
         </template>
 
@@ -1087,9 +1068,7 @@ onMounted(async () => {
                  on the best few. Off until someone opens it. -->
             <el-collapse v-model="advancedNames" class="advanced">
               <el-collapse-item name="split">
-                <template #title>
-                  Two-stage: screen cheaply, then verify the best (optional)
-                </template>
+                <template #title>Advanced: two-stage benchmark</template>
 
                 <div class="stage-box" :class="{ off: !form.verify_enabled }">
                   <div class="stage-head">
@@ -1175,46 +1154,6 @@ onMounted(async () => {
               </el-collapse-item>
             </el-collapse>
 
-            <!-- Where a winner ends up. Optional and easy to miss on purpose:
-                 it changes nothing about the run, only which release branch the
-                 merge request is opened against later. -->
-            <el-collapse class="advanced">
-              <el-collapse-item name="deploy">
-                <template #title>Where the winner is proposed (optional)</template>
-                <el-form-item label="Deploy branch">
-                  <DeployBranchSelect v-model="form.deploy_branch" />
-                  <div class="muted tiny">
-                    The deploy repo keeps one release branch per model × card × engine.
-                    Leave empty and a winner goes onto whichever branch the matching
-                    baseline is bound to; name one here when this campaign tunes for a
-                    different release line.
-                  </div>
-                </el-form-item>
-                <el-form-item>
-                  <el-checkbox v-model="form.auto_promote">
-                    Submit the winner as a merge request automatically
-                  </el-checkbox>
-                  <InfoHint :width="380">
-                    When the campaign finishes, the platform opens the merge request
-                    itself — same diff, same ownership policy, same preview you would
-                    have seen. It needs a baseline for this model bound to the deploy
-                    repo, and it will not propose a run that crossed a redline. While
-                    the platform is in dry-run it records the draft and writes nothing.
-                  </InfoHint>
-                </el-form-item>
-              </el-collapse-item>
-            </el-collapse>
-
-            <el-form-item class="spaced">
-              <el-checkbox v-model="form.run_baseline_canary">
-                Benchmark production first, before clearing it
-              </el-checkbox>
-              <InfoHint :width="340">
-                The night's control run: measures what production does today, on tonight's
-                hardware, with this campaign's benchmark. Production is only torn down once
-                this passes — a machine we could not measure is the one not to clear.
-              </InfoHint>
-            </el-form-item>
           </el-form>
         </template>
 
@@ -1234,7 +1173,7 @@ onMounted(async () => {
             show-icon class="spaced"
             title="No window means no automatic start"
             description="The campaign is created paused and runs only while you start it by
-              hand — and nothing puts production back on its own." />
+              hand." />
         </template>
 
         <!-- 6. Check -->
@@ -1321,8 +1260,8 @@ onMounted(async () => {
           <dt>Name</dt>
           <dd :class="{ empty: !form.name }">{{ form.name || 'unnamed' }}</dd>
           <dt>Serving</dt>
-          <dd :class="{ empty: !form.served_model_name }">
-            {{ form.served_model_name || '—' }} <span class="muted">on {{ form.engine }}</span>
+          <dd :class="{ empty: !servedName }">
+            {{ servedName || '—' }} <span class="muted">on {{ form.engine }}</span>
           </dd>
           <dt>Machines</dt>
           <dd v-if="form.node_group">

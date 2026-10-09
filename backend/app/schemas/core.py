@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.hardware import coerce_gpu_type
 
@@ -244,12 +244,21 @@ class MachineGroupOut(BaseModel):
 # -- campaigns ----------------------------------------------------------------
 
 
+def served_name_for(model_path: str) -> str:
+    """The name the engine serves a model under when nobody chose one: the
+    last part of its path, as model directories are usually named after the
+    model. Only the platform and LLMBench ever send it, so it needs to be
+    stable, not pretty."""
+    return model_path.rstrip("/").rsplit("/", 1)[-1] or "model"
+
+
 class CampaignCreate(BaseModel):
     name: str
     engine: str  # sglang | vllm
     image: str
     model_path: str
-    served_model_name: str
+    # Empty = derived from the model path (served_name_for).
+    served_model_name: str = ""
     search_space: dict[str, Any]
     objective: dict[str, Any] = Field(default_factory=dict)
     benchmark_slug: str = ""  # "" = platform default
@@ -277,7 +286,10 @@ class CampaignCreate(BaseModel):
     daily_end: str = ""
     schedule_timezone: str = ""
     schedule_until: datetime | None = None
-    max_run_minutes: int = 150
+    # A safety bound, not a plan: the window reserves what this campaign's
+    # runs have actually taken (control/orchestrator/timing.py), never more
+    # than this.
+    max_run_minutes: int = 720
     # The external search container for this campaign: when set, it decides
     # what to try and the platform stops enumerating the space itself
     # (docs/api/policy-contract.md). `policy_settings` is validated against
@@ -311,6 +323,12 @@ class CampaignCreate(BaseModel):
     # (docs/plugins.md): each plugin is handed its own part when the campaign
     # is created. Not a column; a key no enabled plugin takes is refused.
     extensions: dict[str, dict[str, Any]] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def _derive_served_name(self) -> "CampaignCreate":
+        if not self.served_model_name.strip():
+            self.served_model_name = served_name_for(self.model_path)
+        return self
 
 
 class MachineWarningOut(BaseModel):
@@ -353,6 +371,9 @@ class CampaignOut(BaseModel):
     max_run_minutes: int
     policy_id: int | None
     policy_settings: dict[str, Any]
+    # What the campaign's runs have taken so far (timing.summary), in minutes;
+    # None until there is a run to learn from.
+    learned_timing: dict[str, Any] = Field(default_factory=dict)
     confirm_top_k: int
     confirm_repeats: int
     verify_benchmark_slug: str

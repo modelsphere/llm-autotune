@@ -368,6 +368,14 @@ export interface Campaign {
    *  platform launches, benchmarks and judges either way. */
   policy_id: number | null
   policy_settings: Record<string, unknown>
+  /** What this campaign's runs have taken so far, in minutes; null until a
+   *  run has been measured. The window is planned from these. */
+  learned_timing: {
+    startup_minutes: number | null
+    bench_minutes: number | null
+    verify_bench_minutes: number | null
+    samples: number
+  }
   confirm_top_k: number
   confirm_repeats: number
   /** The opt-in second stage, off by default. Set both the slug and top_k > 0 to

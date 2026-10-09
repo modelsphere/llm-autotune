@@ -16,6 +16,7 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.control.orchestrator.timing import run_minutes, window_minutes
 from app.control.run_nodes import run_ids_on_machine
 from app.db.models import (
     TERMINAL_RUN_STATES,
@@ -33,6 +34,7 @@ from app.db.models import (
     RunKind,
     RunStatus,
 )
+from app.staging import SCREEN, stage_of_run
 
 
 def now() -> datetime:
@@ -173,7 +175,11 @@ def returnable_at(session: Session, machine: Machine) -> datetime | None:
     latest = None
     for run in live:
         started = as_utc(run.started_at) or as_utc(run.created_at) or now()
-        limit = (run.campaign.max_run_minutes if run.campaign else 0) or 150
+        # The cap is the bound; what this campaign's runs have actually taken
+        # is a tighter one, once there is any.
+        cap = (run.campaign.max_run_minutes if run.campaign else 0) or 150
+        learned = run_minutes(run.campaign, stage_of_run(run)) if run.campaign else None
+        limit = min(cap, learned) if learned is not None else cap
         finish = started + timedelta(minutes=limit)
         latest = finish if latest is None else max(latest, finish)
     return latest
@@ -290,7 +296,8 @@ def window_allows_run_of(campaign: Campaign, minutes: int) -> bool:
 def window_allows_new_run(campaign: Campaign, default_max_run_minutes: int) -> bool:
     """Is there room before the window closes to finish one more run?"""
     return window_allows_run_of(
-        campaign, campaign.max_run_minutes or default_max_run_minutes
+        campaign,
+        window_minutes(campaign, SCREEN, campaign.max_run_minutes, default_max_run_minutes),
     )
 
 

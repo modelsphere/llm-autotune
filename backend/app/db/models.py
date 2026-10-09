@@ -592,6 +592,11 @@ class Campaign(Base):
     # validation_reserve_minutes, heartbeat_timeout_s. JSON rather than columns
     # because they only mean anything when policy_id is set.
     policy_settings: Mapped[dict] = mapped_column(JsonCol, default=dict)
+    # What this campaign's runs have actually taken: recent minutes for the
+    # engine to come up and for each stage's benchmark. Written by the worker
+    # as runs come up and come back, read wherever the window math needs a run
+    # length (control/orchestrator/timing.py).
+    run_timing: Mapped[dict] = mapped_column(JsonCol, default=dict)
     # Before crowning a winner, re-run the best candidates and see whether the
     # result holds. One benchmark is a signal, not a decision: measurement
     # noise on this rig is ~0.25%, but a config can also be fast on average and

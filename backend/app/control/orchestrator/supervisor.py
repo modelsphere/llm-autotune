@@ -38,6 +38,7 @@ from app.control.launch.failures import (
     is_transient_placement,
 )
 from app.control.orchestrator import schedule as sched
+from app.control.orchestrator import timing
 from app.control.orchestrator.groups import members_by_rank
 from app.control.orchestrator.lifecycle import (
     CANARY_DUE,
@@ -2596,6 +2597,12 @@ class Supervisor:
             payload={"from": run.status, "to": target.value},
         )
         run.status = target.value
+        # The platform watches every run come up and come back anyway; keeping
+        # the numbers is what lets the window math stop asking for guesses.
+        if target in (RunStatus.BENCHING, RunStatus.SERVING):
+            timing.record_ready(session, run, _now())
+        elif target == RunStatus.SUCCEEDED:
+            timing.record_finished(session, run, stage_of_run(run), _now())
 
     def _note_placement(self, session: Session, run: Run, waiting: str) -> None:
         """Keep `runs.waiting_since` true, and announce each edge once.
@@ -3158,7 +3165,11 @@ class Supervisor:
     def _window_allows_stage(self, campaign: Campaign, stage: str) -> bool:
         return window_allows_run_of(
             campaign,
-            _stage_max_run_minutes(campaign, stage, self.settings.default_max_run_minutes),
+            timing.window_minutes(
+                campaign, stage,
+                _stage_max_run_minutes(campaign, stage, self.settings.default_max_run_minutes),
+                self.settings.default_max_run_minutes,
+            ),
         )
 
     def _not_planned_yet(self, session: Session, campaign: Campaign) -> bool:

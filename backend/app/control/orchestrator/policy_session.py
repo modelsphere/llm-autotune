@@ -29,6 +29,7 @@ from sqlalchemy.orm import Session
 from app.control.launch.base import DeploymentHandle, WorkloadSpec, WorkloadState
 from app.control.orchestrator.lifecycle import as_utc, now
 from app.control.orchestrator.policy_lifecycle import (
+    contender_minutes,
     deadlines,
     heartbeat_silence,
     heartbeat_timeout_seconds,
@@ -691,11 +692,10 @@ class PolicySessionEngine:
             # reserved until a dying container is gone.
             if machine is not None and self._teardown_blocking(db, session, campaign, machine):
                 return
-            knobs = settings_of(campaign)
             _search, hard = deadlines(campaign, machine)
             nxt = pending[0]
             if hard is not None and now() + timedelta(
-                minutes=knobs.approx_minutes_each + knobs.model_startup_minutes
+                minutes=contender_minutes(campaign)
             ) > hard:
                 for contender in pending:
                     contender.status = ContenderStatus.SKIPPED.value
