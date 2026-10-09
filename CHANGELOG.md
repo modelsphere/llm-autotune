@@ -26,15 +26,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   seeding, enabled by name with `AUTOTUNE_PLUGINS`. See `docs/plugins.md`;
   `backend/tests/plugins/example` uses every hook, and CI tests it against
   Postgres on every change.
+- Frontend plugins: a folder in `frontend/src/plugins/installed/<name>/` is
+  compiled into the UI and adds pages, nav entries, strings, sections on the
+  account and campaign pages (`<PluginSlot>`), and search strategies in New
+  campaign. A plugin imports the app only through `@/plugins/api`.
+- Reports read as lab reports: a report may name its scenarios
+  (`scenario_labels`, migration 003); the summary chart and sweep panels plot
+  whole-server throughput per machine; `slo` tables define the SLO and the
+  objective; captions are the renderer's own, numbered.
+- Reports show the group their runs belong to, linked to its page when it has
+  one.
+- Resources: a Smoke test button on each machine. GPU count and type stay
+  editable on Kubernetes machines, for a credential that cannot read nodes.
+- Links in the UI (nav, table rows, names, buttons) are real links, so
+  middle-click and Ctrl/Cmd+click open a new tab.
 
 ### Plugin API
 
-- Version 1. Hooks: `routers`, `tick_steps`, `migrations`, `on_bootstrap`,
-  `propose_candidates` (in-process planning, with a `PlanContext` holding the
-  campaign's history with the objective applied), `on_campaign_created` and
-  `campaign_extensions` (a plugin's own fields about a campaign, as
-  `extensions` on the campaign API, its spec and clones). The importable
-  surface is `app.plugin_api`.
+- Version 1. Hooks: `routers`, `openapi_tags`, `tick_steps`, `migrations`,
+  `on_bootstrap`, `propose_candidates` (in-process planning, with a
+  `PlanContext` holding the campaign's history with the objective applied),
+  `on_campaign_created` and `campaign_extensions` (a plugin's own fields about
+  a campaign, as `extensions` on the campaign API, its spec and clones),
+  `queue_waiters`, `reservations` and `queue_arrival` (a plugin's own work in
+  the machine queue), `submission_extras` (fields for a run's LLMBench
+  submission), `run_overlay` and `run_selector` (what the agent API says
+  about a plugin's runs, and selectors of its own), and `promotion_origin`
+  (how a plugin's campaign winner is named and where it is promoted). Runs a
+  plugin keeps in a `RunGroup` compare within the group. The importable
+  surface is `app.plugin_api` on the backend and `@/plugins/api` on the
+  frontend.
 
 ### Changed
 
@@ -47,6 +68,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   use `deploy/demo.sh`. `docs/after-the-quickstart.md` is now
   `docs/after-installing.md`.
 - The README is shorter: install first, then the demo.
+- Scheduling is one machine queue, oldest waiter first: campaigns with a run
+  ready and policy sessions waiting for a machine take turns, so two
+  campaigns on one machine alternate run by run, and a wide request holds a
+  machine it is waiting for instead of being starved by narrow ones.
+- Agent API: `LaunchOrigin.source` is an open string with `extensions`,
+  `BenchmarkPlatformOut` gains `quality_floors` and `extensions`, run and
+  comparison documents carry a `group`, and the LLMBench part says whether
+  the benchmark has drifted since the run. A comparison treats `2` and
+  `"2"`, `0.9` and `"0.90"`, `true` and `"true"` as the same flag value.
+- Pages that refresh poll through one helper that pauses in a hidden tab and
+  drops stale responses; nginx serves hashed assets as immutable and never
+  caches `index.html`, so a tab open across a redeploy reloads cleanly.
 - Every campaign endpoint that returns a campaign (create, read, list, clone,
   status, schedule, force start and stop) now returns it the same way, with
   its machine warnings and `extensions`.
@@ -56,6 +89,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   updates for the backend, frontend and operator dependencies and the Actions.
 - `NOTICE` lists every third-party component the images ship, with corrected
   licenses (Starlette and Uvicorn are BSD-3-Clause).
+
+### Fixed
+
+- Runs record the image digest they ran: over ssh the platform asked the
+  container for `RepoDigests` and recorded nothing; on Kubernetes it now
+  records the pod's `imageID`.
+- The overview diagram matches the platform, and the agent API doc's
+  examples match its schemas.
 
 ### Removed
 

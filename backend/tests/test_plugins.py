@@ -323,12 +323,12 @@ def test_a_plugin_names_the_winner_of_a_campaign_it_runs():
     from app.plugins import PromotionOrigin
 
     campaign = SimpleNamespace(id=3, name="entrant", deploy_branch="")
-    told = PromotionOrigin(kind="contest", page="/contests/9", description="contest **X**",
+    told = PromotionOrigin(kind="study", page="/studies/9", description="study **X**",
                            deploy_branch="release/x", remember_branch=False)
 
     origin = origin_of(campaign, 812, told)
-    assert origin.kind == "contest" and origin.page == "/contests/9"
-    assert origin.describe() == "contest **X**" and origin.remember_branch is False
+    assert origin.kind == "study" and origin.page == "/studies/9"
+    assert origin.describe() == "study **X**" and origin.remember_branch is False
     assert deploy_branch_of(campaign, told) == "release/x"
 
     plain = origin_of(campaign, 812)
