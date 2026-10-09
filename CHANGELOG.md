@@ -68,6 +68,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   use `deploy/demo.sh`. `docs/after-the-quickstart.md` is now
   `docs/after-installing.md`.
 - The README is shorter: install first, then the demo.
+- The README leads with what it does and how it works, with an architecture
+  diagram. The docs are rewritten to stop overlapping, every figure is
+  redrawn in English and Chinese, and examples, routes and settings match
+  the code.
 - Scheduling is one machine queue, oldest waiter first: campaigns with a run
   ready and policy sessions waiting for a machine take turns, so two
   campaigns on one machine alternate run by run, and a wide request holds a
