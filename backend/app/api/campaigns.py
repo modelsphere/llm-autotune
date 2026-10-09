@@ -41,6 +41,8 @@ from app.db.models import (
     is_baseline_candidate,
     is_in_place_baseline,
 )
+from app.evaluation.benchmark_spec import BenchmarkSpec, ensure_spec
+from app.evaluation.benchmarks import BenchmarkRefused
 from app.evaluation.llmbench import LLMBenchClient
 from app.evaluation.ranking import leaderboard_entries
 from app.metrics_catalog import DEFAULT_VERIFY_TARGET_METRIC
@@ -286,6 +288,40 @@ async def create_campaign(
     return await _campaign_out(session, campaign)
 
 
+def _spec(raw: dict | None, field: str) -> BenchmarkSpec | None:
+    if raw is None:
+        return None
+    try:
+        return BenchmarkSpec.model_validate(raw)
+    except ValidationError as exc:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY, f"{field}: {exc.errors()}"
+        ) from exc
+
+
+async def _resolve_benchmark_specs(body: CampaignCreate) -> None:
+    """Turn each described workload into its benchmark on LLMBench, so the
+    rest of creation — and every run after it — sees an ordinary slug. A
+    replay of a rolling profile also pins that profile, unless one is set."""
+    for spec_field, slug_field in (("benchmark_spec", "benchmark_slug"),
+                                   ("verify_benchmark_spec", "verify_benchmark_slug")):
+        spec = _spec(getattr(body, spec_field), spec_field)
+        if spec is None:
+            continue
+        try:
+            ensured = await anyio.to_thread.run_sync(lambda spec=spec: ensure_spec(spec))
+        except BenchmarkRefused as exc:
+            raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(
+                status.HTTP_502_BAD_GATEWAY,
+                f"could not create the benchmark on LLMBench: {exc}",
+            ) from exc
+        setattr(body, slug_field, ensured.slug)
+        if spec.kind == "replay" and spec.dataset_profile.strip() and not body.dataset_profile:
+            body.dataset_profile = spec.dataset_profile.strip()
+
+
 async def _create(session: AsyncSession, user: User, body: CampaignCreate) -> Campaign:
     """Validate and save a campaign. The one path every way of making one takes
     — the form, an imported spec, a clone, a posted draft — so a rule added here
@@ -312,6 +348,7 @@ async def _create(session: AsyncSession, user: User, body: CampaignCreate) -> Ca
             status.HTTP_422_UNPROCESSABLE_ENTITY,
             "confirm_top_k must be >= 0 and confirm_repeats >= 1",
         )
+    await _resolve_benchmark_specs(body)
     for message in _staging_errors(body):
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, message)
     for message in await _node_group_errors(session, body):
@@ -328,7 +365,8 @@ async def _create(session: AsyncSession, user: User, body: CampaignCreate) -> Ca
     schedule_errors = sched.errors(body.daily_start, body.daily_end, body.schedule_timezone)
     if schedule_errors:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "; ".join(schedule_errors))
-    campaign = Campaign(owner_id=user.id, **body.model_dump(exclude={"extensions"}))
+    campaign = Campaign(owner_id=user.id, **body.model_dump(
+        exclude={"extensions", "benchmark_spec", "verify_benchmark_spec"}))
     # A campaign that carries a clock starts under it, not in draft: leaving it
     # DRAFT would mean someone still has to press Start, which is exactly the
     # 23:00 keyboard visit the schedule exists to remove.
@@ -571,6 +609,33 @@ class PreflightRequest(BaseModel):
     verify_benchmark_slug: str = ""
     verify_objective: dict = Field(default_factory=dict)
     dataset_profile: str = ""
+    # Workloads not yet created on LLMBench; checked as the benchmark they
+    # will become (see _with_specs).
+    benchmark_spec: dict | None = None
+    verify_benchmark_spec: dict | None = None
+
+
+def _with_specs(
+    body: PreflightRequest,
+    catalog: dict[str, list[str]] | None,
+    wired: dict[str, str] | None = None,
+) -> None:
+    """Check a described workload as the benchmark it will be: its slug, the
+    module it runs, and the profile it replays. Nothing is created here — that
+    waits for the campaign itself."""
+    for spec_field, slug_field in (("benchmark_spec", "benchmark_slug"),
+                                   ("verify_benchmark_spec", "verify_benchmark_slug")):
+        spec = _spec(getattr(body, spec_field), spec_field)
+        if spec is None:
+            continue
+        setattr(body, slug_field, spec.slug)
+        if catalog is not None:
+            catalog.setdefault(spec.slug, [spec.module])
+        if wired is not None:
+            replays = spec.dataset_profile.strip() if spec.kind == "replay" else ""
+            wired.setdefault(spec.slug, replays)
+        if spec.kind == "replay" and spec.dataset_profile.strip() and not body.dataset_profile:
+            body.dataset_profile = spec.dataset_profile.strip()
 
 
 def _benchmark_catalog(client: LLMBenchClient) -> dict[str, list[str]] | None:
@@ -609,6 +674,7 @@ def _dataset_wiring(client: LLMBenchClient) -> tuple[dict[str, str] | None, list
 def _benchmark_checks(
     body: PreflightRequest, catalog: dict[str, list[str]] | None, client: LLMBenchClient
 ) -> list:
+    _with_specs(body, catalog)
     checks = [
         pf.benchmark_check(
             "benchmark", "Benchmark", body.benchmark_slug, catalog,
@@ -625,6 +691,7 @@ def _benchmark_checks(
             )
         )
         wired, profiles = _dataset_wiring(client)
+        _with_specs(body, None, wired)
         checks.append(
             pf.dataset_check(
                 body.dataset_profile.strip(), body.verify_benchmark_slug, wired, profiles

@@ -159,9 +159,10 @@ With a machine that has GPUs, a campaign serves your model with a real engine
 image (sglang or vLLM) and your search space. The usual path starts from the
 configuration production runs today: record it on **Baselines**, then **Tune
 from this** drafts a campaign from it. [How it works](workflow.md) describes the
-whole loop. Screen real engines with the default benchmark,
-`autotune-screen-v1`; the demo's `autotune-quickstart-v1` is sized for the
-mock.
+whole loop. On a campaign's **Goal** step, describe the load each candidate
+gets (synthetic prompts, or a replay of recorded traffic) and AutoTune creates
+the benchmark on LLMBench. Keep prompts short and concurrency low against the
+mock engine, as the demo's `autotune-quickstart-v1` does.
 
 ## Reaching the UIs without port-forward
 

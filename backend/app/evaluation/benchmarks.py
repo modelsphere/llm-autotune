@@ -28,6 +28,8 @@ from app.evaluation.llmbench import LLMBenchClient
 TEMPLATE_DIR = Path(__file__).resolve().parent / "benchmark_templates"
 DEFAULT_SCREEN_TEMPLATE = "autotune-screen-v1"
 _SLUG = re.compile(r"^[a-z0-9-]+$")
+# LLMBench's list groups benchmarks by tag path; AutoTune's all go under this.
+GROUP_TAG = "llm-autotune"
 
 
 class BenchmarkRefused(RuntimeError):
@@ -58,15 +60,22 @@ def ensure_benchmark(
 ) -> Ensured:
     """Make sure the benchmark exists on LLMBench, is ours, and is locked."""
     doc = load_template(template)
-    slug = slug or doc["slug"]
+    return ensure_document(client, doc, slug or doc["slug"])
+
+
+def ensure_document(client: LLMBenchClient, doc: dict, slug: str) -> Ensured:
+    """Create `doc` on LLMBench as `slug` unless AutoTune already has, then
+    lock it. Everything AutoTune creates is filed under its group tag, so it
+    sits in one place in LLMBench's list instead of among everyone's."""
     if not _SLUG.match(slug):
         raise ValueError(f"benchmark slug {slug!r} must be lowercase letters, digits and '-'")
     me = client.whoami()
+    tags = list(doc.get("group_tags") or [GROUP_TAG])
 
     existing = client.get_benchmark(slug)
     created = False
     if existing is None:
-        doc["slug"] = slug
+        doc = {**doc, "slug": slug, "group_tags": tags}
         existing = client.import_benchmark(yaml.safe_dump(doc, sort_keys=False, allow_unicode=True))
         created = True
     elif existing.get("created_by_user_id") != me.get("id"):
@@ -74,6 +83,14 @@ def ensure_benchmark(
             f"benchmark {slug!r} already exists on LLMBench and was not created by this "
             "platform's account; AutoTune will not adopt it — choose another slug"
         )
+    elif not existing.get("group_tags"):
+        # Created before AutoTune filed its benchmarks. Grouping is presentation
+        # only, so LLMBench takes it on a locked benchmark; a refusal leaves the
+        # benchmark usable, just unfiled.
+        try:
+            existing = client.set_group_tags(existing["id"], tags)
+        except Exception:
+            pass
 
     if not existing.get("is_locked"):
         existing = client.lock_benchmark(existing["id"])

@@ -121,7 +121,13 @@ install and then keeps trying from the worker until it succeeds, so the order
 the two platforms are installed in does not matter; until then the worker log
 says why it could not. If that slug already exists and another account created
 it, AutoTune refuses to adopt it; choose another slug. An admin can also run
-this from the New campaign page, or with `POST /api/benchmarks/ensure`. The
+this with `POST /api/benchmarks/ensure`.
+
+A campaign usually describes its workload instead of naming a benchmark
+(synthetic prompts of a given size, or a replay of a dataset), and AutoTune
+creates the matching benchmark when the campaign is created. The slug is a hash
+of the workload, so the same workload reuses one benchmark. Everything AutoTune
+creates on LLMBench is filed under the group tag `llm-autotune`. The
 full contract between the two platforms (routes, roles, metric names, dataset
 stamping) is in llm-bench's `docs/api/for-autotune.md`.
 

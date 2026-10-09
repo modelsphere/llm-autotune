@@ -33,13 +33,17 @@ def test_builtin_objectives_are_seeded_once_and_include_the_default_metric():
     assert any(r.target_metric == DEFAULT_TARGET_METRIC for r in rows)
 
 
-def test_builtin_objectives_only_use_metrics_the_screen_benchmark_reports():
+def test_each_builtin_objective_fits_one_kind_of_benchmark():
+    """A sweep objective ranks on the screen benchmark's module, a replay one
+    on the replay module's; none mixes the two, which no benchmark reports."""
+    from app.evaluation.benchmark_spec import replay_module
     from app.evaluation.benchmarks import DEFAULT_SCREEN_TEMPLATE, load_template
 
-    modules = {m["module_name"] for m in load_template(DEFAULT_SCREEN_TEMPLATE)["modules"]}
+    sweep = {m["module_name"] for m in load_template(DEFAULT_SCREEN_TEMPLATE)["modules"]}
     for spec in bootstrap.BUILTIN_OBJECTIVES:
         metrics = [spec["target_metric"], *(r["metric"] for r in spec["redlines"])]
-        assert {m.split(".")[0] for m in metrics} <= modules, spec["name"]
+        used = {m.split(".")[0] for m in metrics}
+        assert used <= sweep or used == {replay_module()}, spec["name"]
 
 
 def test_a_user_objective_with_a_builtin_name_is_left_alone():

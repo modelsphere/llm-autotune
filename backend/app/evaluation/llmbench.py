@@ -271,6 +271,22 @@ class LLMBenchClient:
         response.raise_for_status()
         return response.json()
 
+    def set_group_tags(self, benchmark_id: int, tags: list[str]) -> dict[str, Any]:
+        """File a benchmark under LLMBench's group tags (presentation only, so
+        allowed while it is locked)."""
+        response = self._send(
+            "PUT", f"/benchmarks/admin/benchmarks/{benchmark_id}", json={"group_tags": tags},
+        )
+        response.raise_for_status()
+        self._benchmarks = None
+        return response.json()
+
+    def module_defaults(self, module_name: str) -> dict[str, Any]:
+        """A module's descriptor: its default params and metric configs."""
+        response = self._send("GET", f"/modules/{module_name}")
+        response.raise_for_status()
+        return response.json()
+
     CATALOG_TTL_SECONDS = 30.0
 
     def list_benchmarks(self) -> list[dict]:

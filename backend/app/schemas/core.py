@@ -262,6 +262,11 @@ class CampaignCreate(BaseModel):
     search_space: dict[str, Any]
     objective: dict[str, Any] = Field(default_factory=dict)
     benchmark_slug: str = ""  # "" = platform default
+    # The workload instead of a slug (app/evaluation/benchmark_spec.py):
+    # AutoTune creates the matching benchmark on LLMBench and fills in
+    # `benchmark_slug`. Same for the second stage. Not stored.
+    benchmark_spec: dict[str, Any] | None = None
+    verify_benchmark_spec: dict[str, Any] | None = None
     service_port: int = 28200  # avoid 30000-32767 (k8s NodePort range)
     extra_env: dict[str, str] = Field(default_factory=dict)
     extra_volumes: dict[str, str] = Field(default_factory=dict)  # host -> container[:ro]

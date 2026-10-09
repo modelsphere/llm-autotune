@@ -31,6 +31,7 @@ from app import plugins
 from app.core.config import get_settings
 from app.db import models  # noqa: F401  — register every table on Base.metadata
 from app.db.base import Base
+from app.metrics_catalog import REPLAY
 
 logger = logging.getLogger("bootstrap")
 # Its own level, not the root's: running migrations applies alembic.ini's
@@ -40,9 +41,9 @@ logger.setLevel(logging.INFO)
 
 
 # Built-in objectives, so the campaign form has a sensible default on day one
-# and the shapes an objective can take are visible by example. Every metric
-# here is one the default screen benchmark (autotune-screen-v1, a throughput
-# sweep) reports, so each of them can rank a campaign without further setup.
+# and the shapes an objective can take are visible by example. The sweep ones
+# rank on what a throughput sweep reports (the default screen benchmark, or a
+# sweep workload); the replay ones on what a replay of recorded traffic does.
 BUILTIN_OBJECTIVES = [
     {
         "name": "Throughput per GPU",
@@ -71,6 +72,23 @@ BUILTIN_OBJECTIVES = [
         "target_metric": "perf_guidellm_sweep.ttft_p99_ms",
         "direction": "minimize",
         "redlines": [],
+    },
+    # For a campaign measured by replaying recorded traffic: the metric names
+    # are the replay module's, which a sweep objective would never find.
+    {
+        "name": "Replay: throughput per GPU",
+        "description": "Output tokens per minute per GPU on replayed real traffic.",
+        "target_metric": f"{REPLAY}.output_tpm_card_norm",
+        "direction": "maximize",
+        "redlines": [],
+    },
+    {
+        "name": "Replay: throughput per GPU under a 10s TTFT SLO",
+        "description": "Same, but a config whose p99 time to first token passes 10s "
+                       "does not count.",
+        "target_metric": f"{REPLAY}.output_tpm_card_norm",
+        "direction": "maximize",
+        "redlines": [{"metric": f"{REPLAY}.ttft_p99_ms", "op": "<=", "value": 10000}],
     },
 ]
 

@@ -18,6 +18,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- A campaign describes its workload instead of naming a benchmark: synthetic
+  prompts (sizes, concurrency levels) or a replay of a dataset. AutoTune
+  creates the matching benchmark on LLMBench when the campaign is created,
+  locked, with a slug hashed from the workload so the same workload reuses it
+  (`benchmark_spec` and `verify_benchmark_spec` on `POST /api/campaigns`;
+  `POST /api/benchmarks/spec` says what a workload becomes). A replay of a
+  rolling dataset pins it for the campaign's life.
+- Everything AutoTune creates on LLMBench is filed under the group tag
+  `llm-autotune` (`llm-autotune/sweep`, `llm-autotune/replay`); benchmarks it
+  created earlier are filed the next time it ensures them.
+- Built-in objectives for replay workloads ("Replay: throughput per GPU", and
+  the same under a 10s TTFT SLO). The Goal step lists only the objectives the
+  chosen workload can report.
+- The Add machine dialog says what the platform needs before it can reach a
+  machine: the worker's ssh key on the box, or a cluster's kubeconfig.
+
 - `AUTOTUNE_LLMBENCH_REPLAY_MODULE` (default `replay`): the name LLMBench's
   traffic replay module reports its metrics under. The metric catalog, the
   default second-stage objective and dataset pinning all follow it, for a

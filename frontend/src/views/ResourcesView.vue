@@ -10,6 +10,8 @@ import { relativeTime } from '../utils/time'
 /** Reaching `window` from a template needs it bound explicitly under
  *  `<script setup>`; the component instance is not the global object. */
 const openDocs = () => window.open('/api/docs', '_blank')
+/** Where giving the platform access to a machine is written down. */
+const setupDocs = 'https://github.com/modelsphere/llm-autotune/blob/main/docs/after-installing.md#gpus'
 
 const machines = ref<Machine[]>([])
 const groups = ref<MachineGroup[]>([])
@@ -785,7 +787,9 @@ onMounted(async () => {
     </div>
 
     <div v-if="!machines.length" class="empty muted">
-      No machines registered yet.
+      No machines registered yet. The platform has to be able to reach one first —
+      over ssh with its key, or through a Kubernetes cluster's kubeconfig;
+      <b>Add machine</b> says what each needs.
     </div>
 
     <div v-for="m in machines" :key="m.id" class="card">
@@ -940,6 +944,20 @@ onMounted(async () => {
             <el-option label="SSH + Docker (bare-metal machine)" value="" />
             <el-option label="Kubernetes (a slice of the GPU cluster)" value="k8s" />
           </el-select>
+          <!-- What has to be true before this machine can be reached at all —
+               set up outside this page, so it is said here, where it is needed. -->
+          <div v-if="form.driver === 'k8s'" class="muted tiny setup">
+            Needs a cluster the platform can reach: one added under <b>Clusters</b> with
+            its kubeconfig, or the default cluster set at install.
+            <a :href="setupDocs" target="_blank" rel="noopener">How</a>
+          </div>
+          <div v-else class="muted tiny setup">
+            Needs ssh access: put the public half of the worker's ssh key (set at install,
+            <span class="mono">worker.ssh</span>) in the user's
+            <span class="mono">~/.ssh/authorized_keys</span> on the machine, which needs
+            Docker and the NVIDIA container toolkit.
+            <a :href="setupDocs" target="_blank" rel="noopener">How</a>
+          </div>
         </el-form-item>
         <el-form-item v-if="form.driver === 'k8s'" label="Cluster">
           <el-select v-model="form.cluster_id" clearable placeholder="platform default"
@@ -1290,6 +1308,10 @@ onMounted(async () => {
 </template>
 
 <style scoped>
+.setup {
+  margin-top: 4px;
+  line-height: 1.5;
+}
 .header-row {
   display: flex;
   justify-content: space-between;
