@@ -23,7 +23,7 @@ Edit one, then run `deploy/quickstart.sh` again. It upgrades both releases in
 place and keeps their data. It never overwrites these two files;
 `deploy/quickstart.sh down` keeps them too.
 
-AutoTune settings the chart has no value for (promotion, timeouts, the default
+AutoTune settings the chart has no value for (timeouts, the default
 nightly window, pull secrets…) are environment variables, set through
 `extraEnv`; [deploying.md](deploying.md#other-settings) lists the ones installs
 usually need.
@@ -200,29 +200,11 @@ and [replay datasets](https://github.com/modelsphere/llm-bench/blob/main/docs/re
 The academic suites are fetched from Hugging Face; nothing else LLMBench runs
 needs it.
 
-## Promoting a winner
+## Rolling out a winner
 
-By default a campaign's winner is rendered as the exact configuration to apply,
-for a person or a pipeline. To have it opened as a GitLab merge request against
-the file production is deployed from:
-
-```bash
-kubectl -n llm-autotune create secret generic autotune-gitlab --from-literal=token=<token>
-```
-
-```yaml
-# .quickstart/llm-autotune.custom.yaml
-extraEnv:
-  - {name: AUTOTUNE_PROMOTION_TARGET, value: gitlab}
-  - {name: AUTOTUNE_GITLAB_BASE_URL, value: https://gitlab.example.com}
-  - {name: AUTOTUNE_GITLAB_PROJECT, value: group/deploy-repo}
-  - name: AUTOTUNE_GITLAB_TOKEN
-    valueFrom: {secretKeyRef: {name: autotune-gitlab, key: token}}
-  # - {name: AUTOTUNE_PROMOTION_DRY_RUN, value: "false"}   # once a preview reads right
-```
-
-Which file a baseline's winner is proposed against is set on the baseline, on
-**Baselines**. Requests are dry runs until `AUTOTUNE_PROMOTION_DRY_RUN` is false.
+A campaign's winner is a run like any other: its page has the exact launch
+command, the image digest and the engine version it ran with. Apply those to
+your serving deployment, by hand or from your own pipeline.
 
 ## The operator
 

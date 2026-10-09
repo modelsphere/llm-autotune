@@ -13,7 +13,7 @@ measured the same way every time, ranked against what production runs today.
 
 ## A campaign, end to end
 
-![Define, lend machines, tune night after night, read the report, promote the winner](assets/campaign-journey.svg)
+![Define, lend machines, tune night after night, read the report, roll out the winner](assets/campaign-journey.svg)
 
 1. **Define** the model and engine, the **search space** (the settings and
    values to try), the **objective** (one metric to improve, plus **redlines**
@@ -24,7 +24,7 @@ measured the same way every time, ranked against what production runs today.
    runs and measures them. A large search spans several nights and resumes
    where it stopped.
 4. **Read the report** each morning.
-5. **Promote** the winner as a merge request against your deploy repo.
+5. **Roll out** the winner with its exact launch command and image.
 
 ## One night
 

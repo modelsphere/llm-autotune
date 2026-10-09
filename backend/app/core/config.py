@@ -333,38 +333,6 @@ class Settings(BaseSettings):
     # being preempted by production is a bad trade; empty = cluster default.
     k8s_policy_priority_class: str = ""
 
-    # -- promotion (rolling a winner into the deploy of record) --------------
-    #
-    # A campaign's winner is handed to a PromotionTarget that opens a rollout:
-    #   "manual" — the default. Renders the exact config for a human or a gitops
-    #              pipeline to apply, and calls nothing.
-    #   "gitlab" — opens a merge request against a Helm values file in a GitLab
-    #              deploy repo, under the baseline's ownership policy.
-    # Adding a target (a GitHub pull request, a catalog entry, an API call) is a
-    # class in control/promotion/ plus a line in its registry; nothing above
-    # that package names a concrete one.
-    promotion_target: str = "manual"
-    # Default ON: the target builds the whole draft — branch, diff, description
-    # — records it, and writes nothing. Turn it off once a preview has been read.
-    promotion_dry_run: bool = True
-
-    # One platform-level token: the merge request is authored by the platform's
-    # account and names the requesting user in its description. It needs to push
-    # branches and open merge requests, nothing more.
-    #
-    # Which repo, branch and file a baseline mirrors is per baseline (its
-    # DeployBinding); the settings here are only the defaults offered at binding.
-    gitlab_base_url: str = ""          # e.g. https://gitlab.example.com
-    gitlab_token: str = ""
-    gitlab_project: str = ""           # path or numeric id of the deploy project
-    # What the request branch is called: this prefix plus `<model>-run<id>-<stamp>`.
-    # A prefix rather than a fixed name because a project may enforce a
-    # branch-name push rule, which would reject the push outright and leave no
-    # request at all. Keep a marker in it so the branch is identifiable as ours.
-    gitlab_branch_prefix: str = "autotune/"
-    # Trigger a pipeline on the MR branch after opening it.
-    gitlab_trigger_pipeline: bool = False
-
 
 @lru_cache
 def get_settings() -> Settings:

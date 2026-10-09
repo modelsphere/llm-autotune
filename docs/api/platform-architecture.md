@@ -7,7 +7,7 @@ contract a policy implements is the [policy API](policy-api.md). 中文：[平�
 
 ## The pieces
 
-![Platform architecture: the policy on a GPU machine asks the API for runs; the supervisor launches each config, LLMBench benchmarks it, and the winner becomes a merge request](diagrams/platform-architecture.svg)
+![Platform architecture: the policy on a GPU machine asks the API for runs; the supervisor launches each config, LLMBench benchmarks it, and the platform validates the best](diagrams/platform-architecture.svg)
 
 - **Browser** — operators create campaigns and watch them run.
 - **API** — one HTTP service: the REST API behind the UI, and the policy API
@@ -20,7 +20,6 @@ contract a policy implements is the [policy API](policy-api.md). 中文：[平�
   **engines** (sglang or vLLM) on them.
 - **LLMBench** — the benchmark platform. It drives load against an engine and
   returns the numbers.
-- **Deploy repo** — where a promoted winner lands, as a merge request.
 - **Plugins** — optional packages that add pages, API routes, scheduled steps
   and search strategies ([plugins](../plugins.md)).
 

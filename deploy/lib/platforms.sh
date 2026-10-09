@@ -564,7 +564,6 @@ if campaign is None:
         "objective": {k: obj[k] for k in ("name", "target_metric", "direction", "redlines")},
         "verify_benchmark_slug": "", "verify_top_k": 0, "verify_max_run_minutes": 180,
         "verify_objective": {}, "dataset_profile": "", "dataset_policy": "rebuild_at_start",
-        "deploy_branch": "", "auto_promote": False,
     }, token)
     if status != 200:
         sys.exit(f"could not create the demo campaign: {status} {campaign}")

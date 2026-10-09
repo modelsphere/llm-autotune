@@ -22,19 +22,18 @@ configs to try; the platform launches each one, benchmarks it with
   can replay captured production traffic; a config that breaks a latency or
   quality redline is out.
 - **Uses the GPUs you have.** Kubernetes nodes, other clusters, or ssh
-  machines. Production machines are borrowed for a nightly window and
-  restored after.
+  machines, lent to the platform for a nightly window.
 - **Reproducible.** Every run records its launch command, engine version, card
   type and dataset.
-- **From result to rollout.** A winner becomes a merge request against your
-  deploy repo; an agent API feeds LLM-written reports.
+- **From result to rollout.** A winner comes with its exact launch command
+  and image; an agent API feeds LLM-written reports.
 - **Restart-safe.** All state is in Postgres; a restart mid-run loses nothing.
 - **Extensible.** Plugins add pages, API routes, scheduled steps and search
   strategies ([plugins](docs/plugins.md)).
 
 ## How it works
 
-![Platform architecture: the policy on a GPU machine asks the API for runs; the supervisor launches each config, LLMBench benchmarks it, and the winner becomes a merge request](docs/api/diagrams/platform-architecture.svg)
+![Platform architecture: the policy on a GPU machine asks the API for runs; the supervisor launches each config, LLMBench benchmarks it, and the platform validates the best](docs/api/diagrams/platform-architecture.svg)
 
 The policy only decides what to try. The supervisor starts it, launches the
 configs it asks for, and has LLMBench benchmark them; at the deadline the
@@ -66,8 +65,7 @@ On **Resources**, lease `local-cluster` to the platform; then create a search
 space and a campaign. Running the script again upgrades the same install.
 
 - [After installing](docs/after-installing.md): your own values, search
-  policies, more GPUs (another cluster, ssh machines), ingress, datasets,
-  promotion.
+  policies, more GPUs (another cluster, ssh machines), ingress, datasets.
 - [Deploying](docs/deploying.md): installing the Helm chart yourself, and every
   setting.
 
@@ -93,7 +91,6 @@ nothing about performance. `deploy/demo.sh down --kind` removes it.
 | **Baseline** | The configuration production runs today, measured the same way. |
 | **Machine / cluster** | Where runs land: a node pool in a Kubernetes cluster, or a bare-metal box reached over ssh. |
 | **Policy** | A container that decides what to try next. |
-| **Promotion** | A winner as a merge request against your deploy repo. |
 | **Report** | A written comparison of a baseline against attempts. |
 
 ## Repository layout
@@ -123,7 +120,7 @@ docs/        architecture, the API contracts, deployment
 - [How it works](docs/workflow.md) — the product walkthrough, no code.
   中文：[产品视角](docs/workflow.zh.md)
 - [After installing](docs/after-installing.md) — your own values, policies,
-  more GPUs, ingress, datasets and promotion
+  more GPUs, ingress and datasets
 - [Deploying](docs/deploying.md) — the chart, GPU access, the benchmark
   platform, and every other setting
 - [Plugins](docs/plugins.md) — extending the platform without forking it

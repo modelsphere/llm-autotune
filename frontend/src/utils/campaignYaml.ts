@@ -50,8 +50,6 @@ export const PORTABLE_KEYS = [
   'policy_id',
   'policy_settings',
   'node_group',
-  'deploy_branch',
-  'auto_promote',
   // What enabled plugins keep about the campaign, by plugin name.
   'extensions',
 ] as const

@@ -29,8 +29,8 @@ k8s-native slice and nothing more:
 
 A `TuningRun` is an ephemeral experiment, not a production deployment: it
 deliberately does **not** touch whatever serves shipped models on the cluster
-(routes, gateways, monitoring). Promoting a winner into production is a separate
-concern, handled by the platform's promotion path.
+(routes, gateways, monitoring). Rolling a winner out to production is a
+separate step, taken from the winning run's recorded launch command.
 
 ## The `TuningRun` contract
 

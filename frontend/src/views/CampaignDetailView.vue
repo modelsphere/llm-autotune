@@ -13,7 +13,6 @@ import {
   type CampaignSchedule,
   type Candidate,
   type LeaderboardEntry,
-  type Promotion,
   type LogSource,
   type Machine,
   type MachineLifecycle,
@@ -27,7 +26,6 @@ import LogDialog from '../components/LogDialog.vue'
 import NightlyWindow from '../components/NightlyWindow.vue'
 import ConfigChips from '../components/ConfigChips.vue'
 import CopyButton from '../components/CopyButton.vue'
-import MergeRequestDialog from '../components/MergeRequestDialog.vue'
 import ScoreBars from '../components/ScoreBars.vue'
 import SpaceMap from '../components/SpaceMap.vue'
 import { useI18n } from '../i18n'
@@ -81,7 +79,6 @@ async function load() {
   candidates.value = (await api.get(`/campaigns/${campaignId}/candidates`)).data
   machines.value = (await api.get('/machines')).data
   leaderboard.value = (await api.get(`/campaigns/${campaignId}/leaderboard`)).data
-  loadPromotions()
   parity.value = (await api.get(`/campaigns/${campaignId}/parity`)).data
   const stages = (await api.get('/machines/lifecycle')).data
   lifecycle.value = Object.fromEntries(
@@ -236,47 +233,6 @@ function copyReport() {
 // -- export ------------------------------------------------------------------
 
 const exportOpen = ref(false)
-
-// -- promotion: the winner as a merge request --------------------------------
-
-const mrOpen = ref(false)
-/** Which run the dialog proposes: null = the leaderboard's top. */
-const mrRunId = ref<number | null>(null)
-const promotions = ref<Promotion[]>([])
-
-async function loadPromotions() {
-  try {
-    promotions.value = (await api.get(`/promotions?campaign_id=${campaignId}`)).data
-  } catch {
-    promotions.value = []
-  }
-}
-
-function openMr(runId: number | null = null) {
-  mrRunId.value = runId
-  mrOpen.value = true
-}
-
-async function refreshPromotion(p: Promotion) {
-  await api.post(`/promotions/${p.id}/refresh`)
-  await loadPromotions()
-}
-
-async function cancelPromotion(p: Promotion) {
-  await api.post(`/promotions/${p.id}/cancel`)
-  await loadPromotions()
-}
-
-function promotionState(state: string): string {
-  const key = ({
-    draft: 'stateDraft', submitted: 'stateSubmitted', rolled_out: 'stateRolledOut',
-    rejected: 'stateRejected', failed: 'stateFailed', cancelled: 'stateCancelled',
-  } as Record<string, string>)[state]
-  return key ? t(`promotion.${key}`) : state
-}
-
-/** The board's top candidate — what "Generate MR" proposes by default. */
-const winner = computed(() => leaderboard.value.find((e) => !e.is_baseline) ?? null)
 
 /** This campaign as a file. Only the inputs — status, the window it happens to
  *  be serving and any force-start override are results of running it, and a
@@ -936,14 +892,6 @@ onMounted(() => {
             </el-dropdown-menu>
           </template>
         </el-dropdown>
-        <el-button type="success" plain :disabled="!winner" @click="openMr(null)">
-          {{ t('promotion.generateMr') }}
-          <InfoHint :width="340">
-            The leaderboard's top configuration as a merge request against the deploy
-            repo file the baseline is bound to: a knob-level diff you review before
-            anything is opened. Per-row buttons on the board propose a specific run.
-          </InfoHint>
-        </el-button>
 
         <!-- Named for what it does and how much of it there is. "Retry failed"
              said neither, so nobody could tell whether it re-ran one config or
@@ -1079,39 +1027,6 @@ onMounted(() => {
       </template>
     </el-alert>
 
-    <!-- An unattended action has to be visible before it happens, not only
-         after: this is the campaign saying what it will do when it finishes. -->
-    <div v-if="campaign?.auto_promote" class="promotions">
-      <el-tag size="small" type="warning" effect="plain">{{ t('promotion.autoOn') }}</el-tag>
-      <span class="muted tiny">
-        {{ campaign.deploy_branch
-          ? t('promotion.autoOnBranch', { branch: campaign.deploy_branch })
-          : t('promotion.autoOnHint') }}
-      </span>
-    </div>
-
-    <div v-if="promotions.length" class="promotions">
-      <span class="muted tiny">{{ t('promotion.history') }}:</span>
-      <span v-for="p in promotions" :key="p.id" class="promotion">
-        <el-tag size="small" effect="plain"
-          :type="p.state === 'rolled_out' ? 'success' : p.state === 'failed' || p.state === 'rejected' ? 'danger' : 'info'">
-          #{{ p.id }} · run {{ p.run_id }} · {{ promotionState(p.state) }}
-        </el-tag>
-        <a v-if="p.refs?.mr_url" :href="String(p.refs.mr_url)" target="_blank" rel="noopener" class="tiny">
-          {{ t('promotion.viewMr') }}</a>
-        <span v-else-if="p.refs?.branch" class="mono tiny muted">{{ p.refs.branch }}</span>
-        <span v-if="p.error" class="tiny muted" :title="p.error">⚠</span>
-        <el-button v-if="!['rolled_out', 'rejected', 'failed', 'cancelled'].includes(p.state)" size="small" link
-          @click="refreshPromotion(p)">{{ t('promotion.refresh') }}</el-button>
-        <el-button v-if="!['rolled_out', 'rejected', 'failed', 'cancelled'].includes(p.state)" size="small" link
-          type="danger" @click="cancelPromotion(p)">{{ t('promotion.cancel') }}</el-button>
-      </span>
-    </div>
-
-    <MergeRequestDialog v-model="mrOpen" :preview-url="`/campaigns/${campaignId}/promote/preview`"
-      :promote-url="`/campaigns/${campaignId}/promote`"
-      :body="mrRunId ? { run_id: mrRunId } : {}" @promoted="loadPromotions" />
-
     <!-- Sections installed plugins add about this campaign (src/plugins). -->
     <PluginSlot name="campaign-detail.sections" :props="{ campaign, reload: load }" />
 
@@ -1195,12 +1110,6 @@ onMounted(() => {
                 </template>
               </template>
             </el-table-column>
-            <el-table-column label="" width="110">
-              <template #default="{ row }">
-                <el-button v-if="!row.is_baseline" size="small" link type="primary" @click="openMr(row.run_id)">
-                  {{ t('promotion.generateMr') }}</el-button>
-              </template>
-            </el-table-column>
           </el-table>
           <h3 class="board-title screening">{{ t('campaign.screening') }}</h3>
         </template>
@@ -1270,12 +1179,6 @@ onMounted(() => {
                 <el-tag type="danger" size="small">{{ t('campaign.crossed') }}</el-tag>
                 <span class="muted breach">{{ row.breaches.join('; ') }}</span>
               </template>
-            </template>
-          </el-table-column>
-          <el-table-column label="" width="110">
-            <template #default="{ row }">
-              <el-button v-if="!row.is_baseline" size="small" link type="primary" @click="openMr(row.run_id)">
-                {{ t('promotion.generateMr') }}</el-button>
             </template>
           </el-table-column>
         </el-table>
@@ -1824,17 +1727,5 @@ onMounted(() => {
   overflow: auto;
   font-size: 12.5px;
   line-height: 1.5;
-}
-.promotions {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px 14px;
-  margin-bottom: 12px;
-}
-.promotion {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
 }
 </style>

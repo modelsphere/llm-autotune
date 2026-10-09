@@ -48,10 +48,10 @@ corsOrigins: "*"
 # (docs/deploying.md#other-settings lists the ones installs usually need).
 # Take secrets from a Secret, not a literal:
 #   extraEnv:
-#     - name: AUTOTUNE_PROMOTION_TARGET
-#       value: gitlab
-#     - name: AUTOTUNE_GITLAB_TOKEN
-#       valueFrom: {secretKeyRef: {name: autotune-gitlab, key: token}}
+#     - name: AUTOTUNE_DEFAULT_DAILY_START
+#       value: "23:00"
+#     - name: AUTOTUNE_LLMBENCH_API_KEY
+#       valueFrom: {secretKeyRef: {name: autotune-llmbench, key: api-key}}
 extraEnv: []
 
 # The cluster's DNS domain. The UI's nginx resolves the API service by its fully

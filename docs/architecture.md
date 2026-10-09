@@ -4,7 +4,7 @@ For engineers: how the platform is built, and the few choices everything else
 follows from. The same system without the code: [How it works](workflow.md).
 中文：[架构](architecture.zh.md)
 
-![Platform architecture: the policy on a GPU machine asks the API for runs; the supervisor launches each config, LLMBench benchmarks it, and the winner becomes a merge request](api/diagrams/platform-architecture.svg)
+![Platform architecture: the policy on a GPU machine asks the API for runs; the supervisor launches each config, LLMBench benchmarks it, and the platform validates the best](api/diagrams/platform-architecture.svg)
 
 - **API** — one FastAPI service: the REST API behind the UI, the
   [policy API](api/policy-contract.md), the [agent API](api/agent-api.md) and
@@ -36,8 +36,8 @@ An engine a policy asked for uses one more state, `serving`: launched and
 health-checked like any run, then held for the policy instead of benchmarked.
 
 One tick, in order: plugin steps → campaign windows → leases → stop requests →
-dataset pins → plan → baseline lifecycle → policy sessions → schedule → advance
-runs → enforce windows → reap teardowns → auto-promotion. The clocks run first,
+dataset pins → plan → policy sessions → schedule → advance runs → enforce
+windows → reap teardowns. The clocks run first,
 so a tick never starts a run that the same tick would tear down.
 
 ## Two substrates, one launch spec
@@ -97,7 +97,7 @@ being ranked.
 Each boundary is a narrow interface with implementations in a registry; the
 core never knows which one it is talking to.
 
-![Seams around the core: policy, launch driver, engine adapter, evaluator, promotion target, plugins](assets/seams.svg)
+![Seams around the core: policy, launch driver, engine adapter, evaluator, plugins](assets/seams.svg)
 
 | Seam | Interface | Implementations |
 |---|---|---|
@@ -105,7 +105,6 @@ core never knows which one it is talking to.
 | Launch driver | `launch · state · teardown · attach` | `ssh_docker`, `k8s` |
 | Engine adapter | settings → engine command | `sglang`, `vllm` |
 | Evaluator | `start · poll` | health gate, LLMBench |
-| Promotion target | `open_rollout · status` | `manual`, `gitlab` |
 | Plugins | routes, tick steps, tables, pages | [your package](plugins.md) |
 
 The platform validates and canonicalizes every config a policy proposes, and

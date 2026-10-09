@@ -56,7 +56,6 @@ from app.schemas.core import (
     CampaignScheduleUpdate,
     CampaignStatusUpdate,
     CandidateOut,
-    DeployBranchIn,
     LeaderboardEntry,
     MachineWarningOut,
     RunOut,
@@ -522,42 +521,6 @@ async def _campaign_out(session: AsyncSession, campaign: Campaign) -> CampaignOu
             )
         ]
     return out
-
-
-@router.put("/{campaign_id}/deploy-branch", response_model=CampaignOut)
-async def set_deploy_branch(
-    campaign_id: int,
-    body: DeployBranchIn,
-    user: User = Depends(get_current_user),
-    session: AsyncSession = Depends(get_async_session),
-):
-    """Where this campaign's winner is proposed — and whether it proposes
-    itself.
-
-    The repo keeps one branch per (model x card x engine), so a bound baseline
-    can face several of them and the binding's own branch is only a default.
-    Empty clears it, back to that default. Not validated against the repo here
-    — the branch list comes from GitLab in the UI, and a branch that has since
-    disappeared is reported when the merge request is previewed, which is the
-    moment it matters.
-    """
-    campaign = await session.get(Campaign, campaign_id)
-    if campaign is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "no such campaign")
-    campaign.deploy_branch = (body.branch or "").strip()
-    if body.auto_promote is not None:
-        campaign.auto_promote = body.auto_promote
-    session.add(
-        Event(
-            actor=user.username,
-            kind="campaign_deploy_branch_set",
-            campaign_id=campaign.id,
-            payload={"branch": campaign.deploy_branch, "auto_promote": campaign.auto_promote},
-        )
-    )
-    await session.commit()
-    await session.refresh(campaign)
-    return await _campaign_out(session, campaign)
 
 
 @router.put("/{campaign_id}/status", response_model=CampaignOut)

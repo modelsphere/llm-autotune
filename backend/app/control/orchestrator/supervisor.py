@@ -64,7 +64,6 @@ from app.control.orchestrator.machine_queue import campaign_key, session_key, wa
 from app.control.orchestrator.occupancy import holds, reservations_on
 from app.control.orchestrator.packing import Placement, choose_next, free_indices
 from app.control.orchestrator.states import can_transition
-from app.control.promotion import winner as winner_of
 from app.control.run_nodes import machine_hosts_live_gang, nodes_of, run_ids_on_machine
 from app.control.search import CandidateConfig
 from app.control.search.space import expand
@@ -100,7 +99,6 @@ from app.db.models import (
     MachineState,
     PolicySession,
     PolicyTrial,
-    Promotion,
     Result,
     Run,
     RunKind,
@@ -283,10 +281,6 @@ class Supervisor:
             # when its container goes quietly — matching the old immediate
             # release — and lingers only when it genuinely refuses to.
             self._reap_teardowns(session)
-            # Last of all, and deliberately after everything that can finish a
-            # campaign: a campaign that asked to propose its own winner does it
-            # in the same tick it becomes DONE.
-            self._advance_auto_promotions(session)
             session.commit()
 
     def _run_plugin_steps(self, session: Session) -> None:
@@ -304,130 +298,6 @@ class Supervisor:
                         plugin.name,
                         getattr(step, "__name__", repr(step)),
                     )
-
-    # ---------------------------------------------------- unattended promotion
-
-    def _advance_auto_promotions(self, session: Session) -> None:
-        """Propose the winner of a finished campaign that asked for it.
-
-        Keyed on the campaign being DONE rather than hooked into the places
-        that set it — a campaign reaches DONE from a closed schedule, an
-        exhausted search and a policy session ending, and a proposal that only
-        happened down some of those paths would be worse than none.
-
-        Runs at most once per campaign: the existence of ANY promotion row is
-        the mark. A failed one stays failed and visible on the campaign page
-        rather than being retried every ten seconds — and a winner promoted by
-        hand first means the platform has nothing left to say.
-
-        When there is nothing to propose — no successful run, a winner that
-        crosses a redline, a winner production already runs — it says so once
-        and keeps the flag ON. DONE is not final: retrying the failed runs of a
-        campaign whose every launch was refused revives it, and a campaign that
-        disarmed itself on the way past would never propose the winner it went
-        on to find. "Once" is one `auto_promotion_skipped` event per reason; a
-        DIFFERENT reason is news and is recorded again.
-        """
-        campaigns = session.scalars(
-            select(Campaign).where(
-                Campaign.status == CampaignStatus.DONE.value,
-                Campaign.auto_promote.is_(True),
-            )
-        ).all()
-        if not campaigns:
-            return
-        promoted = set(
-            session.scalars(
-                select(Promotion.campaign_id).where(
-                    Promotion.campaign_id.in_([c.id for c in campaigns])
-                )
-            ).all()
-        )
-        target_name = self.settings.promotion_target or "manual"
-        for campaign in campaigns:
-            if campaign.id in promoted:
-                continue
-            try:
-                found = winner_of.resolve(session, campaign)
-            except Exception:  # noqa: BLE001 — one campaign must not stop the pass
-                logger.exception("auto-promotion could not resolve campaign %d", campaign.id)
-                continue
-            if found is None:
-                self._skip_promotion(
-                    session, campaign, "no successful, benchmarked run to promote"
-                )
-                continue
-            if not found.holds_redlines:
-                # A winner that crosses an SLO is a rejected option. The button
-                # can force it past this; an unattended pass must not.
-                self._skip_promotion(
-                    session, campaign, "the best run crosses a redline",
-                    run_id=found.run.id, breaches=list(found.entry.breaches or []),
-                )
-                continue
-            draft = None
-            if target_name == "gitlab":
-                try:
-                    draft = winner_of.draft_for(
-                        found, actor="autotune", ui_url=self.settings.public_ui_url
-                    )
-                except Exception as exc:  # noqa: BLE001 — recorded, not raised
-                    logger.exception("auto-promotion could not draft campaign %d", campaign.id)
-                    draft = winner_of.failed_draft(str(exc))
-                if draft.unchanged:
-                    # The winner IS what production runs. Nothing to propose,
-                    # and nothing went wrong — a promotion row here would be a
-                    # red badge on a campaign that did its job.
-                    self._skip_promotion(
-                        session, campaign, draft.reason, run_id=found.run.id
-                    )
-                    continue
-            promotion = winner_of.promote(
-                session,
-                found,
-                actor="autotune",
-                target_name=target_name,
-                ui_url=self.settings.public_ui_url,
-                draft=draft,
-            )
-            self._event(
-                session, "promotion_opened", campaign_id=campaign.id, run_id=found.run.id,
-                payload={
-                    "promotion": promotion.id,
-                    "target": promotion.target,
-                    "state": promotion.state,
-                    "auto": True,
-                    "branch": (promotion.refs or {}).get("target_branch", ""),
-                    "mr_url": (promotion.refs or {}).get("mr_url", ""),
-                    "error": promotion.error,
-                },
-            )
-            logger.info(
-                "campaign %d proposed its winner (run %d) to %s: %s",
-                campaign.id, found.run.id, promotion.target, promotion.state,
-            )
-
-    def _skip_promotion(
-        self, session: Session, campaign: Campaign, reason: str, **payload
-    ) -> None:
-        """Record that there is nothing to propose — once per reason.
-
-        The flag stays on: a campaign that reaches DONE with nothing to say may
-        still gain a winner (retried runs, a reopened window), and one that
-        disarmed itself on the way past could never propose it.
-        """
-        last = session.scalars(
-            select(Event)
-            .where(Event.campaign_id == campaign.id, Event.kind == "auto_promotion_skipped")
-            .order_by(Event.id.desc())
-            .limit(1)
-        ).first()
-        if last is not None and (last.payload or {}).get("reason") == reason:
-            return
-        self._event(
-            session, "auto_promotion_skipped", campaign_id=campaign.id,
-            payload={"reason": reason, **payload},
-        )
 
     # ------------------------------------------------------- campaign clocks
 

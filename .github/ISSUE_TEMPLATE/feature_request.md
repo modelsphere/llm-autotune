@@ -11,5 +11,5 @@ The problem, not the solution — it often has more than one.
 
 **Would it fit an existing seam?**
 Search algorithms are policy containers, launch substrates are drivers,
-benchmarks are evaluators, and rollouts are promotion targets. A change that
+benchmarks are evaluators, and anything else a plugin can add. A change that
 fits one of those is usually easier to land than one that does not.

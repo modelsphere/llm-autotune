@@ -57,15 +57,15 @@ def test_a_spec_is_exactly_the_body_that_recreates_the_campaign():
         id=1, owner_id=1, name="c", engine="sglang", image="img", model_path="/m",
         served_model_name="m", search_space={"grid": {"tp": [2, 4]}},
         objective={"target_metric": "x"}, policy_id=3, policy_settings={"max_contenders": 2},
-        node_group="pair", deploy_branch="main", auto_promote=True,
+        node_group="pair",
         machine_names=[], extra_env={}, extra_volumes={}, verify_objective={},
-        benchmark_slug="", service_port=28200, run_baseline_canary=True, share_machine=True,
+        benchmark_slug="", service_port=28200, run_baseline_canary=True, share_machine=False,
         daily_start="", daily_end="", schedule_timezone="", max_run_minutes=150,
         confirm_top_k=0, confirm_repeats=3, verify_benchmark_slug="", verify_top_k=0,
         verify_max_run_minutes=180, dataset_profile="", dataset_policy="rebuild_at_start",
     )
     body = CampaignCreate.model_validate(spec_of(campaign))
-    assert body.policy_id == 3 and body.node_group == "pair" and body.auto_promote is True
+    assert body.policy_id == 3 and body.node_group == "pair" and body.share_machine is False
     assert "window_start" not in spec_of(campaign)   # runtime, not definition
 
 
@@ -208,14 +208,14 @@ async def test_a_clone_copies_the_definition_and_takes_overrides(api):
         s.add(Campaign(id=9, owner_id=1, name="orig", engine="sglang", image="i",
                        model_path="/m", served_model_name="m",
                        search_space={"grid": {"tp": [2]}}, node_group="",
-                       deploy_branch="release", auto_promote=True))
+                       share_machine=False, confirm_top_k=2))
         await s.commit()
     r = await http.post("/campaigns/9/clone", json={
         "name": "copy", "overrides": {"search_space": {"grid": {"tp": [2, 4]}}}})
     assert r.status_code == 200, r.text
     copy = r.json()
     assert copy["name"] == "copy" and copy["id"] != 9
-    assert copy["deploy_branch"] == "release" and copy["auto_promote"] is True
+    assert copy["share_machine"] is False and copy["confirm_top_k"] == 2
     assert copy["search_space"]["grid"] == {"tp": [2, 4]}
     assert copy["status"] in ("draft", "scheduled")
 

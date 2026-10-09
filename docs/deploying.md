@@ -200,17 +200,14 @@ the API, the worker and the migrate job:
 ```yaml
 extraEnv:
   - {name: AUTOTUNE_DEFAULT_DAILY_START, value: "23:00"}
-  - name: AUTOTUNE_GITLAB_TOKEN
-    valueFrom: {secretKeyRef: {name: autotune-gitlab, key: token}}
+  - name: AUTOTUNE_LLMBENCH_API_KEY
+    valueFrom: {secretKeyRef: {name: autotune-llmbench, key: api-key}}
 ```
 
 The ones installs usually reach for:
 
 | variable | default | what it does |
 |---|---|---|
-| `AUTOTUNE_PROMOTION_TARGET` | `manual` | `gitlab` opens a merge request for a winner instead of only rendering its config |
-| `AUTOTUNE_PROMOTION_DRY_RUN` | `true` | build and record the merge request without pushing anything |
-| `AUTOTUNE_GITLAB_BASE_URL`, `_PROJECT`, `_TOKEN` | — | the deploy repository promotion writes to; the token needs to push branches and open merge requests |
 | `AUTOTUNE_DEFAULT_DAILY_START`, `_END`, `AUTOTUNE_DEFAULT_SCHEDULE_TIMEZONE` | — | the window a drafted campaign gets when its author names none |
 | `AUTOTUNE_DEFAULT_MAX_RUN_MINUTES` | `240` | window a run reserves when its length can be neither measured nor estimated from its benchmark |
 | `AUTOTUNE_READY_TIMEOUT_MINUTES` | `30` | how long a started engine may take to answer `/v1/models` |

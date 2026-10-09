@@ -7,7 +7,7 @@ English：[Platform architecture](platform-architecture.md)
 
 ## 组成部分
 
-![平台架构：GPU 机器上的 policy 向 API 请求运行；supervisor 启动每个配置，LLMBench 压测，优胜者变成 merge request](diagrams/platform-architecture.zh.svg)
+![平台架构：GPU 机器上的 policy 向 API 请求运行；supervisor 启动每个配置，LLMBench 压测，平台验证最优配置](diagrams/platform-architecture.zh.svg)
 
 - **Browser** —— 运维在这里创建 campaign 并查看运行情况。
 - **API** —— 一个 HTTP 服务：UI 背后的 REST API，以及 `/api/policy/v1` 上的 policy API。
@@ -16,7 +16,6 @@ English：[Platform architecture](platform-architecture.md)
 - **GPU 机器** —— Kubernetes 节点，或通过 ssh 访问的机器，在 campaign 的时间窗内由平台接管。平台在上面启动
   **policy 容器**和 **engine**（sglang 或 vLLM）。
 - **LLMBench** —— benchmark 平台。它对 engine 施加负载并返回数字。
-- **部署仓库** —— 晋级的优胜者以 merge request 的形式提交到这里。
 - **插件** —— 可选的扩展包，增加页面、API 路由、定时步骤和 search 策略（[plugins](../plugins.md)）。
 
 ## Policy

@@ -171,6 +171,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- The GitLab merge-request path: the `gitlab` promotion target and client,
+  the deploy-repo file formats, the baselines' bindings to a repo file
+  (`/baselines/{formats,branches,import}`, `/baselines/{id}/binding/*`), a
+  campaign's deploy branch and auto-promote switch
+  (`PUT /campaigns/{id}/deploy-branch`), `/campaigns/{id}/promote` and
+  `/promotions`, the `AUTOTUNE_PROMOTION_*` and `AUTOTUNE_GITLAB_*` settings,
+  the `promotion_origin` plugin hook, and the frontend plugin exports
+  `MergeRequestDialog` and `DeployBranchSelect` (migration `006` drops the
+  tables and columns). A winner is a run like any other, with its exact
+  launch command and image on its page.
+
 - The CI check that searched the tree for a list of internal host names; that
   list no longer lives in the repository.
 - Production capture, clearing and restoring. A lease is now the hand-over:

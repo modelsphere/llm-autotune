@@ -10,7 +10,7 @@ Understanding it:
 Running it:
 
 - [After installing](after-installing.md): settings, search policies, more
-  GPUs, ingress, datasets and promotion.
+  GPUs, ingress and datasets.
 - [Deploying](deploying.md): the Helm chart and every setting.
 - [Upgrading](upgrading.md): how the schema is applied.
 

@@ -11,14 +11,14 @@ English：[How it works](workflow.md)
 
 ## 一个 campaign 的全过程
 
-![定义、借出机器、逐夜调优、看报告、晋级优胜者](assets/campaign-journey-zh.svg)
+![定义、借出机器、逐夜调优、看报告、上线优胜者](assets/campaign-journey-zh.svg)
 
 1. **定义** model 和 engine、**search space**（要试的设置和取值）、**objective**（要提升的一个指标，加上
    配置必须守住的 **redline**，比如延迟上限）以及时间表。
 2. **借出机器。** 生产机器在夜间时间窗内加入，或者由 Kubernetes 集群借出空闲 GPU。
 3. **调优。** **policy**（search 算法）挑选配置，平台运行并测量。大的 search 会跨多个夜晚，每次从上次停下的地方继续。
 4. **每天早上看报告。**
-5. **晋级**：把优胜者作为 merge request 提交到你的部署仓库。
+5. **上线**：用优胜者的完整启动命令和镜像部署它。
 
 ## 一个夜晚
 

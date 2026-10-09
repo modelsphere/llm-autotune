@@ -313,14 +313,6 @@ class CampaignCreate(BaseModel):
     # campaign that finishes in one night and wrong for one that does not.
     dataset_profile: str = ""
     dataset_policy: str = "rebuild_at_start"
-    # Which release branch of the deploy repo this campaign's winner is
-    # proposed onto. The repo keeps one per (model x card x engine), so it is a
-    # choice — empty means the branch the bound baseline already tracks.
-    deploy_branch: str = ""
-    # Open that merge request the moment the campaign is done, without waiting
-    # for someone to press Generate MR. Honours the platform's dry-run setting
-    # exactly as the button does.
-    auto_promote: bool = False
     # What enabled plugins keep about this campaign, keyed by plugin name
     # (docs/plugins.md): each plugin is handed its own part when the campaign
     # is created. Not a column; a key no enabled plugin takes is refused.
@@ -384,8 +376,6 @@ class CampaignOut(BaseModel):
     verify_max_run_minutes: int
     dataset_profile: str
     dataset_policy: str
-    deploy_branch: str = ""
-    auto_promote: bool = False
     # What the campaign is actually measuring against, once it has started:
     # the build id, its hash, and whether that was a fresh build or one it
     # adopted from a campaign already using it.
@@ -641,55 +631,6 @@ class BaselineIn(BaseModel):
         return coerce_gpu_type(v)
 
 
-class BaselineImportIn(BaseModel):
-    """Create a baseline FROM its deploy-repo file: the identity, plus where
-    the file lives. The config comes from the file, never from the body."""
-
-    served_model_name: str = Field(min_length=1, max_length=128)
-    engine: str = "sglang"
-    card_type: str = ""
-    project: str = Field(min_length=1)
-    branch: str = Field(min_length=1)
-    path: str = "config/model.yaml"
-    format: dict[str, Any] = Field(default_factory=dict)
-    policy: dict[str, Any] = Field(default_factory=dict)
-    notes: str = ""
-
-    @field_validator("card_type")
-    @classmethod
-    def _canonical_card_type(cls, v: str) -> str:
-        return coerce_gpu_type(v)
-
-
-class DeployBindingIn(BaseModel):
-    """Bind (or re-bind) a baseline to its deploy-repo file. `format` is
-    `{preset}` or `{adapter, options}`; empty = the default preset."""
-
-    project: str = Field(min_length=1)
-    branch: str = Field(min_length=1)
-    path: str = "config/model.yaml"
-    format: dict[str, Any] = Field(default_factory=dict)
-    policy: dict[str, Any] | None = None
-    equivalences: dict[str, Any] | None = None
-
-
-class DeployBindingOut(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-    id: int
-    baseline_id: int
-    project: str
-    branch: str
-    path: str
-    format: dict[str, Any]
-    policy: dict[str, Any]
-    equivalences: dict[str, Any]
-    divergences: list[dict[str, Any]]
-    unresolved: int = 0
-    commit: str
-    synced_at: datetime | None = None
-    updated_at: datetime | None = None
-
-
 class BaselineOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: int
@@ -707,146 +648,7 @@ class BaselineOut(BaseModel):
     cards: int = 0
     source: str
     notes: str
-    binding: DeployBindingOut | None = None
     created_at: datetime
     updated_at: datetime | None = None
 
 
-class BaselineSyncOut(BaseModel):
-    """What a sync from the deploy repo did to the row."""
-
-    baseline: BaselineOut
-    commit: str
-    # Platform-owned differences taken into the row, and everything else
-    # found — each with its status (unresolved, or how it was decided).
-    adopted: list[dict[str, Any]] = Field(default_factory=list)
-    divergences: list[dict[str, Any]] = Field(default_factory=list)
-    unresolved: int = 0
-    # Facts read off the file.
-    image: str = ""
-    model_path: str = ""
-    gpus: int | None = None
-    gpu_product: str = ""
-    env: dict[str, str] = Field(default_factory=dict)
-    warnings: list[str] = Field(default_factory=list)
-
-
-class DivergenceResolveIn(BaseModel):
-    kind: str = Field(pattern="^(field|knob)$")
-    key: str = Field(min_length=1)
-    action: str = Field(pattern="^(adopt|equivalent|repo|ignore|platform)$")
-
-
-class BindingPolicyIn(BaseModel):
-    """One policy edit: a shortcut by name, or one field/knob's owner."""
-
-    shortcut: str = ""
-    field: str = ""
-    knob: str = ""
-    owner: str = ""
-
-
-class EquivalenceIn(BaseModel):
-    field: str = ""
-    knob: str = ""
-    ours: str
-    theirs: str
-
-
-# -- promotions ---------------------------------------------------------------
-
-
-class PromoteRequest(BaseModel):
-    """Roll a campaign winner onto the cluster.
-
-    `run_id` omitted means "the current top of the leaderboard". `target` empty
-    means the platform default (manual). `force` promotes a run that crossed a
-    redline anyway — a deliberate override, not the normal path.
-    """
-
-    run_id: int | None = None
-    target: str = ""
-    notes: str = ""
-    force: bool = False
-    # gitlab target only: the release branch to open the merge request against,
-    # overriding the campaign's own and the binding's. Set once here and the
-    # campaign remembers it, so the next winner goes to the same place.
-    branch: str = ""
-    # gitlab target only: also delete production knobs the winner's config
-    # never mentions. Off by default — absence in a search space is not a
-    # decision, and the preview lists what would go.
-    apply_removals: bool = False
-    # gitlab target only: fields to treat as platform-owned for THIS merge
-    # request ("image", "model_path", "gpus") — the "also update image.tag"
-    # tick, without changing the binding's policy.
-    promote_fields: list[str] = Field(default_factory=list)
-
-
-
-
-class DeployBranchIn(BaseModel):
-    """Where this campaign's winner goes, and whether it
-    goes by itself.
-
-    `branch` empty clears it, back to the bound baseline's branch.
-    `auto_promote` omitted leaves the setting alone, so moving a branch does
-    not quietly arm (or disarm) unattended promotion.
-    """
-
-    branch: str = ""
-    auto_promote: bool | None = None
-
-
-class MergeRequestPreview(BaseModel):
-    """What `promote` would send to GitLab, before it does.
-
-    Everything an operator needs to decide: which file on which branch, whether
-    the platform's copy of it is stale, the knob-level change list, what is
-    deliberately NOT applied, and the exact diff. `ready` is false when there
-    is nothing to change or the baseline is not bound to a repo.
-    """
-
-    campaign_id: int
-    run_id: int
-    baseline_id: int | None = None
-    ready: bool
-    reason: str = ""
-    repo_project: str = ""
-    # Where the merge request goes, and the branch the baseline is synced
-    # against. They differ when a campaign names a branch of its own.
-    repo_branch: str = ""
-    tracked_branch: str = ""
-    repo_path: str = ""
-    head_commit: str = ""
-    synced_commit: str = ""
-    stale: bool = False
-    # Nothing to propose: the winner is what production already runs.
-    unchanged: bool = False
-    unresolved: int = 0
-    # Knob changes between the file at the synced commit and at head — what
-    # moved in production since the platform last looked.
-    drift: list[dict[str, Any]] = Field(default_factory=list)
-    plan: dict[str, Any] = Field(default_factory=dict)
-    diff: str = ""
-    source_branch: str = ""
-    title: str = ""
-    description: str = ""
-    dry_run: bool = True
-    offline: bool = False
-    evidence: dict[str, Any] = Field(default_factory=dict)
-
-
-class PromotionOut(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-    id: int
-    campaign_id: int
-    run_id: int
-    target: str
-    state: str
-    config: dict[str, Any]
-    refs: dict[str, Any]
-    detail: str
-    error: str
-    created_by: int | None = None
-    created_at: datetime
-    updated_at: datetime | None = None

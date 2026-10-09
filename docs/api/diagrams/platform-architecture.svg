@@ -21,9 +21,6 @@
   <text x="80" y="88" font-size="15" font-weight="700" fill="#1b2733" text-anchor="middle">Browser</text>
   <text x="80" y="109" font-size="12.5" fill="#5b6b7a" text-anchor="middle">operators</text>
 
-  <rect x="20" y="230" width="120" height="66" rx="8" fill="#eef1f5" stroke="#9aa7b4" stroke-width="1.2"/>
-  <text x="80" y="258" font-size="15" font-weight="700" fill="#1b2733" text-anchor="middle">Deploy repo</text>
-  <text x="80" y="279" font-size="12.5" fill="#5b6b7a" text-anchor="middle">serving config</text>
 
   <!-- platform -->
   <rect x="240" y="20" width="360" height="430" rx="10" fill="#f5f8fc" stroke="#b8c4d0" stroke-width="1.2" stroke-dasharray="6 4"/>
@@ -69,8 +66,6 @@
     <line x1="140" y1="93" x2="258" y2="93" stroke="#5b6b7a" stroke-width="1.6" marker-end="url(#arr)"/>
     <text x="199" y="84" fill="#5b6b7a" text-anchor="middle">campaigns</text>
 
-    <line x1="260" y1="263" x2="142" y2="263" stroke="#5b6b7a" stroke-width="1.6" marker-end="url(#arr)"/>
-    <text x="199" y="254" fill="#5b6b7a" text-anchor="middle">winner as MR</text>
 
     <line x1="335" y1="308" x2="335" y2="358" stroke="#8b72be" stroke-width="1.6" marker-start="url(#arrp)" marker-end="url(#arrp)"/>
 

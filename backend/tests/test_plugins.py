@@ -311,26 +311,3 @@ def test_extra_fields_reach_the_body_but_never_replace_the_endpoint():
 
     assert seen[0]["board_token"] == "t0k"
     assert seen[0]["endpoint_url"] == "http://engine"
-
-
-# ------------------------------------------------------------------ promotion
-
-
-def test_a_plugin_names_the_winner_of_a_campaign_it_runs():
-    from types import SimpleNamespace
-
-    from app.control.promotion.winner import deploy_branch_of, origin_of
-    from app.plugins import PromotionOrigin
-
-    campaign = SimpleNamespace(id=3, name="entrant", deploy_branch="")
-    told = PromotionOrigin(kind="study", page="/studies/9", description="study **X**",
-                           deploy_branch="release/x", remember_branch=False)
-
-    origin = origin_of(campaign, 812, told)
-    assert origin.kind == "study" and origin.page == "/studies/9"
-    assert origin.describe() == "study **X**" and origin.remember_branch is False
-    assert deploy_branch_of(campaign, told) == "release/x"
-
-    plain = origin_of(campaign, 812)
-    assert plain.page == "/campaigns/3" and "campaign **entrant**" in plain.describe()
-    assert deploy_branch_of(SimpleNamespace(deploy_branch="release/own"), told) == "release/own"

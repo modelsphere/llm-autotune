@@ -3,7 +3,7 @@
 面向工程师：平台是怎么搭起来的，以及决定其余一切的几个关键选择。不涉及代码的版本见
 [产品视角](workflow.zh.md)。English：[Architecture](architecture.md)
 
-![平台架构：GPU 机器上的 policy 向 API 请求运行；supervisor 启动每个配置，LLMBench 压测，优胜者变成 merge request](api/diagrams/platform-architecture.zh.svg)
+![平台架构：GPU 机器上的 policy 向 API 请求运行；supervisor 启动每个配置，LLMBench 压测，平台验证最优配置](api/diagrams/platform-architecture.zh.svg)
 
 - **API** —— 一个 FastAPI 服务：UI 背后的 REST API、[policy API](api/policy-contract.md)、
   [agent API](api/agent-api.md) 和 [machine lease API](api/machine-lease.md)。
@@ -27,8 +27,8 @@ run 推进一个合法步骤，然后提交一次。每个 tick 都从数据库�
 policy 请求的 engine 还会用到一个状态 `serving`：像普通 run 一样启动并做健康检查，然后留给 policy 使用，
 而不是直接压测。
 
-一个 tick 的顺序：插件步骤 → campaign 时间窗 → 租约 → 停止请求 → dataset pin → 规划 → baseline 生命周期 →
-policy session → 调度 → 推进 run → 执行时间窗截止 → 回收已拆除的容器 → 自动晋级。时钟类步骤先跑，所以一个
+一个 tick 的顺序：插件步骤 → campaign 时间窗 → 租约 → 停止请求 → dataset pin → 规划 →
+policy session → 调度 → 推进 run → 执行时间窗截止 → 回收已拆除的容器。时钟类步骤先跑，所以一个
 tick 不会启动同一个 tick 就要拆掉的 run。
 
 ## 两种承载方式，同一个 launch spec
@@ -74,7 +74,7 @@ replay benchmark 回放一份生产流量样本，而流量会变化。什么时
 
 每个边界都是一个窄接口，实现注册在 registry 里；核心不知道自己在和哪个实现打交道。
 
-![核心周围的接缝：policy、launch driver、engine adapter、evaluator、promotion target、插件](assets/seams-zh.svg)
+![核心周围的接缝：policy、launch driver、engine adapter、evaluator、插件](assets/seams-zh.svg)
 
 | 接缝 | 接口 | 实现 |
 |---|---|---|
@@ -82,7 +82,6 @@ replay benchmark 回放一份生产流量样本，而流量会变化。什么时
 | Launch driver | `launch · state · teardown · attach` | `ssh_docker`、`k8s` |
 | Engine adapter | 设置 → engine 命令 | `sglang`、`vllm` |
 | Evaluator | `start · poll` | health gate、LLMBench |
-| Promotion target | `open_rollout · status` | `manual`、`gitlab` |
 | 插件 | 路由、tick 步骤、表、页面 | [你的扩展包](plugins.md) |
 
 平台会校验并规范化 policy 提出的每个配置，并自己计算 objective，所以 policy 看到的和排行榜排出的不会不一致。
