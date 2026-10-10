@@ -6,7 +6,7 @@
 #   demo     a try-out with no GPUs: the mock engine and a demo campaign
 set -euo pipefail
 
-LLMBENCH_VERSION=0.1.2
+LLMBENCH_VERSION=0.2.0
 KIND_CLUSTER=${KIND_CLUSTER:-llm-autotune}
 AUTOTUNE_PORT=${AUTOTUNE_PORT:-8080}
 LLMBENCH_PORT=${LLMBENCH_PORT:-8081}
