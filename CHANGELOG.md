@@ -215,6 +215,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A policy campaign's final validation launched each contender with every
+  card the session held, not the ones its config uses: a tp=2 contender on an
+  8-card machine asked Kubernetes for 8 GPUs and waited forever when any were
+  in use. It now takes tp × dp × pp of them, free ones first.
 - **Force stop** on a policy campaign stops it. A policy still starting (its
   pod waiting for a node, say) used to be asked to wind down, which it never
   heard, so the campaign stayed active; it is now aborted and the campaign

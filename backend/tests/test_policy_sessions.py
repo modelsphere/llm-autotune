@@ -793,3 +793,20 @@ async def test_force_stop_finalizes_a_search_and_a_second_press_aborts(night):
 
     assert (await _force_stop(http))["status"] == CampaignStatus.PAUSED.value
     assert (await _session_row(http)).abort_requested_at is not None
+
+
+def test_a_validation_run_takes_the_cards_its_config_uses():
+    """Not the session's whole block: a tp=2 contender on an 8-card session
+    asked the cluster for all 8 and waited forever for cards it never needed."""
+    from types import SimpleNamespace
+
+    from app.control.orchestrator.policy_session import _validation_cards
+
+    session = SimpleNamespace(gpu_indices=list(range(8)))
+    assert _validation_cards(session, {"tp_size": 2}, []) == [0, 1]
+    # Cards a dying engine still holds go last.
+    dying = [SimpleNamespace(gpu_indices=[0, 1])]
+    assert _validation_cards(session, {"tp_size": 2}, dying) == [2, 3]
+    assert _validation_cards(session, {"tp_size": 4, "dp_size": 2}, []) == list(range(8))
+    # A card-less session (a CPU-only slice) launches with none.
+    assert _validation_cards(SimpleNamespace(gpu_indices=[]), {"tp_size": 2}, []) == []

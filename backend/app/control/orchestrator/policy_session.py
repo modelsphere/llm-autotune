@@ -37,6 +37,7 @@ from app.control.orchestrator.policy_lifecycle import (
     settings_of,
 )
 from app.control.orchestrator.schedule import from_campaign as schedule_of
+from app.control.search.validation import cards_used
 from app.core import apikeys
 from app.db.models import (
     TERMINAL_RUN_STATES,
@@ -93,6 +94,21 @@ def policy_log_path(run_log_dir: str, session_id: int) -> str:
     column."""
     return os.path.join(run_log_dir, f"policy-session-{session_id}.log")
 
+
+
+def _validation_cards(session: PolicySession, config: dict, blockers: list) -> list[int]:
+    """The cards a contender's validation run takes: as many as its config
+    uses (tp × dp × pp), out of the session's block, free ones first. The
+    block is every card the session may use; a launch sized to the block
+    asked a cluster for all of them, and waited forever for cards that
+    production or another session held."""
+    block = list(session.gpu_indices or [])
+    if not block:
+        return []
+    needed = min(max(cards_used(config), 1), len(block))
+    held = {i for r in blockers for i in (r.gpu_indices or [])}
+    ordered = [i for i in block if i not in held] + [i for i in block if i in held]
+    return sorted(ordered[:needed])
 
 class PolicySessionEngine:
     """Advances every live policy session by one step per tick.
@@ -810,7 +826,7 @@ class PolicySessionEngine:
             machine_id=session.machine_id,
             kind=RunKind.EXPERIMENT.value,  # launched + benched like any run
             status=RunStatus.PENDING.value,
-            gpu_indices=list(session.gpu_indices or []),
+            gpu_indices=_validation_cards(session, config, blockers),
             service_port=port,
             policy_session_id=session.id,
             started_at=now(),  # like the classic scheduler; no null on this path
