@@ -191,7 +191,9 @@ done
 ca=$(k config view --minify --raw -o jsonpath='{.clusters[0].cluster.certificate-authority-data}')
 if [ -z "$ca" ]; then
   ca_file=$(k config view --minify --raw -o jsonpath='{.clusters[0].cluster.certificate-authority}')
-  [ -n "$ca_file" ] && [ -f "$ca_file" ] || die "context $ctx names no certificate authority to embed"
+  if [ -z "$ca_file" ] || [ ! -f "$ca_file" ]; then
+    die "context $ctx names no certificate authority to embed"
+  fi
   ca=$(base64 < "$ca_file" | tr -d '\n')
 fi
 

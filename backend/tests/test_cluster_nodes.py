@@ -81,7 +81,8 @@ async def test_registering_makes_one_machine_per_node(client, cluster_nodes):  #
     assert machine.node_selector == "kubernetes.io/hostname=gpu-node-1"
     assert machine.gpu_count == 8 and machine.state == "away"
 
-    again = await client.post(f"/api/clusters/{cluster['id']}/nodes", json={"nodes": ["gpu-node-1"]})
+    again = await client.post(
+        f"/api/clusters/{cluster['id']}/nodes", json={"nodes": ["gpu-node-1"]})
     assert again.json()["registered"] == [], "a registered node is not registered twice"
     listed = {n["node"]: n["machine"] for n in again.json()["nodes"]}
     assert listed["gpu-node-1"]["name"] == "gpu-node-1" and listed["gpu-node-2"] is None
