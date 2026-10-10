@@ -36,7 +36,7 @@ jobs:
           persist-credentials: false
       - name: No credentials committed
         # Matches credential FILES, not the scripts that mint them:
-        # make-scoped-kubeconfig.sh is exactly the thing you are supposed to run.
+        # deploy/gpu-cluster.sh is exactly the thing you are supposed to run.
         run: |
           if git ls-files | grep -InE '(^|/)\.env$|\.kubeconfig$|\.pem$|(^|/)(id_rsa|id_ed25519)$'; then
             echo "::error::a credential file is tracked"
@@ -56,6 +56,9 @@ jobs:
           helm template t deploy/helm/llm-autotune \
             --set jwtSecret=ci --set adminPassword=ci --set gpuCluster.inCluster=true > /dev/null
           helm template t deploy/helm/llm-autotune \
+            --set jwtSecret=ci --set adminPassword=ci \
+            --set frontend.service.type=NodePort --set frontend.service.nodePort=30080 > /dev/null
+          helm template t deploy/helm/llm-autotune \
             -f deploy/helm/llm-autotune/values-demo.yaml \
             --set jwtSecret=ci --set adminPassword=ci > /dev/null
           helm template t deploy/helm/llm-autotune \
@@ -63,4 +66,4 @@ jobs:
             -f deploy/helm/llm-autotune/values-mock.yaml \
             --set jwtSecret=ci --set adminPassword=ci > /dev/null
       - name: The install scripts pass shellcheck
-        run: shellcheck -x deploy/quickstart.sh deploy/demo.sh deploy/lib/platforms.sh
+        run: shellcheck -x deploy/quickstart.sh deploy/demo.sh deploy/lib/platforms.sh deploy/gpu-cluster.sh

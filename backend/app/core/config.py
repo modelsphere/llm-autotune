@@ -80,30 +80,23 @@ class Settings(BaseSettings):
     # point back at what produced it. Empty means no link is sent.
     public_ui_url: str = ""
 
-    # Let the worker take production down after a PASSING canary and put it
-    # back when the window closes. A night is unattended by definition; set
-    # false to require a human on the Resources page for both steps.
-    auto_baseline_lifecycle: bool = True
-
-    # Whether the worker RESTARTS production itself when a window or lease ends.
-    # Off by default: on these fleets an admin owns production and restores it
-    # by hand (often they never handed it to us running in the first place —
-    # they stopped it themselves). Auto-restart is the one lifecycle step that
-    # relaunches a service we did not start, so it stays opt-in; when off, the
-    # machine is handed back with production left exactly as we found it and an
-    # event flags that a manual restore is owed. Capture and the hand-over clear
-    # still run under auto_baseline_lifecycle — only the put-back is gated here.
-    auto_restore_production: bool = False
-
     # Below this, a difference from the baseline is not distinguishable from
     # run-to-run variance. Measured on node-24 with the long benchmark: four runs
     # of the same config spanned 0.24%, so 1% is ~4x the observed noise.
     # Raise it for shorter/noisier benchmarks.
     report_noise_threshold_pct: float = 1.0
+    # The agent API (/api/agent/v1) and the Reports pages. Off by default: not
+    # yet proven on tuning campaigns.
+    agent_api_enabled: bool = False
 
     worker_tick_seconds: int = 10
     run_log_dir: str = "./runs"
-    default_max_run_minutes: int = 150
+    # Window a run reserves when its length can be neither measured (no run of
+    # this campaign has finished yet) nor estimated from the benchmark's own
+    # parameters (a replay with no time cap, an unknown module). Generous: a
+    # run cut at the window's end is lost whole, a reserve too long only idles
+    # the window's tail — and the first cut run teaches the real length.
+    default_max_run_minutes: int = 240
 
     # -- policy sessions (docs/api/policy-contract.md) ------------------------
     #
@@ -342,38 +335,6 @@ class Settings(BaseSettings):
     # Optional PriorityClass for policy pods. A controller costing 100m CPU
     # being preempted by production is a bad trade; empty = cluster default.
     k8s_policy_priority_class: str = ""
-
-    # -- promotion (rolling a winner into the deploy of record) --------------
-    #
-    # A campaign's winner is handed to a PromotionTarget that opens a rollout:
-    #   "manual" — the default. Renders the exact config for a human or a gitops
-    #              pipeline to apply, and calls nothing.
-    #   "gitlab" — opens a merge request against a Helm values file in a GitLab
-    #              deploy repo, under the baseline's ownership policy.
-    # Adding a target (a GitHub pull request, a catalog entry, an API call) is a
-    # class in control/promotion/ plus a line in its registry; nothing above
-    # that package names a concrete one.
-    promotion_target: str = "manual"
-    # Default ON: the target builds the whole draft — branch, diff, description
-    # — records it, and writes nothing. Turn it off once a preview has been read.
-    promotion_dry_run: bool = True
-
-    # One platform-level token: the merge request is authored by the platform's
-    # account and names the requesting user in its description. It needs to push
-    # branches and open merge requests, nothing more.
-    #
-    # Which repo, branch and file a baseline mirrors is per baseline (its
-    # DeployBinding); the settings here are only the defaults offered at binding.
-    gitlab_base_url: str = ""          # e.g. https://gitlab.example.com
-    gitlab_token: str = ""
-    gitlab_project: str = ""           # path or numeric id of the deploy project
-    # What the request branch is called: this prefix plus `<model>-run<id>-<stamp>`.
-    # A prefix rather than a fixed name because a project may enforce a
-    # branch-name push rule, which would reject the push outright and leave no
-    # request at all. Keep a marker in it so the branch is identifiable as ours.
-    gitlab_branch_prefix: str = "autotune/"
-    # Trigger a pipeline on the MR branch after opening it.
-    gitlab_trigger_pipeline: bool = False
 
 
 @lru_cache

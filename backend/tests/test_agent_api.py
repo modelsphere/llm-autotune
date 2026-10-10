@@ -15,6 +15,7 @@ import pytest_asyncio
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+from app.api import agent as agent_api
 from app.core.auth import create_token
 from app.db.base import Base, get_async_session
 from app.db.models import Campaign, Candidate, Machine, Result, Run, User
@@ -154,6 +155,7 @@ async def stack():
             yield session
 
     app.dependency_overrides[get_async_session] = _session
+    app.dependency_overrides[agent_api._enabled] = lambda: None
     async with factory() as s:
         s.add(User(id=1, username="admin", password_hash="x", role="admin"))
         s.add(Machine(id=1, name="node-5", host="10.0.0.5", gpu_type="H100", gpu_count=8))
@@ -891,3 +893,9 @@ def test_a_flag_stored_as_text_is_not_a_change():
     diff = _dict_diff({"tp": 2, "mem_fraction_static": 0.9, "fp8": True, "x": "a"},
                       {"tp": "2", "mem_fraction_static": "0.90", "fp8": "true", "x": "b"})
     assert diff["changed"] == {"x": {"from": "a", "to": "b"}}
+
+
+async def test_the_agent_api_is_off_unless_enabled(stack):
+    http, _ = stack
+    del app.dependency_overrides[agent_api._enabled]
+    assert (await http.get("/api/agent/v1/reports")).status_code == 404

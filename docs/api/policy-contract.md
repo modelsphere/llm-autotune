@@ -157,6 +157,11 @@ Field notes:
 - **`time`** — `search_deadline` is when exploration must stop (validation
   time is already reserved after it); `hard_deadline` is the end of the
   window, when anything still running is killed.
+- **`contenders`** — how many contenders the platform will validate, and
+  about how long each validation benchmark takes. The platform learns that
+  figure from the campaign's own runs, so it is a fallback on the first night
+  and a measurement after that; the reserve is `max` × (benchmark + model
+  startup) plus a margin.
 - **`services`** — tonight's menu. Absent entry = unavailable tonight. Never
   assume a service; read the menu.
 - **`prior`** — validated contenders and verdicts from this campaign's earlier

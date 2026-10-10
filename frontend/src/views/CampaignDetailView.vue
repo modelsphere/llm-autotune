@@ -1,6 +1,10 @@
 <script setup lang="ts">
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { computed, onMounted, ref } from 'vue'
+import {
+  AlarmClock, CopyDocument, Document, Download, MoreFilled, RefreshRight, Tickets,
+  VideoPause, VideoPlay,
+} from '@element-plus/icons-vue'
+import { computed, h, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import PluginSlot from '../components/PluginSlot.vue'
 import { describeStrategy } from '../plugins'
@@ -13,12 +17,12 @@ import {
   type CampaignSchedule,
   type Candidate,
   type LeaderboardEntry,
-  type Promotion,
   type LogSource,
   type Machine,
   type MachineLifecycle,
   type MetricSpec,
   type Policy,
+  type PolicySessionDetail,
   type Run,
   type RunDetail,
 } from '../api/client'
@@ -27,7 +31,6 @@ import LogDialog from '../components/LogDialog.vue'
 import NightlyWindow from '../components/NightlyWindow.vue'
 import ConfigChips from '../components/ConfigChips.vue'
 import CopyButton from '../components/CopyButton.vue'
-import MergeRequestDialog from '../components/MergeRequestDialog.vue'
 import ScoreBars from '../components/ScoreBars.vue'
 import SpaceMap from '../components/SpaceMap.vue'
 import { useI18n } from '../i18n'
@@ -55,9 +58,8 @@ const metricSpecs = ref<MetricSpec[]>([])
 // so the platform says which metric a second stage defaults to.
 const defaultVerifyMetric = ref('replay.score_card_norm')
 const parity = ref<{
-  machine: string
-  container: string
-  missing: { flag: string; production: unknown; container: string }[]
+  baseline_id: number | null
+  missing: { flag: string; production: unknown }[]
 } | null>(null)
 const selectedRun = ref<RunDetail | null>(null)
 const drawerOpen = ref(false)
@@ -82,13 +84,103 @@ async function load() {
   candidates.value = (await api.get(`/campaigns/${campaignId}/candidates`)).data
   machines.value = (await api.get('/machines')).data
   leaderboard.value = (await api.get(`/campaigns/${campaignId}/leaderboard`)).data
-  loadPromotions()
   parity.value = (await api.get(`/campaigns/${campaignId}/parity`)).data
   const stages = (await api.get('/machines/lifecycle')).data
   lifecycle.value = Object.fromEntries(
     (stages.machines as MachineLifecycle[]).map((m) => [m.machine_id, m]),
   )
   schedule.value = (await api.get(`/campaigns/${campaignId}/schedule`)).data
+  await loadSession()
+}
+
+// -- the policy's night: what the search container is doing ------------------
+/** The latest policy session of a policy campaign, with what it is waiting on.
+ *  Every session id, for the Logs menu: a session that never got as far as a
+ *  run still has a container log worth reading. */
+const sessionIds = ref<number[]>([])
+const session = ref<PolicySessionDetail | null>(null)
+
+async function loadSession() {
+  if (campaign.value?.policy_id == null) return
+  try {
+    const rows = (await api.get(`/campaigns/${campaignId}/sessions`)).data as { id: number }[]
+    sessionIds.value = rows.map((r) => r.id).sort((a, b) => b - a)
+    session.value = sessionIds.value.length
+      ? (await api.get(`/policy-sessions/${sessionIds.value[0]}`)).data
+      : null
+  } catch {
+    session.value = null
+  }
+}
+
+const SESSION_STEPS = ['starting', 'searching', 'finalizing', 'validating', 'done'] as const
+const sessionEnded = computed(
+  () => ['done', 'failed', 'aborted'].includes(session.value?.status ?? ''))
+/** A policy still holding something on the cluster, whatever the campaign says. */
+const policyLive = computed(() => !!session.value && !sessionEnded.value)
+const sessionLook = computed(() => {
+  const s = session.value
+  if (!s) return { text: '', type: 'info' }
+  if (s.status === 'failed') return { text: 'failed', type: 'danger' }
+  if (s.status === 'aborted') return { text: 'aborted', type: 'info' }
+  if (s.status === 'done') return { text: 'done', type: 'success' }
+  if (s.abort_requested_at) return { text: 'aborting', type: 'warning' }
+  if (s.finalize_requested_at && s.status === 'searching') return { text: 'stopping', type: 'warning' }
+  return { text: s.status, type: s.status === 'starting' || s.status === 'pending' ? 'warning' : 'primary' }
+})
+/** Where it is on pending > starting > searching > finalizing > validating >
+ *  done; a session that failed or was aborted stops where it was. */
+function sessionStepClass(step: string, i: number) {
+  const s = session.value
+  if (!s) return ''
+  const at = s.status === 'pending' ? 0 : SESSION_STEPS.indexOf(s.status as never)
+  if (s.status === 'done' || (at >= 0 && i < at)) return 'done'
+  if (i === at) return s.status === 'failed' ? 'bad' : 'now'
+  return ''
+}
+const sessionLine = computed(() => {
+  const s = session.value
+  if (!s) return ''
+  const finalists = s.contenders.length
+  switch (s.status) {
+    case 'pending': return 'Waiting for a machine'
+    case 'starting':
+      return s.started_at
+        ? `Starting for ${duration(s.started_at, new Date().toISOString())}` : 'Starting'
+    case 'searching': {
+      const parts = [`${s.trials.length} trial(s)`, `${finalists} finalist(s)`]
+      if (s.last_heartbeat_at) parts.push(`heard from ${relativeTime(s.last_heartbeat_at)}`)
+      if (s.finalize_requested_at) parts.push('stop requested')
+      return parts.join(' · ')
+    }
+    case 'finalizing': return 'Winding down its engines'
+    case 'validating': return `Measuring ${finalists} finalist(s)`
+    case 'done': return s.search_end_reason ? `Finished: ${s.search_end_reason}` : 'Finished'
+    case 'failed': return s.failure_class ? `Failed: ${s.failure_class}` : 'Failed'
+    case 'aborted': return 'Aborted'
+  }
+  return ''
+})
+
+function openPolicyLog() {
+  logOpen.value = true
+}
+
+async function abortSession() {
+  if (!session.value) return
+  try {
+    await ElMessageBox.confirm(
+      'Stop the policy now, without measuring its finalists?', 'Abort the search',
+      { confirmButtonText: 'Abort', cancelButtonText: 'Cancel', type: 'warning' })
+  } catch {
+    return
+  }
+  try {
+    await api.post(`/policy-sessions/${session.value.id}/abort`)
+    await load()
+  } catch (error: any) {
+    ElMessage.error(error.response?.data?.detail ?? 'Abort failed')
+  }
 }
 
 /** The grid this campaign was created from, when it recorded one. */
@@ -238,47 +330,6 @@ function copyReport() {
 
 const exportOpen = ref(false)
 
-// -- promotion: the winner as a merge request --------------------------------
-
-const mrOpen = ref(false)
-/** Which run the dialog proposes: null = the leaderboard's top. */
-const mrRunId = ref<number | null>(null)
-const promotions = ref<Promotion[]>([])
-
-async function loadPromotions() {
-  try {
-    promotions.value = (await api.get(`/promotions?campaign_id=${campaignId}`)).data
-  } catch {
-    promotions.value = []
-  }
-}
-
-function openMr(runId: number | null = null) {
-  mrRunId.value = runId
-  mrOpen.value = true
-}
-
-async function refreshPromotion(p: Promotion) {
-  await api.post(`/promotions/${p.id}/refresh`)
-  await loadPromotions()
-}
-
-async function cancelPromotion(p: Promotion) {
-  await api.post(`/promotions/${p.id}/cancel`)
-  await loadPromotions()
-}
-
-function promotionState(state: string): string {
-  const key = ({
-    draft: 'stateDraft', submitted: 'stateSubmitted', rolled_out: 'stateRolledOut',
-    rejected: 'stateRejected', failed: 'stateFailed', cancelled: 'stateCancelled',
-  } as Record<string, string>)[state]
-  return key ? t(`promotion.${key}`) : state
-}
-
-/** The board's top candidate — what "Generate MR" proposes by default. */
-const winner = computed(() => leaderboard.value.find((e) => !e.is_baseline) ?? null)
-
 /** This campaign as a file. Only the inputs — status, the window it happens to
  *  be serving and any force-start override are results of running it, and a
  *  file that carried them would recreate a campaign already half-finished. */
@@ -359,38 +410,63 @@ async function setStatus(status: 'active' | 'paused' | 'scheduled') {
  *  setting `active`: the schedule would see no open window on the next tick
  *  and put the campaign straight back to sleep. */
 async function forceStart() {
+  const scheduled = !!schedule.value?.daily_start
   try {
     await ElMessageBox.confirm(
-      'Run this campaign now, ignoring its schedule?\n\n' +
-        'It will keep going for 8 hours or until you stop it, then hand control back ' +
-        'to the clock.',
-      'Force start',
-      { confirmButtonText: 'Run now', cancelButtonText: 'Cancel', type: 'warning' },
+      (scheduled ? 'Run this campaign now, outside its schedule? ' : 'Start this campaign now? ') +
+        'It runs until its search is done or you stop it.',
+      scheduled ? t('campaign.forceStart') : t('campaign.start'),
+      { confirmButtonText: t('campaign.forceStart'), cancelButtonText: 'Cancel', type: 'info' },
     )
   } catch {
     return
   }
-  await api.post(`/campaigns/${campaignId}/force-start`, { hours: 8 })
-  ElMessage.success('Running now — the first run starts within a tick')
+  try {
+    await api.post(`/campaigns/${campaignId}/force-start`, {})
+  } catch (error: any) {
+    ElMessage.error(error.response?.data?.detail ?? 'Could not start')
+    return
+  }
+  ElMessage.success('Running — the first run starts within a tick')
   await load()
 }
 
+const liveRuns = computed(() => runs.value.filter((r) => isLive(r.status)))
+/** Stop, drawn as the square every player uses. */
+const StopIcon = () =>
+  h('svg', { viewBox: '0 0 1024 1024', fill: 'currentColor' },
+    [h('rect', { x: 224, y: 224, width: 576, height: 576, rx: 64 })])
+
 async function forceStop() {
-  const live = runs.value.filter((r) => isLive(r.status)).length
+  const live = liveRuns.value.length
+  const s = session.value
+  // A searching policy is first asked to wrap up (measure its finalists); a
+  // second Stop ends it at once.
+  const windDown = !!s && s.status === 'searching' && !s.finalize_requested_at
+  let message = 'Pause this campaign?'
+  if (windDown) {
+    message = 'Ask the policy to wrap up? It measures its finalists, then stops. ' +
+      'Press Stop again to end it at once.'
+  } else if (live || policyLive.value) {
+    const what = [live ? `${live} run(s)` : '', policyLive.value ? 'the policy' : '']
+      .filter(Boolean).join(' and ')
+    message = `Stop now? ${what} will be ended; measurements in progress are lost.`
+  }
   try {
-    await ElMessageBox.confirm(
-      live
-        ? `Stop everything now? ${live} run(s) will be killed and their measurements lost.`
-        : 'Pause this campaign and clear any schedule override?',
-      'Force stop',
-      { confirmButtonText: 'Stop everything', cancelButtonText: 'Cancel', type: 'error' },
-    )
+    await ElMessageBox.confirm(message, t('campaign.forceStop'), {
+      confirmButtonText: windDown ? 'Wrap up' : t('campaign.forceStop'),
+      cancelButtonText: 'Cancel', type: windDown ? 'warning' : 'error',
+    })
   } catch {
     return
   }
-  const { data } = await api.post(`/campaigns/${campaignId}/force-stop`)
-  ElMessage.success(`Paused${live ? `; ${live} run(s) stopping` : ''}`)
-  void data
+  try {
+    await api.post(`/campaigns/${campaignId}/force-stop`)
+  } catch (error: any) {
+    ElMessage.error(error.response?.data?.detail ?? 'Could not stop')
+    return
+  }
+  ElMessage.success(windDown ? 'The policy is wrapping up' : 'Stopped')
   await load()
 }
 
@@ -538,9 +614,8 @@ const logOpen = ref(false)
 const logSources = computed<LogSource[]>(() => {
   const name = campaign.value?.name ?? 'campaign'
   const sources: LogSource[] = []
-  // The policy container's log (policy campaigns), found via any run's session.
-  const sid = runs.value.find((r) => r.policy_session_id != null)?.policy_session_id
-  if (sid != null) {
+  // Each policy session's container log (policy campaigns), newest first.
+  for (const sid of sessionIds.value) {
     sources.push({
       key: `policy-${sid}`,
       label: `Policy container · session ${sid}`,
@@ -565,6 +640,26 @@ const logSources = computed<LogSource[]>(() => {
 /** Every setting the campaign was created with, in one place — so a night can
  *  be reproduced, compared against another campaign, or have one field lifted
  *  out of it without reading the database. */
+/** "≈ 6 min startup + 22 min benchmark", or a note that nothing ran yet. */
+function moreAction(command: string) {
+  if (command === 'logs') logOpen.value = true
+  else if (command === 'clone') void cloneCampaign()
+  else if (command === 'export') exportOpen.value = true
+}
+
+function learnedRunLength(c: Campaign): string {
+  const t = c.learned_timing
+  if (t?.bench_minutes == null && t?.estimated_bench_minutes != null) {
+    return `≈ ${Math.round(t.estimated_bench_minutes)} min benchmark, estimated from its settings`
+  }
+  if (!t || t.bench_minutes == null) return 'not measured yet'
+  const parts = [
+    t.startup_minutes != null ? `${Math.round(t.startup_minutes)} min startup` : '',
+    `${Math.round(t.bench_minutes)} min benchmark`,
+  ].filter(Boolean)
+  return `≈ ${parts.join(' + ')}`
+}
+
 const configRows = computed(() => {
   const c = campaign.value
   if (!c) return [] as { label: string; value: string; hint?: string }[]
@@ -603,10 +698,10 @@ const configRows = computed(() => {
             ? `${c.dataset_profile} @ ${c.dataset_build_id}`
             : `${c.dataset_profile} — not pinned yet`,
           hint: c.dataset_build_id
-            ? `${c.dataset_policy_applied}; held for this campaign's whole life`
+            ? `sample ${c.dataset_policy_applied}; kept for this campaign's whole life`
             : c.dataset_policy === 'use_current'
-              ? 'takes whatever build is published when it starts'
-              : 'a fresh build is requested when the campaign starts',
+              ? 'uses the current sample when it starts'
+              : 'takes a fresh sample when it starts',
         }]
       : []),
     { label: 'Machines', value: (c.machine_names ?? []).join(', ') || 'any registered machine' },
@@ -627,11 +722,15 @@ const configRows = computed(() => {
           label: 'Search',
           value: describeStrategy(c.extensions) ?? 'every configuration in the space, in order',
         }]),
-    { label: 'Max run minutes', value: String(c.max_run_minutes) },
     {
-      label: 'Baseline canary',
-      value: c.run_baseline_canary ? 'yes' : 'no',
-      hint: 'benchmark production before clearing it',
+      label: 'Run length',
+      value: learnedRunLength(c),
+      hint: `learned from this campaign's runs; capped at ${c.max_run_minutes} min`,
+    },
+    {
+      label: 'Production reference',
+      value: c.run_baseline_canary ? 'measured' : 'not measured',
+      hint: "the recorded baseline config, launched and benchmarked like a candidate",
     },
     {
       label: 'Machine sharing',
@@ -801,8 +900,15 @@ const progress = computed(() => {
   // the declared size is a floor while planning, the row count takes over once
   // repeats grow past it. Before planning both fall back and it reads 0/256.
   const total = Math.max(candidates.value.length, spaceSize.value ?? 0) || spaceSize.value
-  const done = runs.value.filter((r) => !isLive(r.status)).length
-  return { total, done }
+  // Candidates, not runs, on top too: one candidate can be several runs — a
+  // policy's launch plus the benchmark of it, or a retry — and counting runs
+  // read 8 policy configs as "18/10". A candidate is done once it has a
+  // finished run and none still going.
+  const live = new Set(runs.value.filter((r) => isLive(r.status)).map((r) => r.candidate_id))
+  const finished = new Set(
+    runs.value.filter((r) => !isLive(r.status) && !live.has(r.candidate_id)).map((r) => r.candidate_id),
+  )
+  return { total, done: finished.size }
 })
 
 /** Why is an active campaign not starting anything? Silence is the worst
@@ -883,90 +989,73 @@ onMounted(() => {
             <b>{{ objective.name }}</b></template>
         </span>
       </div>
-      <div>
+      <div class="actions">
         <el-tag size="large" :type="campaignStatus(campaign.status).type"
-          :class="campaignStatus(campaign.status).cls" style="margin-right: 12px">
+          :class="campaignStatus(campaign.status).cls">
           {{ campaign.status }}
         </el-tag>
-        <el-button @click="openReport">{{ t('campaign.report') }}</el-button>
-        <el-button v-if="logSources.length" @click="logOpen = true">
-          {{ t('campaign.logs') }}
-        </el-button>
-        <el-button @click="cloneCampaign">{{ t('campaign.clone') }}</el-button>
-        <el-button @click="exportOpen = true">
-          {{ t('campaign.exportYaml') }}
-          <InfoHint :width="320">
-            Everything needed to recreate this campaign. Import it on the New campaign
-            page to build a variant without walking the whole form again.
-          </InfoHint>
-        </el-button>
-        <el-button type="success" plain :disabled="!winner" @click="openMr(null)">
-          {{ t('promotion.generateMr') }}
-          <InfoHint :width="340">
-            The leaderboard's top configuration as a merge request against the deploy
-            repo file the baseline is bound to: a knob-level diff you review before
-            anything is opened. Per-row buttons on the board propose a specific run.
-          </InfoHint>
-        </el-button>
+        <el-button :icon="Document" @click="openReport">{{ t('campaign.report') }}</el-button>
+        <!-- The occasional actions, one click away instead of a row of buttons
+             nobody reads past. -->
+        <el-dropdown trigger="click" @command="moreAction">
+          <el-button :icon="MoreFilled" :aria-label="t('campaign.more')" />
+          <template #dropdown>
+            <el-dropdown-menu>
+              <el-dropdown-item v-if="logSources.length" command="logs" :icon="Tickets">
+                {{ t('campaign.logs') }}
+              </el-dropdown-item>
+              <el-dropdown-item command="clone" :icon="CopyDocument">
+                {{ t('campaign.clone') }}
+              </el-dropdown-item>
+              <el-dropdown-item command="export" :icon="Download"
+                title="Everything needed to recreate this campaign — import it on the New campaign page">
+                {{ t('campaign.exportYaml') }}
+              </el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
 
-        <!-- Named for what it does and how much of it there is. "Retry failed"
-             said neither, so nobody could tell whether it re-ran one config or
-             the whole night. It re-queues only candidates whose every run
-             failed, and then puts the campaign back to work — a button that
-             queued work but left the campaign DONE did nothing visible. -->
-        <el-button v-if="retryableCount" @click="retryFailed">
+        <!-- Re-queues only candidates whose every run failed, then puts the
+             campaign back to work. -->
+        <el-button v-if="retryableCount" :icon="RefreshRight" @click="retryFailed">
           {{ retryableCount === 1
             ? t('campaign.rerunFailedOne', { n: retryableCount })
             : t('campaign.rerunFailedMany', { n: retryableCount }) }}
-          <InfoHint :width="330">
-            Configurations whose every attempt failed go back in the queue. Ones that
-            succeeded are left alone, so nothing already measured is thrown away or
-            measured twice.
-          </InfoHint>
         </el-button>
 
-        <!-- Pause is gentle: no new runs, current ones finish. Force stop kills
-             them. Both are offered because "stop" means different things when a
-             benchmark is 18 minutes into 20. -->
-        <template v-if="campaign.status === 'active'">
-          <el-button type="warning" @click="setStatus('paused')">
-            {{ t('campaign.pause') }}
-          </el-button>
-          <el-button type="danger" plain @click="forceStop">
-            {{ t('campaign.forceStop') }}
-          </el-button>
-        </template>
-        <template v-else-if="campaign.status === 'scheduled'">
-          <el-button type="primary" @click="forceStart">
-            {{ t('campaign.forceStart') }}
-          </el-button>
-          <el-button type="warning" plain @click="setStatus('paused')">
-            {{ t('campaign.pause') }}
-          </el-button>
-        </template>
-        <template v-else-if="campaign.status === 'paused' && schedule?.daily_start">
-          <el-button type="primary" @click="setStatus('scheduled')">
-            {{ t('campaign.resumeSchedule') }}
-          </el-button>
-          <el-button @click="forceStart">{{ t('campaign.forceStart') }}</el-button>
-        </template>
-        <!-- A policy campaign with no window cannot be activated (its session
-             deadlines come from the window), so Force start is the button:
-             it writes an 8h window and activates in one call. -->
-        <template v-else-if="(campaign.status === 'draft' || campaign.status === 'paused')
-          && campaign.policy_id != null && !campaign.window_end">
-          <el-button type="primary" @click="forceStart">
-            {{ t('campaign.forceStart') }}
-          </el-button>
-        </template>
-        <el-button v-else-if="campaign.status === 'draft' || campaign.status === 'paused'"
-          type="primary" @click="setStatus('active')">
-          {{ t('campaign.start') }}
-        </el-button>
-        <!-- `done` deliberately offers no Start: the search is exhausted, so
-             activating it plans nothing, finds nothing to place, and the very
-             next tick marks it done again. The honest actions are reading the
-             report and re-running whatever failed. -->
+        <!-- The run control: one segmented group, the way forward first and
+             Stop always last. Pause lets current runs finish; Stop ends them.
+             `done` offers neither: the search is exhausted, and the honest
+             actions are the report and re-running what failed. -->
+        <el-button-group v-if="campaign.status !== 'done'" class="run-control">
+          <template v-if="campaign.status === 'active'">
+            <el-button :icon="VideoPause" title="No new runs; the ones going now finish"
+              @click="setStatus('paused')">{{ t('campaign.pause') }}</el-button>
+          </template>
+          <template v-else-if="campaign.status === 'scheduled'">
+            <el-button type="primary" :icon="VideoPlay" @click="forceStart">
+              {{ t('campaign.forceStart') }}</el-button>
+            <el-button :icon="VideoPause" title="Skip the coming windows until resumed"
+              @click="setStatus('paused')">{{ t('campaign.pause') }}</el-button>
+          </template>
+          <template v-else-if="campaign.status === 'paused' && schedule?.daily_start">
+            <el-button type="primary" :icon="VideoPlay" @click="forceStart">
+              {{ t('campaign.forceStart') }}</el-button>
+            <el-button :icon="AlarmClock" @click="setStatus('scheduled')">
+              {{ t('campaign.resumeSchedule') }}</el-button>
+          </template>
+          <!-- A policy campaign with no window cannot simply be activated (its
+               session deadlines come from the window): Run now writes one. -->
+          <el-button v-else-if="campaign.policy_id != null && !campaign.window_end"
+            type="primary" :icon="VideoPlay" @click="forceStart">
+            {{ t('campaign.start') }}</el-button>
+          <el-button v-else type="primary" :icon="VideoPlay" @click="setStatus('active')">
+            {{ t('campaign.start') }}</el-button>
+          <el-button v-if="campaign.status === 'active' || liveRuns.length || policyLive"
+            class="stop"
+            :icon="StopIcon" title="Stop now: runs in progress are ended and their measurements lost"
+            @click="forceStop">{{ t('campaign.forceStop') }}</el-button>
+        </el-button-group>
       </div>
     </div>
 
@@ -997,15 +1086,13 @@ onMounted(() => {
          every answer is about a machine the campaign is no longer using —
          findings that look like problems and are not. -->
     <div v-if="preflightUseful" class="preflight-bar">
-      <span v-if="!preflight" class="muted">
-        Checks not run yet — worth doing before a start; the machine may have changed.
-      </span>
+      <span v-if="!preflight" class="muted">Pre-flight checks not run</span>
       <span v-else class="muted counts">
         <b v-if="preflightCounts.fail" class="fail-text">
           {{ preflightCounts.fail }} blocking
         </b>
         <b v-if="preflightCounts.warn" class="warn-text">
-          {{ preflightCounts.warn }} worth reading
+          {{ preflightCounts.warn }} warning(s)
         </b>
         <b class="ok-text">{{ preflightCounts.pass }} passed</b>
       </span>
@@ -1022,8 +1109,8 @@ onMounted(() => {
           <div>
             <span class="mono muted">{{ c.machine }}</span>
             <b> {{ c.label }}</b> — {{ c.detail }}
+            <InfoHint v-if="c.hint">{{ c.hint }}</InfoHint>
           </div>
-          <div v-if="c.hint" class="muted tiny">{{ c.hint }}</div>
         </div>
       </div>
       <!-- Passes as chips: present, countable, and not competing for attention
@@ -1043,38 +1130,31 @@ onMounted(() => {
       </template>
     </el-alert>
 
-    <!-- An unattended action has to be visible before it happens, not only
-         after: this is the campaign saying what it will do when it finishes. -->
-    <div v-if="campaign?.auto_promote" class="promotions">
-      <el-tag size="small" type="warning" effect="plain">{{ t('promotion.autoOn') }}</el-tag>
-      <span class="muted tiny">
-        {{ campaign.deploy_branch
-          ? t('promotion.autoOnBranch', { branch: campaign.deploy_branch })
-          : t('promotion.autoOnHint') }}
-      </span>
+    <!-- The policy's night, for a policy campaign: where its search container
+         is, and what it waits on when it is stuck. -->
+    <div v-if="session" class="policy-card">
+      <div class="policy-head">
+        <b>Policy</b>
+        <span class="mono">{{ policy?.name ?? `#${campaign.policy_id}` }}</span>
+        <span class="muted tiny">session {{ session.id }}</span>
+        <el-tag size="small" :type="(sessionLook.type as any)">{{ sessionLook.text }}</el-tag>
+        <span class="spacer" />
+        <el-button size="small" text @click="openPolicyLog">{{ t('campaign.logs') }}</el-button>
+        <el-button v-if="!sessionEnded" size="small" text class="risky" @click="abortSession">
+          Abort
+        </el-button>
+      </div>
+      <div class="session-track">
+        <span v-for="(step, i) in SESSION_STEPS" :key="step" class="session-step"
+          :class="sessionStepClass(step, i)">
+          <span class="pip" />{{ step }}
+        </span>
+      </div>
+      <div class="muted tiny">{{ sessionLine }}<template v-if="session.policy_message">
+        · {{ session.policy_message }}</template></div>
+      <div v-if="session.waiting" class="session-warn tiny">Waiting on: {{ session.waiting }}</div>
+      <div v-if="session.error" class="session-bad tiny">{{ session.error }}</div>
     </div>
-
-    <div v-if="promotions.length" class="promotions">
-      <span class="muted tiny">{{ t('promotion.history') }}:</span>
-      <span v-for="p in promotions" :key="p.id" class="promotion">
-        <el-tag size="small" effect="plain"
-          :type="p.state === 'rolled_out' ? 'success' : p.state === 'failed' || p.state === 'rejected' ? 'danger' : 'info'">
-          #{{ p.id }} · run {{ p.run_id }} · {{ promotionState(p.state) }}
-        </el-tag>
-        <a v-if="p.refs?.mr_url" :href="String(p.refs.mr_url)" target="_blank" rel="noopener" class="tiny">
-          {{ t('promotion.viewMr') }}</a>
-        <span v-else-if="p.refs?.branch" class="mono tiny muted">{{ p.refs.branch }}</span>
-        <span v-if="p.error" class="tiny muted" :title="p.error">⚠</span>
-        <el-button v-if="!['rolled_out', 'rejected', 'failed', 'cancelled'].includes(p.state)" size="small" link
-          @click="refreshPromotion(p)">{{ t('promotion.refresh') }}</el-button>
-        <el-button v-if="!['rolled_out', 'rejected', 'failed', 'cancelled'].includes(p.state)" size="small" link
-          type="danger" @click="cancelPromotion(p)">{{ t('promotion.cancel') }}</el-button>
-      </span>
-    </div>
-
-    <MergeRequestDialog v-model="mrOpen" :preview-url="`/campaigns/${campaignId}/promote/preview`"
-      :promote-url="`/campaigns/${campaignId}/promote`"
-      :body="mrRunId ? { run_id: mrRunId } : {}" @promoted="loadPromotions" />
 
     <!-- Sections installed plugins add about this campaign (src/plugins). -->
     <PluginSlot name="campaign-detail.sections" :props="{ campaign, reload: load }" />
@@ -1104,9 +1184,9 @@ onMounted(() => {
               {{ t('campaign.datasetAdopted') }}
             </el-tag>
             <InfoHint>
-              Every candidate here replayed this one build, so their scores compare.
-              Another campaign's numbers only compare to these if it replayed the same
-              build id.
+              Every candidate here replayed this one sample of the dataset, so their
+              scores compare. Another campaign's numbers only compare to these if it
+              replayed the same sample (the same id).
             </InfoHint>
           </p>
           <ScoreBars :rows="verifiedBoard" :swept-keys="sweptKeys"
@@ -1159,12 +1239,6 @@ onMounted(() => {
                 </template>
               </template>
             </el-table-column>
-            <el-table-column label="" width="110">
-              <template #default="{ row }">
-                <el-button v-if="!row.is_baseline" size="small" link type="primary" @click="openMr(row.run_id)">
-                  {{ t('promotion.generateMr') }}</el-button>
-              </template>
-            </el-table-column>
           </el-table>
           <h3 class="board-title screening">{{ t('campaign.screening') }}</h3>
         </template>
@@ -1184,9 +1258,8 @@ onMounted(() => {
           </template>
         </p>
         <p v-if="staged && !verifiedBoard.length" class="muted tiny pending-note">
-          The best {{ campaign?.verify_top_k }} of these get replayed against
-          <span class="mono">{{ campaign?.verify_benchmark_slug }}</span> once screening
-          finishes — that measurement decides the winner.
+          Top {{ campaign?.verify_top_k }} → verify on
+          <span class="mono">{{ campaign?.verify_benchmark_slug }}</span>
         </p>
         <ScoreBars :rows="screenBoard" :swept-keys="sweptKeys"
           :label="objective.label" :unit="objective.unit"
@@ -1234,12 +1307,6 @@ onMounted(() => {
                 <el-tag type="danger" size="small">{{ t('campaign.crossed') }}</el-tag>
                 <span class="muted breach">{{ row.breaches.join('; ') }}</span>
               </template>
-            </template>
-          </el-table-column>
-          <el-table-column label="" width="110">
-            <template #default="{ row }">
-              <el-button v-if="!row.is_baseline" size="small" link type="primary" @click="openMr(row.run_id)">
-                {{ t('promotion.generateMr') }}</el-button>
             </template>
           </el-table-column>
         </el-table>
@@ -1296,7 +1363,7 @@ onMounted(() => {
       <el-tab-pane :label="t('campaign.tabs.configuration')">
         <div class="config-head">
           <span class="muted">
-            A snapshot, taken when the campaign was created.
+            Snapshot at creation
             <InfoHint>
               Editing the search space or objective this was copied from does not change
               what ran here — a campaign always matches the config it was created with.
@@ -1308,8 +1375,7 @@ onMounted(() => {
         <el-table :data="configRows" size="small" class="config-table">
           <el-table-column label="Setting" width="230">
             <template #default="{ row }">
-              <div>{{ row.label }}</div>
-              <div v-if="row.hint" class="muted tiny">{{ row.hint }}</div>
+              <div>{{ row.label }} <InfoHint v-if="row.hint">{{ row.hint }}</InfoHint></div>
             </template>
           </el-table-column>
           <el-table-column label="Value" min-width="320">
@@ -1326,9 +1392,7 @@ onMounted(() => {
 
         <div class="block-head">
           <h3>Launch extras</h3>
-          <span class="muted tiny">
-            env vars and bind mounts every container in this campaign gets
-          </span>
+          <InfoHint>Env vars and bind mounts every container in this campaign gets.</InfoHint>
           <span class="spacer" />
           <el-button size="small" text type="primary"
             @click="copyText(extrasYaml, 'Launch extras copied')">Copy YAML</el-button>
@@ -1337,15 +1401,12 @@ onMounted(() => {
 
         <div class="block-head">
           <h3>Difference from production</h3>
-          <span class="muted tiny">
-            flags <span class="mono">{{ parity?.container || 'the captured service' }}</span>
-            passes that this campaign never sets
-          </span>
+          <InfoHint>Flags production's recorded baseline sets that this campaign never
+            sets.</InfoHint>
         </div>
         <pre class="mono block">{{ parity?.missing?.length
           ? parity.missing.map((m) => `${m.flag}: ${m.production}`).join('\n')
-          : (parity?.machine ? 'none — every flag production sets is set here too'
-                             : 'no captured production service to compare against') }}</pre>
+          : (parity?.baseline_id ? 'none' : 'no baseline recorded for this model') }}</pre>
 
         <div class="block-head">
           <h3>Search space</h3>
@@ -1400,10 +1461,6 @@ onMounted(() => {
     </el-tabs>
 
     <el-dialog v-model="editingSchedule" title="Nightly window" width="560px">
-      <p class="muted lead">
-        The campaign wakes at the start time and stands down at the end, picking up where
-        it left off the next night. Clearing both times puts it back under manual control.
-      </p>
       <NightlyWindow v-model:start="draft.start" v-model:end="draft.end"
         v-model:timezone="draft.timezone" v-model:until="draft.until" />
       <template #footer>
@@ -1421,9 +1478,6 @@ onMounted(() => {
     </el-dialog>
 
     <el-dialog v-model="exportOpen" :title="t('campaign.exportTitle')" width="760px">
-      <p class="muted tiny">
-        {{ t('campaign.exportNote') }}
-      </p>
       <pre class="mono block report">{{ exportYaml }}</pre>
       <template #footer>
         <el-button @click="downloadYaml">{{ t('common.download') }}</el-button>
@@ -1512,6 +1566,29 @@ onMounted(() => {
 </template>
 
 <style scoped>
+.actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+/* el-button's sibling margin is for loose buttons; the flex gap spaces these. */
+.actions > .el-button + .el-button {
+  margin-left: 0;
+}
+.run-control {
+  margin-left: 8px;
+}
+.run-control .stop {
+  color: var(--el-color-danger);
+}
+.run-control .stop:hover,
+.run-control .stop:focus-visible {
+  color: #fff;
+  background: var(--el-color-danger);
+  border-color: var(--el-color-danger);
+}
 .log-head {
   display: flex;
   align-items: center;
@@ -1785,16 +1862,62 @@ onMounted(() => {
   font-size: 12.5px;
   line-height: 1.5;
 }
-.promotions {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px 14px;
+.policy-card {
+  background: #fff;
+  border: 1px solid var(--autotune-border);
+  border-radius: 8px;
+  padding: 10px 14px;
   margin-bottom: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
-.promotion {
+.policy-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.policy-head .spacer {
+  flex: 1;
+}
+.session-track {
+  display: flex;
+  gap: 14px;
+  flex-wrap: wrap;
+  font-size: 12px;
+  color: var(--autotune-muted);
+}
+.session-step {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 5px;
+}
+.session-step .pip {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  border: 1px solid var(--autotune-border);
+}
+.session-step.done .pip {
+  background: var(--el-color-success);
+  border-color: var(--el-color-success);
+}
+.session-step.now {
+  color: var(--el-text-color-primary);
+  font-weight: 600;
+}
+.session-step.now .pip {
+  background: var(--el-color-primary);
+  border-color: var(--el-color-primary);
+}
+.session-step.bad .pip {
+  background: var(--el-color-danger);
+  border-color: var(--el-color-danger);
+}
+.session-warn {
+  color: var(--el-color-warning-dark-2, #b88230);
+}
+.session-bad {
+  color: var(--el-color-danger);
 }
 </style>

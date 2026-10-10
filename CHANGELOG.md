@@ -7,7 +7,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-10
+
+Released with LLMBench 0.2.0, which the install script now installs.
+
 ### Added
+
+- A policy campaign's page shows its policy: where the session is (starting,
+  searching, finalizing, validating, done), trials and finalists, when it
+  last reported, what a starting policy is waiting on, its error, its log, and
+  Abort. Session responses carry `finalize_requested_at`,
+  `abort_requested_at` and, while starting, `waiting`.
+- **Add GPU cluster** on Resources: upload a kubeconfig, and the platform lists
+  the cluster's GPU nodes and registers the ones you pick, each as a machine
+  pinned to its node with the cards it reports (`GET` and `POST
+  /api/clusters/{id}/nodes`). A cluster's **Nodes** registers nodes added
+  later and lists registered ones that left. The namespace is read from the
+  kubeconfig.
+- `deploy/gpu-cluster.sh` prepares a GPU cluster: a namespace for engine pods,
+  an account allowed only what the platform needs there plus reading nodes,
+  and the kubeconfig to upload. Every name derives from the namespace, so two
+  platforms can share a GPU cluster; `remove` revokes the account.
+  An API server name this machine knows only from `/etc/hosts`, which the
+  platform's pods cannot resolve, is written as its address, with the
+  certificate still checked against the name (`tls-server-name`);
+  `--api-server` chooses the address. Adding a cluster the platform cannot
+  resolve or reach says so and what to change.
+- Preflight on a Kubernetes machine: a probe Job on the machine's node pulls
+  the engine image and the campaign's policy image, and mounts the model the
+  way a run does, so a missing tag, a registry the nodes cannot reach or a
+  model path that is not on the node is found before the campaign starts. A
+  pull still going when the check ends carries on, so the image is cached for
+  the first run. Over ssh, the policy image is checked too.
+- A **Policies** page under Automatic Tuning: register a policy image by name,
+  edit it, and remove one no campaign uses. The New campaign form links to it
+  from its Strategy picker.
+
+- A campaign describes its workload instead of naming a benchmark: synthetic
+  prompts (sizes, concurrency levels, requests per concurrent slot) or a replay
+  of a dataset. A synthetic level c sends c × `requests_per_concurrency`
+  requests (default 20), capped by `max_seconds_per_level`, so every level is
+  measured on the same sample however fast the engine is. AutoTune
+  creates the matching benchmark on LLMBench when the campaign is created,
+  locked, with a slug hashed from the workload so the same workload reuses it
+  (`benchmark_spec` and `verify_benchmark_spec` on `POST /api/campaigns`;
+  `POST /api/benchmarks/spec` says what a workload becomes). A replay of a
+  rolling dataset pins it for the campaign's life.
+- Everything AutoTune creates on LLMBench is filed under the group tag
+  `llm-autotune` (`llm-autotune/sweep`, `llm-autotune/replay`); benchmarks it
+  created earlier are filed the next time it ensures them.
+- Built-in objectives for replay workloads ("Replay: throughput per GPU", and
+  the same under a 10s TTFT SLO). The Benchmark step lists only the objectives the
+  chosen workload can report.
+- The Add machine dialog says, behind its Driver label's `?`, what the
+  platform needs before it can reach a machine: the worker's ssh key on the
+  box, or a cluster's kubeconfig.
 
 - `AUTOTUNE_LLMBENCH_REPLAY_MODULE` (default `replay`): the name LLMBench's
   traffic replay module reports its metrics under. The metric catalog, the
@@ -59,6 +113,72 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `deploy/quickstart.sh policy` needs `--registry` outside the demo: policy
+  pods run on the GPU clusters, which cannot see an image loaded into the
+  platform's cluster. The install's closing note and docs/after-installing.md
+  say so.
+- The campaign page's run control is one group with icons: the way forward
+  (Start, Run now, Resume schedule) first, Pause, then Stop. **Force start**
+  is now **Run now**, and runs until the search is done or you stop it
+  instead of for eight hours (`hours` on `POST /campaigns/{id}/force-start`
+  is optional). **Force stop** is **Stop**; on a searching policy the first
+  press asks it to wrap up, the second ends it.
+
+- `deploy/quickstart.sh` installs the two platforms only, on a cluster that
+  needs no GPUs: it no longer grants itself the cluster it runs in or
+  registers it as `local-cluster`, and no longer asks about GPU nodes. GPU
+  clusters are added afterwards (above). It sets `publicApiUrl` to the UI's
+  address, which serves the API, so policies on a GPU cluster can call back.
+- `deploy/quickstart.sh` and `deploy/demo.sh` open both UIs on a NodePort on
+  a remote cluster and print `http://<node>:<port>` addresses, so a remote
+  install needs no tunnel; each UI's links point at the other's address.
+  Port-forward stays the default on a cluster on your own machine, and
+  `--port-forward` asks for it anywhere; an ingress set in your values is left
+  alone. The chart takes `frontend.service.type` and `.nodePort`.
+- The agent API (`/api/agent/v1`) and the Reports pages are off by default:
+  they have not been proven on tuning campaigns yet. Set
+  `AUTOTUNE_AGENT_API_ENABLED=true`, and build the frontend with
+  `VITE_AGENT_REPORTS=1`, to turn them on.
+- Quieter pages: explanations moved from paragraphs under fields into `?`
+  tooltips, page subtitles folded into the title's tooltip, menu items named
+  by their action alone. A workload is entered as labelled fields (input
+  tokens, output tokens, concurrency, duration per level; requests and
+  concurrency for a replay) instead of a sentence with blanks.
+
+- A bare-metal machine's GPU count and card type are read with `nvidia-smi`
+  when it is saved, as a Kubernetes slice's already were from its nodes;
+  **Re-read GPUs** works for both. The Add machine dialog asks for a name
+  and an address (or a node selector), with the rest under Advanced.
+- New campaign: the engine follows the chosen search space instead of being
+  asked for, and a campaign left unnamed is named after its model and date.
+  The campaign page keeps Report and the run controls in view and moves logs,
+  clone and YAML export under **More**.
+
+- A campaign learns how long its runs take — the engine coming up, and each
+  benchmark coming back — and plans its window from that (`run_timing` on the
+  campaign, migration `004`; shown on the campaign page as "Run length").
+  Nothing has to be guessed up front:
+  - a policy campaign's validation reserve is learned rather than set;
+    `policy_settings.approx_minutes_each` and `model_startup_minutes` still pin
+    it when given;
+  - `max_run_minutes` is now only a cap, default 720: a new run needs as much
+    window as this campaign's runs have taken, and a lease's `returnable_at`
+    follows the same figure;
+  - before the first run, the benchmark's length is estimated from its own
+    settings on LLMBench (a sweep's levels × seconds, a replay's time cap), and
+    the engine's startup is bounded by the readiness timeout;
+  - a run cut at the window's end counts as a sample of at least the time it
+    got, so a too-short estimate corrects itself the next night;
+  - with nothing measured or estimated, a run reserves
+    `AUTOTUNE_DEFAULT_MAX_RUN_MINUTES`, now 240 (was 150).
+- `served_model_name` is optional when creating a campaign: empty means the
+  last part of `model_path`.
+- New campaign form: the served model name, launch extras, engine port, max
+  minutes per run, re-runs of the best and the two-stage benchmark sit under
+  an Advanced section of their step; a policy campaign asks only how many
+  finalists to re-measure; the merge-request and production-canary settings
+  are gone from the form (the API still takes them).
+
 - `deploy/quickstart.sh` now installs a deployment you keep: LLM AutoTune and
   LLMBench on the cluster kubectl points at (`--context` to pick one), with
   runs on its GPU nodes. It warns when no node offers GPUs. The no-GPU
@@ -99,6 +219,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A policy campaign's final validation launched each contender with every
+  card the session held, not the ones its config uses: a tp=2 contender on an
+  8-card machine asked Kubernetes for 8 GPUs and waited forever when any were
+  in use. It now takes tp × dp × pp of them, free ones first.
+- **Force stop** on a policy campaign stops it. A policy still starting (its
+  pod waiting for a node, say) used to be asked to wind down, which it never
+  heard, so the campaign stayed active; it is now aborted and the campaign
+  paused. A searching policy is still asked to finish and measure its
+  finalists, and a second press aborts it.
+- A policy container that can never start (an image that will not pull, a
+  crash loop, a pod no node could take) fails at once instead of after the
+  30-minute ready timeout; a pod waiting for free cards keeps waiting.
+- A policy's live log is read from its own cluster and its own pod; it asked
+  the default cluster, for an engine's pod.
+- A policy that takes cards gets the same tolerations as an engine, so it
+  can land on a tainted GPU node instead of staying Pending; declared
+  tolerations (`AUTOTUNE_K8S_TOLERATIONS`) apply to every policy pod.
+- Registering a policy no longer gives it the GPUs and the model mount unless
+  asked: most policies delegate engine launches, and a registration that took
+  both sat waiting for a whole free machine. The Policies list marks the ones
+  that take GPUs.
+- `deploy/quickstart.sh` and `deploy/demo.sh` say what a pod is stuck on
+  while they wait (an image that will not pull, a container crash-looping
+  with the end of its log, a pod nothing can schedule) instead of sitting
+  silent until the 20-minute timeout.
+- A rerun after an interrupted install recovers: a release that never
+  finished its first install is removed and installed again, and one stopped
+  mid-upgrade is rolled back first.
+- The install remembers its cluster's API server as well as the context
+  name, and refuses to act when the same name now leads elsewhere (kubeadm
+  names every cluster's admin context `kubernetes-admin@kubernetes`).
+- Fetching the LLMBench chart retries over HTTP/1.1 when a proxy breaks
+  git's HTTP/2, and says how to point at a local chart if GitHub is out of
+  reach.
 - `deploy/quickstart.sh` no longer prints git's "is not a commit" warning and
   detached-HEAD advice while fetching the LLMBench chart, and a fetch that
   fails part-way is retried on the next run instead of leaving an empty
@@ -108,11 +262,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   records the pod's `imageID`.
 - The overview diagram matches the platform, and the agent API doc's
   examples match its schemas.
+- A policy campaign with a nightly window stayed active after its policy
+  reported the search exhausted, waiting for a next night that would only
+  hear the same. It is now done when its session is.
+- The campaign page counted runs over candidates, so a policy campaign, whose
+  configs are each a launch and a benchmark, read "18/10 candidates
+  evaluated". It now counts candidates.
 
 ### Removed
 
+- `deploy/k8s/remote-cluster/` (`backend-rbac.yaml`,
+  `make-scoped-kubeconfig.sh`): replaced by `deploy/gpu-cluster.sh`. Its fixed
+  names let a second platform's install take over the first's account on a
+  shared GPU cluster.
+- The GitLab merge-request path: the `gitlab` promotion target and client,
+  the deploy-repo file formats, the baselines' bindings to a repo file
+  (`/baselines/{formats,branches,import}`, `/baselines/{id}/binding/*`), a
+  campaign's deploy branch and auto-promote switch
+  (`PUT /campaigns/{id}/deploy-branch`), `/campaigns/{id}/promote` and
+  `/promotions`, the `AUTOTUNE_PROMOTION_*` and `AUTOTUNE_GITLAB_*` settings,
+  the `promotion_origin` plugin hook, and the frontend plugin exports
+  `MergeRequestDialog` and `DeployBranchSelect` (migration `006` drops the
+  tables and columns). A winner is a run like any other, with its exact
+  launch command and image on its page.
+
 - The CI check that searched the tree for a list of internal host names; that
   list no longer lives in the repository.
+- Production capture, clearing and restoring. A lease is now the hand-over:
+  the machine is lent to the platform free, campaigns run on it at once, and
+  ending the lease stops only the platform's own containers. Gone with it:
+  the in-place production benchmark ("baseline canary"), the
+  `/machines/{id}/baseline/{capture,clear,restore}` routes, the Override
+  menu's Capture/Clear/Restore, `AUTOTUNE_AUTO_BASELINE_LIFECYCLE` and
+  `AUTOTUNE_AUTO_RESTORE_PRODUCTION`, `production_status` in the lease API,
+  and the machines' `baseline` and `baseline_status` columns (migration
+  `005`). Production's config is still measured as a campaign's baseline, by
+  launching the config recorded on **Baselines**; the preflight's "matches
+  production" check reads that record too. Runs against an endpoint the
+  platform did not launch fail as `endpoint_unreachable` /
+  `endpoint_unhealthy`.
 
 ## [0.1.2] - 2026-09-29
 
@@ -206,7 +394,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   [llm-autotune-policies](https://github.com/modelsphere/llm-autotune-policies), checked out under `policies/` as a git
   submodule: clone with `--recurse-submodules`.
 
-[Unreleased]: https://github.com/modelsphere/llm-autotune/compare/v0.1.2...HEAD
+[Unreleased]: https://github.com/modelsphere/llm-autotune/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/modelsphere/llm-autotune/compare/v0.1.2...v0.2.0
 [0.1.2]: https://github.com/modelsphere/llm-autotune/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/modelsphere/llm-autotune/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/modelsphere/llm-autotune/releases/tag/v0.1.0

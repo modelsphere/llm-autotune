@@ -9,8 +9,10 @@ Understanding it:
 
 Running it:
 
+- [Installing](install.md): the platform cluster, GPU clusters, a policy and
+  a first campaign, step by step.
 - [After installing](after-installing.md): settings, search policies, more
-  GPUs, ingress, datasets and promotion.
+  GPUs, ingress and datasets.
 - [Deploying](deploying.md): the Helm chart and every setting.
 - [Upgrading](upgrading.md): how the schema is applied.
 
@@ -21,7 +23,8 @@ Building on it:
   [policy-contract.md](api/policy-contract.md).
 - [Machine lease API](api/machine-lease.md): lending GPU machines from
   another system, and taking them back.
-- [Agent API](api/agent-api.md): what an LLM writes performance reports from.
+- [Agent API](api/agent-api.md): what an LLM writes performance reports from
+  (off by default).
   [Prompting the report agent](perf-report-prompt.md).
 - [Plugins](plugins.md): routes, worker steps, tables, planners and pages from
   a separately installed package.

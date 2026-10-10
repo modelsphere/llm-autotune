@@ -10,7 +10,6 @@ from app.core.config import get_settings
 from app.db.base import get_async_session, sync_session_factory
 from app.db.models import (
     TERMINAL_RUN_STATES,
-    BaselineStatus,
     Campaign,
     CampaignStatus,
     Cluster,
@@ -34,9 +33,9 @@ def _machine_info(machine: Machine) -> MachineInfo:
 
 def _driver_for(machine: Machine):
     """The driver that reaches this machine — its own substrate, not a global
-    default, so a captured/cleared/restored k8s pool is handled by the k8s
-    driver while the ssh boxes stay on ssh_docker. Empty falls back to the
-    platform default inside get_driver."""
+    default, so a k8s pool is handled by the k8s driver while the ssh boxes
+    stay on ssh_docker. Empty falls back to the platform default inside
+    get_driver."""
     return get_driver(machine.driver or "ssh_docker", cluster_id=machine.cluster_id)
 
 
@@ -130,43 +129,24 @@ async def list_machines(
 
 @router.get("/lifecycle")
 async def machine_lifecycle(_: User = Depends(get_current_user)):
-    """Where each machine sits in the hand-over sequence, and what moves it next.
-
-    Answered by the same predicates the supervisor acts on, rather than by the
-    page inferring it from `state` and `baseline_status`. Those two fields do
-    not say whether a canary is owed, and a page that guesses is how manual
-    Capture/Clear came to look like required steps.
-    """
+    """Where each machine sits in its lease, and what moves it next — answered
+    by the same predicates the supervisor acts on, so the page never guesses."""
     settings = get_settings()
 
     def read() -> list[dict]:
         with sync_session_factory() as session:
             return [
                 row.as_dict()
-                for row in describe_all(
-                    session,
-                    settings.default_max_run_minutes,
-                    auto=settings.auto_baseline_lifecycle,
-                    auto_restore=settings.auto_restore_production,
-                )
+                for row in describe_all(session, settings.default_max_run_minutes)
             ]
 
-    return {
-        "steps": list(STEPS),
-        "auto": settings.auto_baseline_lifecycle,
-        # Whether WE put production back when a lease ends. The page needs it
-        # by name: with it off, "End lease" leaves production down, and that is
-        # the one thing an operator must not learn afterwards.
-        "auto_restore": settings.auto_restore_production,
-        "machines": await anyio.to_thread.run_sync(read),
-    }
+    return {"steps": list(STEPS), "machines": await anyio.to_thread.run_sync(read)}
 
 
 async def _probe_capacity(machine: Machine) -> dict:
     """Ask the machine's substrate how many GPUs of what type it really has.
-    Best-effort: a driver that cannot answer (bare metal, or an unconfigured/
-    unreachable cluster) yields {"supported": False} and the caller keeps the
-    values already on the row."""
+    Best-effort: a machine that cannot be reached yields {"supported": False}
+    and the caller keeps the values already on the row."""
     driver = _driver_for(machine)
     try:
         return await anyio.to_thread.run_sync(driver.probe_capacity, _machine_info(machine))
@@ -205,11 +185,10 @@ async def create_machine(
     if exists:
         raise HTTPException(status.HTTP_409_CONFLICT, "machine name taken")
     machine = Machine(**body.model_dump())
-    # A k8s machine is a node-slice, so its capacity and card type are the
-    # cluster's to state, not the operator's to type. Read them from the node(s)
-    # the selector matches; fall back to whatever was entered if the cluster
-    # cannot be reached.
-    probe = await _probe_capacity(machine) if machine.driver == "k8s" else {"supported": False}
+    # Capacity and card type are the machine's to state, not the operator's to
+    # type: nvidia-smi over ssh, or the node(s) a k8s selector matches. Whatever
+    # was entered stands when the machine cannot be reached yet.
+    probe = await _probe_capacity(machine)
     _apply_probe(machine, probe)
     session.add(machine)
     session.add(
@@ -230,10 +209,10 @@ async def probe_capacity(
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_async_session),
 ):
-    """Re-read GPU count and card type from the cluster and update the machine.
+    """Re-read GPU count and card type from the machine and update it.
 
-    The Refresh button behind a k8s node-slice: nodes get added, drained, or
-    relabelled, so the capacity a machine was created with drifts. Returns the
+    The Refresh button: nodes get added, drained or relabelled and boxes get
+    re-carded, so the capacity a machine was created with drifts. Returns the
     machine plus the raw probe (per-node detail and any warnings — a selector
     that matched nothing, an unknown card, a pool spanning two card types)."""
     machine = await _get_machine(machine_id, session)
@@ -241,8 +220,8 @@ async def probe_capacity(
     if not probe.get("supported"):
         raise HTTPException(
             status.HTTP_409_CONFLICT,
-            f"{machine.name} runs on the {machine.driver or 'ssh_docker'} substrate, "
-            "which cannot probe capacity; set GPU count and type by hand",
+            f"could not read {machine.name}'s cards: "
+            + ("; ".join(probe.get("warnings") or []) or "the machine did not answer"),
         )
     _apply_probe(machine, probe)
     session.add(
@@ -317,7 +296,7 @@ async def update_machine(
             raise HTTPException(status.HTTP_409_CONFLICT, "machine name taken")
     for field, value in body.model_dump().items():
         setattr(machine, field, value)
-    probe = await _probe_capacity(machine) if machine.driver == "k8s" else {"supported": False}
+    probe = await _probe_capacity(machine)
     _apply_probe(machine, probe)
     session.add(
         Event(
@@ -404,128 +383,6 @@ async def delete_machine(
     session.add(Event(actor=user.username, kind="machine_removed", payload={"name": name}))
     await session.commit()
     return {"removed": name}
-
-
-@router.post("/{machine_id}/baseline/capture", response_model=MachineOut)
-async def capture_baseline(
-    machine_id: int,
-    user: User = Depends(get_current_user),
-    session: AsyncSession = Depends(get_async_session),
-):
-    """Record the production services we were handed, and how to restore them.
-
-    This is the safety interlock for `clear`: nothing may be torn down until
-    it has been captured.
-    """
-    machine = await _get_machine(machine_id, session)
-    driver = _driver_for(machine)
-    try:
-        baseline = await anyio.to_thread.run_sync(driver.capture_baseline, _machine_info(machine))
-    except Exception as exc:  # ssh/docker failure
-        raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"capture failed: {exc}") from exc
-
-    machine.baseline = baseline
-    machine.baseline_status = BaselineStatus.CAPTURED.value
-    session.add(
-        Event(
-            actor=user.username,
-            kind="baseline_captured",
-            payload={"machine": machine.name, "services": len(baseline.get("services", []))},
-        )
-    )
-    await session.commit()
-    await session.refresh(machine)
-    return await _one_out(session, machine)
-
-
-@router.post("/{machine_id}/baseline/clear", response_model=MachineOut)
-async def clear_baseline(
-    machine_id: int,
-    user: User = Depends(get_current_user),
-    session: AsyncSession = Depends(get_async_session),
-):
-    """Stop the production services so experiments can have the machine.
-    Refuses unless a baseline was captured — never destroy the unrecoverable."""
-    machine = await _get_machine(machine_id, session)
-    if machine.baseline_status != BaselineStatus.CAPTURED.value:
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            f"baseline must be captured first (status: {machine.baseline_status})",
-        )
-    driver = _driver_for(machine)
-    try:
-        stopped = await anyio.to_thread.run_sync(
-            driver.clear_baseline, _machine_info(machine), machine.baseline
-        )
-    except Exception as exc:
-        raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"clear failed: {exc}") from exc
-
-    machine.baseline_status = BaselineStatus.CLEARED.value
-    session.add(
-        Event(
-            actor=user.username,
-            kind="baseline_cleared",
-            payload={"machine": machine.name, "stopped": stopped},
-        )
-    )
-    await session.commit()
-    await session.refresh(machine)
-    return await _one_out(session, machine)
-
-
-@router.post("/{machine_id}/baseline/restore", response_model=MachineOut)
-async def restore_baseline(
-    machine_id: int,
-    user: User = Depends(get_current_user),
-    session: AsyncSession = Depends(get_async_session),
-):
-    """Put production back before hand-back (re-runs the captured deploy
-    scripts). Refuses while a run still holds the machine."""
-    machine = await _get_machine(machine_id, session)
-    if machine.state == MachineState.RESERVED.value:
-        raise HTTPException(
-            status.HTTP_409_CONFLICT, "a run still holds this machine; stop it first"
-        )
-    if not (machine.baseline or {}).get("services"):
-        raise HTTPException(status.HTTP_409_CONFLICT, "no captured baseline to restore")
-
-    driver = _driver_for(machine)
-    try:
-        restored = await anyio.to_thread.run_sync(
-            driver.restore_baseline, _machine_info(machine), machine.baseline
-        )
-    except Exception as exc:
-        raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"restore failed: {exc}") from exc
-
-    # Restoring is not the same as restoring faithfully: verify what came back
-    # against what we captured, and surface any drift loudly.
-    try:
-        findings = await anyio.to_thread.run_sync(
-            driver.verify_baseline, _machine_info(machine), machine.baseline
-        )
-    except Exception as exc:  # verification is advisory, never fatal
-        findings = [{"ok": False, "detail": f"verification unavailable: {exc}"}]
-
-    drift = [f for f in findings if not f.get("ok")]
-    machine.baseline_status = BaselineStatus.RESTORED.value
-    machine.baseline = {**machine.baseline, "restore_verification": findings}
-    session.add(
-        Event(
-            actor=user.username,
-            kind="baseline_restored" if not drift else "baseline_restored_with_drift",
-            payload={"machine": machine.name, "restored": restored, "verification": findings},
-        )
-    )
-    await session.commit()
-    await session.refresh(machine)
-    if drift:
-        # 200 with the machine body would bury this; the operator must see it.
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            "restored, but the result does not match the capture: "
-            + "; ".join(f"port {f.get('port')}: {f.get('detail')}" for f in drift),
-        )
-    return await _one_out(session, machine)
 
 
 @router.put("/{machine_id}/state", response_model=MachineOut)

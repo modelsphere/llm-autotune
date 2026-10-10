@@ -23,12 +23,10 @@ export { default as BackLink } from '../components/BackLink.vue'
 export { default as CampaignRuns } from '../components/CampaignRuns.vue'
 export { default as ConfigChips } from '../components/ConfigChips.vue'
 export { default as CopyButton } from '../components/CopyButton.vue'
-export { default as DeployBranchSelect } from '../components/DeployBranchSelect.vue'
 export { default as FlagChips } from '../components/FlagChips.vue'
 export { default as InfoHint } from '../components/InfoHint.vue'
 export { default as LinkButton } from '../components/LinkButton.vue'
 export { default as LogDialog } from '../components/LogDialog.vue'
-export { default as MergeRequestDialog } from '../components/MergeRequestDialog.vue'
 export { default as PluginSlot } from '../components/PluginSlot.vue'
 
 export type {

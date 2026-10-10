@@ -12,6 +12,7 @@ import { computed, onMounted, ref } from 'vue'
 import { api } from '../api/client'
 import LinkButton from '../components/LinkButton.vue'
 import PluginSlot from '../components/PluginSlot.vue'
+import InfoHint from '../components/InfoHint.vue'
 import { useI18n } from '../i18n'
 import { useAuthStore } from '../stores/auth'
 import { exactTime, relativeTime } from '../utils/time'
@@ -153,8 +154,7 @@ onMounted(load)
       </el-card>
 
       <el-card class="password">
-        <h3>{{ t('account.changePassword') }}</h3>
-        <p class="muted tiny">{{ t('account.tokenNote') }}</p>
+        <h3>{{ t('account.changePassword') }} <InfoHint>{{ t('account.tokenNote') }}</InfoHint></h3>
         <el-form label-position="top" @submit.prevent="changePassword">
           <el-form-item :label="t('account.currentPassword')">
             <el-input v-model="form.current" type="password" autocomplete="current-password" />
@@ -177,13 +177,12 @@ onMounted(load)
       </el-card>
 
       <el-card class="publish">
-        <h3>{{ t('account.publish.title') }}</h3>
-        <p class="muted tiny">{{ t('account.publish.note') }}</p>
+        <h3>{{ t('account.publish.title') }}
+          <InfoHint>{{ t('account.publish.note') }} {{ t('account.publish.nameNote') }}</InfoHint></h3>
         <el-form label-position="top" @submit.prevent="saveContributor">
           <el-form-item :label="t('account.publish.nameField')">
             <el-input v-model="contributor" :placeholder="me?.username ?? ''"
               maxlength="255" @keyup.enter="saveContributor" />
-            <div class="muted tiny">{{ t('account.publish.nameNote') }}</div>
           </el-form-item>
           <div class="row">
             <el-button :loading="publishBusy"
@@ -205,7 +204,7 @@ onMounted(load)
     <template v-if="isAdmin">
       <h3 class="users-head">
         {{ t('account.users') }}
-        <span class="muted tiny">{{ t('account.usersNote') }}</span>
+        <InfoHint>{{ t('account.usersNote') }}</InfoHint>
       </h3>
       <el-table :data="users" size="small">
         <el-table-column prop="id" :label="t('common.id')" width="70" />

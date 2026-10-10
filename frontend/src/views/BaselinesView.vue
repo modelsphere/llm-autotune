@@ -2,8 +2,7 @@
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { api, type Baseline, type DeployFormatsCatalog } from '../api/client'
-import DeployBindingPanel from '../components/DeployBindingPanel.vue'
+import { api, type Baseline } from '../api/client'
 import InfoHint from '../components/InfoHint.vue'
 import { useI18n } from '../i18n'
 import { exactTime, relativeTime } from '../utils/time'
@@ -13,9 +12,7 @@ const { t } = useI18n()
 const router = useRouter()
 
 const baselines = ref<Baseline[]>([])
-const catalog = ref<DeployFormatsCatalog | null>(null)
 const editorOpen = ref(false)
-const importOpen = ref(false)
 const editingId = ref<number | null>(null)
 const busy = ref(false)
 const parsing = ref(false)
@@ -40,17 +37,8 @@ const form = ref({
   extrasText: '',
 })
 
-const importForm = ref({
-  served_model_name: '', engine: 'sglang', card_type: '',
-  project: '', branch: '', path: 'config/model.yaml', preset: '', notes: '',
-})
-
 async function load() {
   baselines.value = (await api.get('/baselines')).data
-}
-
-function replaceRow(updated: Baseline) {
-  baselines.value = baselines.value.map((b) => (b.id === updated.id ? updated : b))
 }
 
 function argsSummary(args: Record<string, unknown>): string {
@@ -165,45 +153,12 @@ async function save() {
   }
 }
 
-function openImport() {
-  importForm.value = {
-    served_model_name: '', engine: 'sglang', card_type: '',
-    project: catalog.value?.default_project ?? '', branch: '', path: 'config/model.yaml',
-    preset: catalog.value?.default_preset ?? '', notes: '',
-  }
-  importOpen.value = true
-}
-
-async function runImport() {
-  const f = importForm.value
-  if (!f.served_model_name.trim() || !f.project.trim() || !f.branch.trim()) {
-    ElMessage.error('Served model, project and branch are required')
-    return
-  }
-  busy.value = true
-  try {
-    const { data } = await api.post('/baselines/import', {
-      served_model_name: f.served_model_name.trim(), engine: f.engine, card_type: f.card_type,
-      project: f.project.trim(), branch: f.branch.trim(), path: f.path.trim(),
-      format: f.preset ? { preset: f.preset } : {}, notes: f.notes,
-    })
-    importOpen.value = false
-    await load()
-    expanded.value = [data.baseline.id]
-    ElMessage.success(`Imported from ${data.commit.slice(0, 10)} — ${data.baseline.cards} card(s)`)
-  } catch (error: any) {
-    ElMessage.error(error.response?.data?.detail ?? 'Import failed')
-  } finally {
-    busy.value = false
-  }
-}
-
 async function remove(b: Baseline) {
   try {
     await ElMessageBox.confirm(
       `Delete the baseline for ${b.served_model_name} / ${b.engine} / ` +
         `${b.card_type || '(any card)'}? Campaigns comparing against it will fall ` +
-        `back to raw scores until one is captured again.`,
+        `back to raw scores until one is recorded again.`,
       'Delete baseline',
       { confirmButtonText: 'Delete', cancelButtonText: 'Cancel', type: 'warning' },
     )
@@ -228,7 +183,7 @@ function tuneFromThis(b: Baseline) {
 }
 
 const capturedNote = computed(
-  () => 'Captured automatically when a machine is handed over; a hand-set one is left alone.',
+  () => 'Recorded here by hand, or from a pasted command.',
 )
 
 onMounted(async () => {
@@ -236,11 +191,6 @@ onMounted(async () => {
     gpuTypes.value = (await api.get('/machines/gpu-types')).data.gpu_types
   } catch {
     gpuTypes.value = []
-  }
-  try {
-    catalog.value = (await api.get('/baselines/formats')).data
-  } catch {
-    catalog.value = null
   }
   load()
 })
@@ -250,29 +200,23 @@ onMounted(async () => {
   <div class="page">
     <div class="header-row">
       <div>
-        <h1 class="page-title">Baselines</h1>
-        <span class="muted">
-          What production runs, per model + engine + card type — the reference a campaign
-          compares its candidates against, and the file a winner is proposed into.
+        <h1 class="page-title">Baselines
           <InfoHint :width="400">
             A baseline is the production config for a (served model, engine, card type): the
             whole launch config — image, weights path, knobs, env, volumes. A campaign tuning
             that combination relaunches it on the same dataset and expresses every candidate
             as a multiple of it, so <b>×1.15 of production</b> keeps its meaning across nights.
-            Bound to its deploy-repo file, it mirrors what the release branch deploys, and a
-            campaign winner becomes a change request against that file.
             {{ capturedNote }}
           </InfoHint>
-        </span>
+        </h1>
       </div>
       <div>
-        <el-button @click="openImport">{{ t('binding.import') }}</el-button>
         <el-button type="primary" @click="openNew">New baseline</el-button>
       </div>
     </div>
 
     <el-table :data="baselines" row-key="id" :expand-row-keys="expanded"
-      empty-text="No baselines yet — one appears on the next hand-over, import one from the deploy repo, or add one by hand">
+      empty-text="No baselines yet — add one by hand, or paste production's command">
       <el-table-column type="expand">
         <template #default="{ row }">
           <div class="expand">
@@ -282,7 +226,6 @@ onMounted(async () => {
               <span v-if="Object.keys(row.extra_env ?? {}).length"><span class="muted">env</span>
                 <span class="mono">{{ Object.entries(row.extra_env).map(([k, v]) => `${k}=${v}`).join(' ') }}</span></span>
             </div>
-            <DeployBindingPanel :baseline="row" :catalog="catalog" @changed="replaceRow" />
           </div>
         </template>
       </el-table-column>
@@ -310,10 +253,6 @@ onMounted(async () => {
         <template #default="{ row }">
           <el-tag size="small" :type="row.source === 'manual' ? 'warning' : 'info'"
             effect="plain">{{ row.source }}</el-tag>
-          <el-tag v-if="row.binding?.unresolved" size="small" type="warning" class="badge">
-            {{ t('binding.unresolved', { n: row.binding.unresolved }) }}</el-tag>
-          <el-tag v-else-if="row.binding" size="small" type="success" effect="plain" class="badge"
-            :title="row.binding.branch">git</el-tag>
         </template>
       </el-table-column>
       <el-table-column label="Updated" width="120">
@@ -324,7 +263,7 @@ onMounted(async () => {
       </el-table-column>
       <el-table-column label="" width="260">
         <template #default="{ row }">
-          <el-button size="small" @click="tuneFromThis(row)">{{ t('binding.tuneFromThis') }}</el-button>
+          <el-button size="small" @click="tuneFromThis(row)">{{ t('baselines.tuneFromThis') }}</el-button>
           <el-button size="small" @click="openEdit(row)">Edit</el-button>
           <el-button size="small" type="danger" plain @click="remove(row)">Delete</el-button>
         </template>
@@ -359,7 +298,7 @@ onMounted(async () => {
 
         <el-form-item>
           <template #label>
-            <span>Paste production's command</span>
+            <span>Launch command</span>
             <InfoHint>
               A whole `docker run …` line or the bare serve command. It is compiled into every
               field below: image, weights path, port, env, volumes and the engine knobs.
@@ -377,7 +316,7 @@ onMounted(async () => {
           <el-form-item label="Image">
             <el-input v-model="form.image" class="mono" placeholder="repository:tag" />
           </el-form-item>
-          <el-form-item label="Weights path (on the machine)">
+          <el-form-item label="Model path">
             <el-input v-model="form.model_path" class="mono" />
           </el-form-item>
           <el-form-item label="Port">
@@ -389,7 +328,12 @@ onMounted(async () => {
           <el-input v-model="form.argsText" type="textarea" :rows="8" class="mono" />
         </el-form-item>
 
-        <el-form-item label="Env and volumes (YAML: env: {NAME: value}, volumes: {host: container})">
+        <el-form-item>
+          <template #label>
+            Env and volumes (YAML)
+            <InfoHint><span class="mono">env: {NAME: value}</span>,
+              <span class="mono">volumes: {host: container}</span></InfoHint>
+          </template>
           <el-input v-model="form.extrasText" type="textarea" :rows="3" class="mono" />
         </el-form-item>
 
@@ -404,53 +348,6 @@ onMounted(async () => {
       </template>
     </el-dialog>
 
-    <el-dialog v-model="importOpen" :title="t('binding.import')" width="680px">
-      <p class="muted">{{ t('binding.importHint') }}</p>
-      <p v-if="catalog && !catalog.gitlab_configured" class="muted tiny">{{ t('binding.gitlabOff') }}</p>
-      <el-form label-position="top">
-        <div class="grid-3">
-          <el-form-item label="Served model">
-            <el-input v-model="importForm.served_model_name" />
-          </el-form-item>
-          <el-form-item label="Engine">
-            <el-select v-model="importForm.engine" style="width: 100%">
-              <el-option value="sglang" label="sglang" />
-              <el-option value="vllm" label="vllm" />
-            </el-select>
-          </el-form-item>
-          <el-form-item label="Card type">
-            <el-select v-model="importForm.card_type" clearable placeholder="(any card)" style="width: 100%">
-              <el-option v-for="t in gpuTypes" :key="t" :label="t" :value="t" />
-            </el-select>
-          </el-form-item>
-        </div>
-        <el-form-item :label="t('binding.project')">
-          <el-input v-model="importForm.project" class="mono" />
-        </el-form-item>
-        <el-form-item :label="t('binding.branch')">
-          <el-input v-model="importForm.branch" class="mono" placeholder="release/modelforge_0.0.2-nvidia_h100-sglang" />
-        </el-form-item>
-        <div class="grid-2">
-          <el-form-item :label="t('binding.path')">
-            <el-input v-model="importForm.path" class="mono" />
-          </el-form-item>
-          <el-form-item :label="t('binding.preset')">
-            <el-select v-model="importForm.preset" style="width: 100%">
-              <el-option v-for="p in catalog?.presets ?? []" :key="p.name" :value="p.name" :label="p.label" />
-            </el-select>
-          </el-form-item>
-        </div>
-        <el-form-item label="Notes">
-          <el-input v-model="importForm.notes" placeholder="optional" />
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="importOpen = false">Cancel</el-button>
-        <el-button type="primary" :loading="busy" :disabled="catalog ? !catalog.gitlab_configured : false" @click="runImport">
-          Import
-        </el-button>
-      </template>
-    </el-dialog>
   </div>
 </template>
 

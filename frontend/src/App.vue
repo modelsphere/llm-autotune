@@ -3,7 +3,7 @@ import { computed, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n, type Locale } from './i18n'
 import { pluginNav, type NavItem } from './plugins'
-import { navigating } from './router'
+import { AGENT_REPORTS, navigating } from './router'
 import { useAuthStore } from './stores/auth'
 
 const auth = useAuthStore()
@@ -22,10 +22,11 @@ const NAV: NavItem[] = [
   { path: '/campaigns', label: 'nav.campaigns', group: 'tuning', order: 10 },
   { path: '/search-spaces', label: 'nav.searchSpaces', group: 'tuning', order: 30 },
   { path: '/objectives', label: 'nav.objectives', group: 'tuning', order: 40 },
+  { path: '/policies', label: 'nav.policies', group: 'tuning', order: 45 },
   { path: '/baselines', label: 'nav.baselines', group: 'tuning', order: 50 },
   { path: '/runs', label: 'nav.runs', group: 'top', order: 20 },
   { path: '/resources', label: 'nav.resources', group: 'top', order: 30 },
-  { path: '/reports', label: 'nav.reports', group: 'top', order: 50 },
+  ...(AGENT_REPORTS ? [{ path: '/reports', label: 'nav.reports', group: 'top' as const, order: 50 }] : []),
 ]
 function navOf(group: NavItem['group']): NavItem[] {
   return [...NAV.filter((n) => n.group === group), ...pluginNav(group)]
@@ -88,7 +89,7 @@ function logout() {
            campaign searches a space against an objective, from a baseline —
            so it folds into one menu, and what is left on the top row are the
            things that are their own thing: the runs, the machines, and the
-           reports written from them. -->
+           when enabled, the reports written from them). -->
       <el-menu mode="horizontal" :default-active="activeMenu" :ellipsis="false" router
         class="nav-menu">
         <el-sub-menu index="tuning" :class="{ 'is-active-group': inTuning }">

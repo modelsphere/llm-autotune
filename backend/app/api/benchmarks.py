@@ -6,6 +6,7 @@ from pydantic import BaseModel
 
 from app.core.auth import get_current_user, require_admin
 from app.db.models import User
+from app.evaluation.benchmark_spec import BenchmarkSpec
 from app.evaluation.benchmarks import (
     DEFAULT_SCREEN_TEMPLATE,
     BenchmarkRefused,
@@ -58,3 +59,19 @@ async def ensure(body: EnsureIn, _: User = Depends(require_admin)):
         ) from exc
     return {"slug": ensured.slug, "benchmark_id": ensured.benchmark_id,
             "created": ensured.created, "locked": ensured.locked}
+
+
+@router.post("/spec", summary="The LLMBench benchmark a described workload becomes")
+async def describe_spec(body: BenchmarkSpec, _: User = Depends(get_current_user)):
+    """Read-only: the slug and title the workload maps to, the module (and so
+    the metric names) it reports, and whether LLMBench already has it — in
+    which case a campaign reuses it rather than creating another. `exists` is
+    null when LLMBench could not be asked."""
+    def _exists() -> bool | None:
+        try:
+            return LLMBenchClient(max_attempts=1).get_benchmark(body.slug) is not None
+        except Exception:
+            return None
+
+    return {"slug": body.slug, "name": body.title, "module": body.module,
+            "group_tag": body.group_tag, "exists": await anyio.to_thread.run_sync(_exists)}

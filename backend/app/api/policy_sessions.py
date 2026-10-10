@@ -23,9 +23,11 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.control.baseline import resolve_baseline
 from app.control.orchestrator.policy_lifecycle import (
     PENDING_CONTENDER_STATES,
     command_for,
+    contender_parts,
     deadlines,
     settings_of,
 )
@@ -412,15 +414,17 @@ async def manifest(
         ]
     }
 
-    production = {}
-    if machine is not None:
-        for service in (machine.baseline or {}).get("services", []):
-            if service.get("served_model_name") == campaign.served_model_name:
-                production = {
-                    "engine_args": service.get("engine_args") or {},
-                    "launch_command": service.get("docker_run") or "",
-                }
-                break
+    # Production's config for this model, as recorded on Baselines.
+    card_type = machine.gpu_type if machine is not None else ""
+    recorded = await db.run_sync(
+        lambda sync: resolve_baseline(
+            sync, campaign.served_model_name, campaign.engine, card_type or ""
+        )
+    )
+    production = (
+        {"engine_args": dict(recorded.engine_args or {}), "launch_command": ""}
+        if recorded is not None else {}
+    )
 
     screen_slug = campaign.benchmark_slug or settings.llmbench_benchmark_slug
     return SessionManifest(
@@ -466,7 +470,7 @@ async def manifest(
         contenders=ManifestContenders(
             max=knobs.max_contenders,
             validation_suite=VERIFY,
-            approx_minutes_each=knobs.approx_minutes_each,
+            approx_minutes_each=contender_parts(campaign)[0],
         ),
         services=ManifestServices(
             launch=True,

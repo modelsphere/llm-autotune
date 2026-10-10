@@ -1,10 +1,9 @@
 # After installing
 
-[`deploy/quickstart.sh`](../deploy/quickstart.sh) leaves you with LLM AutoTune
-and LLMBench on one cluster, connected, with that cluster registered as the
-machine pool `local-cluster`. This page takes the install further one piece at
-a time: every step is a value you set, or a command run against the same
-install.
+[Installing](install.md) leaves you with LLM AutoTune and LLMBench on one
+cluster, connected, and GPU clusters added on **Resources**. This page takes
+the install further one piece at a time: every step is a value you set, or a
+command run against the same install.
 
 Everything here works the same on the no-GPU demo: use `deploy/demo.sh` in
 place of `deploy/quickstart.sh`, and `.demo/` in place of `.quickstart/`.
@@ -23,7 +22,7 @@ Edit one, then run `deploy/quickstart.sh` again. It upgrades both releases in
 place and keeps their data. It never overwrites these two files;
 `deploy/quickstart.sh down` keeps them too.
 
-AutoTune settings the chart has no value for (promotion, timeouts, the default
+AutoTune settings the chart has no value for (timeouts, the default
 nightly window, pull secrets…) are environment variables, set through
 `extraEnv`; [deploying.md](deploying.md#other-settings) lists the ones installs
 usually need.
@@ -37,11 +36,11 @@ stores.
 
 A campaign with no policy tries every configuration in its search space. A
 policy is a container that decides what to try next instead. Policies are built
-from source, not pulled; the script builds one, loads it into the cluster and
-registers it:
+from source, not pulled; the script builds one, pushes it to a registry your
+GPU clusters' nodes pull from, and registers it:
 
 ```bash
-deploy/quickstart.sh policy policies/random-search
+deploy/quickstart.sh policy policies/random-search --registry registry.example.com/team
 ```
 
 Then, in **New campaign ▸ Search ▸ Strategy**, pick it. A policy campaign also
@@ -59,9 +58,10 @@ the policy builds a new image and points the registration at it.
   and run `deploy/quickstart.sh policy path/to/it`. The contract it speaks is
   [policy-contract.md](api/policy-contract.md). A policy that starts engines
   itself, instead of asking the platform to, registers with `--gpus --needs-model`.
-- **The image goes through a registry**: add `--registry <repo>` (one you can
-  push to and the nodes can pull from) the first time; the script remembers it.
-  Local clusters (kind, minikube, k3d, Docker Desktop, OrbStack) need none.
+- **The image goes through a registry**, because policies run on the GPU
+  clusters: `--registry` is needed the first time, and the script remembers
+  it. Only `deploy/demo.sh`, whose runs share its own cluster, loads the image
+  straight into a local one (kind, minikube, k3d, Docker Desktop, OrbStack).
 - **Without the script**, register an image with the API, using a key from the
   **API Keys** page:
 
@@ -72,38 +72,49 @@ the policy builds a new image and points the registration at it.
       "gpus_in_container": false, "needs_model": false}'
   ```
 
-A policy runs as a Job next to the runs and calls the platform back at
-`publicApiUrl`. By default that is the API's in-cluster address, which works
-for runs in the same cluster; when they land elsewhere (below), set
-`publicApiUrl` to an address reachable from there.
+A policy runs as a Job on a GPU cluster, next to the runs, and calls the
+platform back at `publicApiUrl`, which the quickstart sets to the UI's address.
+If the GPU clusters reach the platform by another address, set `publicApiUrl`
+to it in `llm-autotune.custom.yaml`.
 
 ## GPUs
 
-`local-cluster` is the cluster the platform is installed in. On **Resources**,
-**Refresh capacity** reads its card count and type from the nodes, and **Lease
-to platform** lets campaigns use it. One install can also use other clusters
-and ssh machines.
+The platforms run no engines themselves: GPUs come from the clusters and
+machines you add on **Resources**.
 
-### This cluster
+### A GPU cluster
 
-The script runs engines on nodes that offer `nvidia.com/gpu`, with the
-`nvidia` RuntimeClass when the cluster has one. To pin runs to some nodes, or
-change either:
+On the GPU cluster, with its admin kubeconfig:
 
-```yaml
-# .quickstart/llm-autotune.custom.yaml
-gpuCluster:
-  nodeSelector: "nvidia.com/gpu.product=NVIDIA-H100-80GB-HBM3"
-  # gpuResource: nvidia.com/gpu
-  # runtimeClass: nvidia
+```bash
+deploy/gpu-cluster.sh                 # --namespace NS to choose the namespace
 ```
 
-A run mounts its model weights from the node, as a hostPath at the campaign's
-model path, so the nodes it can land on must hold the weights there. To serve
-weights from one shared volume instead, set `gpuCluster.modelPvc` to a
-ReadOnlyMany/ReadWriteMany claim and `gpuCluster.modelPvcRoot` to the path the
-campaigns' model paths are relative to. Engine images that need credentials
-take a pull secret through `extraEnv` (`AUTOTUNE_K8S_IMAGE_PULL_SECRETS`).
+It creates the namespace engine pods run in (`llm-autotune-runs`) and an
+account allowed only what the platform needs there, plus read-only access to
+nodes, and writes `llm-autotune-runs.kubeconfig` holding only that account's
+token. Every name derives from the namespace, so two platforms can share a GPU
+cluster with two namespaces. `deploy/gpu-cluster.sh remove` revokes the account.
+
+On **Resources**, **Add GPU cluster**: upload the file, **Connect**, and tick
+the GPU nodes to register. Each becomes a machine pinned to its node, with the
+card count and type the node reports; **Lease to platform** on a machine lets
+campaigns use it. Under **Clusters**, a cluster's **Nodes** registers nodes added
+since and lists registered ones that left.
+
+Three things must reach across:
+
+- AutoTune's pods reach the cluster's API server.
+- LLMBench reaches the runs: an engine is a NodePort Service, reached on a
+  node's address.
+- A search policy running there reaches the platform at `publicApiUrl`. The
+  install script sets it to the UI's address, which serves the API too.
+
+A run mounts its model weights from its node, as a hostPath at the campaign's
+model path, so a campaign pins the machines (nodes) that hold them. Engine
+images that need credentials take the cluster's **Image pull secrets**, and
+nodes with extra taints its **Extra tolerations** (both under **Advanced**
+when adding it, or **Clusters ▸ Edit**).
 
 Engine logs are off by default, because they need a ReadWriteMany volume. With
 such a storage class:
@@ -114,21 +125,6 @@ runLogs:
   enabled: true
   storageClass: nfs-client
 ```
-
-### Another cluster
-
-On the GPU cluster, create a namespace, a ServiceAccount allowed only what the
-platform needs, and a kubeconfig for it:
-
-```bash
-kubectl apply -f deploy/k8s/remote-cluster/backend-rbac.yaml
-deploy/k8s/remote-cluster/make-scoped-kubeconfig.sh
-```
-
-On **Resources ▸ Clusters**, add the cluster with that kubeconfig, then
-**Add machine** on it. Three things must reach across: AutoTune's pods reach that cluster's API
-server; LLMBench reaches the runs there (a NodePort on a node's address, which
-the cluster form lets you set); and a policy there reaches `publicApiUrl`.
 
 ### Bare-metal machines over ssh
 
@@ -148,9 +144,10 @@ worker:
 ```
 
 Run the script again, then **Add machine** on **Resources** with its address and
-ssh user. The machine needs Docker and the NVIDIA container toolkit. Such a box
-is usually shared with production: the platform captures what runs there
-before it takes the box and can put it back afterwards
+ssh user, and put the public half of that key in the user's
+`~/.ssh/authorized_keys` there. The machine needs Docker and the NVIDIA
+container toolkit. Lease it to the platform free; ending the lease stops only
+the platform's own containers
 ([deploying.md](deploying.md#bare-metal-boxes-over-ssh)).
 
 ## Your own models
@@ -159,11 +156,18 @@ With a machine that has GPUs, a campaign serves your model with a real engine
 image (sglang or vLLM) and your search space. The usual path starts from the
 configuration production runs today: record it on **Baselines**, then **Tune
 from this** drafts a campaign from it. [How it works](workflow.md) describes the
-whole loop. Screen real engines with the default benchmark,
-`autotune-screen-v1`; the demo's `autotune-quickstart-v1` is sized for the
-mock.
+whole loop. On a campaign's **Benchmark** step, describe the load each candidate
+gets (synthetic prompts, or a replay of recorded traffic) and AutoTune creates
+the benchmark on LLMBench. Keep prompts short and concurrency low against the
+mock engine, as the demo's `autotune-quickstart-v1` does.
 
-## Reaching the UIs without port-forward
+## Reaching the UIs
+
+On a remote cluster the script opens both UIs on a NodePort, on every node,
+and prints one node's address (`NODE_HOST=<address>` picks another). With
+`--port-forward` it forwards them to localhost instead, as it does on a
+cluster on your own machine. For a name and TLS, put them behind an ingress:
+once `publicUiUrl` is in your values, the script leaves the UIs to it.
 
 ```yaml
 # .quickstart/llm-autotune.custom.yaml
@@ -198,29 +202,11 @@ and [replay datasets](https://github.com/modelsphere/llm-bench/blob/main/docs/re
 The academic suites are fetched from Hugging Face; nothing else LLMBench runs
 needs it.
 
-## Promoting a winner
+## Rolling out a winner
 
-By default a campaign's winner is rendered as the exact configuration to apply,
-for a person or a pipeline. To have it opened as a GitLab merge request against
-the file production is deployed from:
-
-```bash
-kubectl -n llm-autotune create secret generic autotune-gitlab --from-literal=token=<token>
-```
-
-```yaml
-# .quickstart/llm-autotune.custom.yaml
-extraEnv:
-  - {name: AUTOTUNE_PROMOTION_TARGET, value: gitlab}
-  - {name: AUTOTUNE_GITLAB_BASE_URL, value: https://gitlab.example.com}
-  - {name: AUTOTUNE_GITLAB_PROJECT, value: group/deploy-repo}
-  - name: AUTOTUNE_GITLAB_TOKEN
-    valueFrom: {secretKeyRef: {name: autotune-gitlab, key: token}}
-  # - {name: AUTOTUNE_PROMOTION_DRY_RUN, value: "false"}   # once a preview reads right
-```
-
-Which file a baseline's winner is proposed against is set on the baseline, on
-**Baselines**. Requests are dry runs until `AUTOTUNE_PROMOTION_DRY_RUN` is false.
+A campaign's winner is a run like any other: its page has the exact launch
+command, the image digest and the engine version it ran with. Apply those to
+your serving deployment, by hand or from your own pipeline.
 
 ## The operator
 

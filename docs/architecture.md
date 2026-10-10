@@ -4,7 +4,7 @@ For engineers: how the platform is built, and the few choices everything else
 follows from. The same system without the code: [How it works](workflow.md).
 中文：[架构](architecture.zh.md)
 
-![Platform architecture: the policy on a GPU machine asks the API for runs; the supervisor launches each config, LLMBench benchmarks it, and the winner becomes a merge request](api/diagrams/platform-architecture.svg)
+![Platform architecture: the policy on a GPU machine asks the API for runs; the supervisor launches each config, LLMBench benchmarks it, and the platform validates the best](api/diagrams/platform-architecture.svg)
 
 - **API** — one FastAPI service: the REST API behind the UI, the
   [policy API](api/policy-contract.md), the [agent API](api/agent-api.md) and
@@ -36,8 +36,8 @@ An engine a policy asked for uses one more state, `serving`: launched and
 health-checked like any run, then held for the policy instead of benchmarked.
 
 One tick, in order: plugin steps → campaign windows → leases → stop requests →
-dataset pins → plan → baseline lifecycle → policy sessions → schedule → advance
-runs → enforce windows → reap teardowns → auto-promotion. The clocks run first,
+dataset pins → plan → policy sessions → schedule → advance runs → enforce
+windows → reap teardowns. The clocks run first,
 so a tick never starts a run that the same tick would tear down.
 
 ## Two substrates, one launch spec
@@ -45,11 +45,11 @@ so a tick never starts a run that the same tick would tear down.
 Both drivers render the same `LaunchSpec` into the same engine command; only
 where it runs differs.
 
-![Bare metal over ssh: capture, clear, run configs, restore. Kubernetes: submit, schedule, serve, delete.](assets/substrates.svg)
+![Bare metal over ssh: lease, run configs, serve, remove. Kubernetes: submit, schedule, serve, delete.](assets/substrates.svg)
 
-A bare-metal box is shared with production, so it is captured before it is
-cleared and restored before it is handed back. A Kubernetes run borrows idle
-GPUs, so there is nothing to restore. The Kubernetes driver asks for a GPU
+A bare-metal box is leased to the platform free, and the platform only ever
+removes the containers it started. A Kubernetes run borrows idle GPUs. The
+Kubernetes driver asks for a GPU
 count and lets the scheduler place the pod (a machine may pin a node
 selector); a pod that cannot start, such as a missing model path or an image
 that will not pull, fails fast with its real reason. It renders a plain
@@ -97,7 +97,7 @@ being ranked.
 Each boundary is a narrow interface with implementations in a registry; the
 core never knows which one it is talking to.
 
-![Seams around the core: policy, launch driver, engine adapter, evaluator, promotion target, plugins](assets/seams.svg)
+![Seams around the core: policy, launch driver, engine adapter, evaluator, plugins](assets/seams.svg)
 
 | Seam | Interface | Implementations |
 |---|---|---|
@@ -105,7 +105,6 @@ core never knows which one it is talking to.
 | Launch driver | `launch · state · teardown · attach` | `ssh_docker`, `k8s` |
 | Engine adapter | settings → engine command | `sglang`, `vllm` |
 | Evaluator | `start · poll` | health gate, LLMBench |
-| Promotion target | `open_rollout · status` | `manual`, `gitlab` |
 | Plugins | routes, tick steps, tables, pages | [your package](plugins.md) |
 
 The platform validates and canonicalizes every config a policy proposes, and
@@ -119,9 +118,8 @@ leaderboard ranks cannot disagree.
 - **Shared predicates.** Lifecycle questions (is this lease draining? does
   this run fit the window?) are answered by the same code for the worker and
   the UI, so the two cannot disagree.
-- **The baseline interlock.** On a shared machine, experiments run only after
-  production was captured and cleared, and the machine goes back only after
-  production is restored and answering.
+- **The lease is the hand-over.** A machine comes to the platform free and
+  goes back when the lease ends; the platform stops only what it launched.
 - **Comparable results.** A campaign scores every config on its pinned dataset
   and measures production the same way, so "+12% over production" holds as
   absolute numbers drift.

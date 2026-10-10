@@ -128,9 +128,14 @@ def me():
     return MOCK_ACCOUNT
 
 
+# Group tags per slug, as LLMBench files benchmarks in its list.
+_group_tags: dict[str, list[str]] = {}
+
+
 def _benchmark_out(slug: str) -> dict[str, Any]:
     return {"id": list(BENCHMARKS).index(slug) + 1, "slug": slug, "name": slug,
             "status": "active", "is_locked": slug in _locked,
+            "group_tags": _group_tags.get(slug, []),
             "created_by_user_id": MOCK_ACCOUNT["id"],
             "config_hash": hashlib.sha256(slug.encode()).hexdigest()[:8],
             "modules": [{k: v for k, v in m.items() if k != "id"} for m in BENCHMARKS[slug]]}
@@ -153,7 +158,26 @@ async def import_benchmark(request: Request):
          "weight": m.get("weight", 1.0), "order_index": i}
         for i, m in enumerate(doc.get("modules") or [])
     ]
+    _group_tags[slug] = list(doc.get("group_tags") or [])
     return _benchmark_out(slug)
+
+
+@app.put("/benchmarks/admin/benchmarks/{benchmark_id}")
+async def update_benchmark(benchmark_id: int, request: Request):
+    """Only grouping, the one change LLMBench takes on a locked benchmark."""
+    slug = list(BENCHMARKS)[benchmark_id - 1]
+    body = await request.json()
+    if body.get("group_tags") is not None:
+        _group_tags[slug] = list(body["group_tags"])
+    return _benchmark_out(slug)
+
+
+@app.get("/modules/{name}")
+def module_descriptor(name: str):
+    configs = {"replay": REPLAY_CONFIGS, "perf_guidellm_sweep": SWEEP_CONFIGS}.get(name)
+    if configs is None:
+        raise HTTPException(404, "Module not found")
+    return {"name": name, "default_params": {}, "default_metric_configs": configs}
 
 
 @app.put("/benchmarks/admin/benchmarks/{benchmark_id}/lock")

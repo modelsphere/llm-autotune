@@ -27,20 +27,22 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.control.launch.base import DeploymentHandle, WorkloadSpec, WorkloadState
+from app.control.launch.failures import TRANSIENT_PLACEMENT_FAILURES
 from app.control.orchestrator.lifecycle import as_utc, now
 from app.control.orchestrator.policy_lifecycle import (
+    contender_minutes,
     deadlines,
     heartbeat_silence,
     heartbeat_timeout_seconds,
     settings_of,
 )
 from app.control.orchestrator.schedule import from_campaign as schedule_of
+from app.control.search.validation import cards_used
 from app.core import apikeys
 from app.db.models import (
     TERMINAL_RUN_STATES,
     TERMINAL_SESSION_STATES,
     ApiKey,
-    BaselineStatus,
     Campaign,
     CampaignStatus,
     Candidate,
@@ -92,6 +94,21 @@ def policy_log_path(run_log_dir: str, session_id: int) -> str:
     column."""
     return os.path.join(run_log_dir, f"policy-session-{session_id}.log")
 
+
+
+def _validation_cards(session: PolicySession, config: dict, blockers: list) -> list[int]:
+    """The cards a contender's validation run takes: as many as its config
+    uses (tp × dp × pp), out of the session's block, free ones first. The
+    block is every card the session may use; a launch sized to the block
+    asked a cluster for all of them, and waited forever for cards that
+    production or another session held."""
+    block = list(session.gpu_indices or [])
+    if not block:
+        return []
+    needed = min(max(cards_used(config), 1), len(block))
+    held = {i for r in blockers for i in (r.gpu_indices or [])}
+    ordered = [i for i in block if i not in held] + [i for i in block if i in held]
+    return sorted(ordered[:needed])
 
 class PolicySessionEngine:
     """Advances every live policy session by one step per tick.
@@ -239,8 +256,6 @@ class PolicySessionEngine:
             return False
         needed = settings_of(campaign).cards if campaign.share_machine else 0
         for m in self.sup._usable_machines(db, campaign):
-            if m.baseline_status != BaselineStatus.CLEARED.value:
-                continue  # the baseline lifecycle's to move, not the queue's
             if m.id in blocked:
                 busy.add(m.id)
                 continue
@@ -479,10 +494,18 @@ class PolicySessionEngine:
         state = self._workload_state(db, session, machine)
         started = as_utc(session.started_at)
         waited = (now() - started).total_seconds() if started else 0.0
+        failure = self._workload_failure(session, machine)
         if state in (WorkloadState.EXITED, WorkloadState.GONE):
             self._fail_toward_validation(
                 db, session, "container_died",
                 f"policy container {state.value} before its first heartbeat",
+            )
+        elif failure is not None and failure[0] not in TRANSIENT_PLACEMENT_FAILURES:
+            # It will never start: an image that cannot be pulled, a container
+            # that keeps crashing, a pod no node could ever take. Waiting out
+            # the ready timeout would only hide the reason for half an hour.
+            self._fail_toward_validation(
+                db, session, failure[0], f"policy container cannot start: {failure[1]}"
             )
         elif waited > self.sup.settings.ready_timeout_minutes * 60:
             self._fail_toward_validation(
@@ -691,11 +714,10 @@ class PolicySessionEngine:
             # reserved until a dying container is gone.
             if machine is not None and self._teardown_blocking(db, session, campaign, machine):
                 return
-            knobs = settings_of(campaign)
             _search, hard = deadlines(campaign, machine)
             nxt = pending[0]
             if hard is not None and now() + timedelta(
-                minutes=knobs.approx_minutes_each + knobs.model_startup_minutes
+                minutes=contender_minutes(campaign)
             ) > hard:
                 for contender in pending:
                     contender.status = ContenderStatus.SKIPPED.value
@@ -804,7 +826,7 @@ class PolicySessionEngine:
             machine_id=session.machine_id,
             kind=RunKind.EXPERIMENT.value,  # launched + benched like any run
             status=RunStatus.PENDING.value,
-            gpu_indices=list(session.gpu_indices or []),
+            gpu_indices=_validation_cards(session, config, blockers),
             service_port=port,
             policy_session_id=session.id,
             started_at=now(),  # like the classic scheduler; no null on this path
@@ -839,6 +861,25 @@ class PolicySessionEngine:
             # An ssh hiccup must not read as "container gone" — GONE fails the
             # session. Report RUNNING and let the next tick see clearly.
             return WorkloadState.RUNNING
+
+    def _workload_failure(self, session: PolicySession, machine) -> tuple[str, str] | None:
+        """Why the policy container is wedged, as the substrate tells it, or
+        None. Best-effort: an unreadable substrate reports nothing."""
+        if machine is None or not session.container_name:
+            return None
+        info = self.sup._machine_info(machine)
+        driver = self.sup._driver_for(info)
+        handle = DeploymentHandle(
+            driver=getattr(driver, "name", ""),
+            container_name=session.container_name,
+            machine=info,
+            endpoint_url="",
+            workload=True,
+        )
+        try:
+            return driver.failure_reason(handle)
+        except Exception:  # noqa: BLE001 — diagnostics never fail a session
+            return None
 
     def _save_policy_log(self, session: PolicySession, driver, handle) -> None:
         """Persist the policy container's stdout+stderr (docker logs merges both)
@@ -998,12 +1039,14 @@ class PolicySessionEngine:
                          "validated": self._verdict_count(db, session)},
             )
             # A one-off window (force-start, or no recurring schedule) has no
-            # next night: the campaign is done the moment its session is.
-            # _maybe_finish_campaign never fires for policy campaigns (no
-            # candidate queue), so this is where they end.
-            if (
+            # next night: the campaign is done the moment its session is. Nor
+            # does a policy that said its search is exhausted: the next night
+            # would start it only for it to say so again. _maybe_finish_campaign
+            # never fires for policy campaigns (no candidate queue), so this is
+            # where they end.
+            if campaign.status == CampaignStatus.ACTIVE.value and (
                 schedule_of(campaign) is None
-                and campaign.status == CampaignStatus.ACTIVE.value
+                or session.search_end_reason == "policy_exhausted"
             ):
                 campaign.status = CampaignStatus.DONE.value
                 self.sup._event(db, "campaign_done", campaign_id=campaign.id)

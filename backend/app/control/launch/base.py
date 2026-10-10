@@ -459,28 +459,6 @@ class DeploymentDriver(ABC):
         policy as STARTING forever."""
         raise NotImplementedError(f"{self.name} driver cannot inspect workloads")
 
-    # -- baseline lifecycle --------------------------------------------------
-    # The production services already on a borrowed machine. Capture must be
-    # rich enough to restore, because clear() is destructive.
-
-    @abstractmethod
-    def capture_baseline(self, machine: MachineInfo) -> dict[str, Any]:
-        """Record what is running and how to bring it back."""
-
-    @abstractmethod
-    def clear_baseline(self, machine: MachineInfo, baseline: dict[str, Any]) -> list[str]:
-        """Stop the captured production services. Returns what was stopped."""
-
-    @abstractmethod
-    def restore_baseline(self, machine: MachineInfo, baseline: dict[str, Any]) -> list[str]:
-        """Bring the production services back. Returns what was restored."""
-
-    def verify_baseline(self, machine: MachineInfo, baseline: dict[str, Any]) -> list[dict]:
-        """Compare the current deployment against the capture. Restoring is not
-        the same as restoring faithfully — a restore script can disagree with
-        the container it recreates. Default: no verification available."""
-        return []
-
     # -- capacity ------------------------------------------------------------
 
     def probe_capacity(self, machine: MachineInfo) -> dict[str, Any]:

@@ -36,20 +36,14 @@ class PolicySettings(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     max_contenders: int = Field(default=2, ge=1, le=8)
-    # The benchmark measurement per contender, NOT counting the cold model
-    # load — that is `model_startup_minutes`, budgeted separately so a
-    # slow-loading model does not get its validation cut off at the window
-    # edge. What the deadline math reserves per contender and what the manifest
-    # promises the policy.
-    approx_minutes_each: int = Field(default=60, ge=5, le=240)
-    # Cold-start budget: how long this model takes to load and become
-    # serveable before a benchmark can run against it. Added on top of
-    # `approx_minutes_each` for every contender in the validation reserve, so a
-    # 15-minute-loading model reserves that time per contender instead of
-    # discovering the shortfall at 3am. 0 keeps the old all-in behaviour.
-    model_startup_minutes: int = Field(default=0, ge=0, le=120)
-    # Overrides the derived default
-    # (max_contenders * (approx_minutes_each + model_startup_minutes) + 15).
+    # How long one contender's validation benchmark takes, and how long its
+    # model takes to come up first. Both None by default: the platform learns
+    # them from this campaign's own runs (control/orchestrator/timing.py) and
+    # reserves that much per contender at the end of the window. Set either to
+    # pin it, for a model whose first night has nothing to learn from yet.
+    approx_minutes_each: int | None = Field(default=None, ge=5, le=240)
+    model_startup_minutes: int | None = Field(default=None, ge=0, le=120)
+    # Overrides the derived default (max_contenders * per-contender + 15).
     validation_reserve_minutes: int | None = Field(default=None, ge=5, le=720)
     # Cards this session holds on its machine. None = the whole box, the
     # default for a night that has the machine to itself. Set (together with
@@ -65,10 +59,11 @@ class PolicySettings(BaseModel):
     search_idle_timeout_s: int | None = Field(default=None, ge=30, le=3600)
     search_idle_strikes: int = Field(default=3, ge=1, le=10)
 
-    def reserve_minutes(self) -> int:
+    def reserve_minutes(self, per_contender: int) -> int:
+        """Validation time held back at the end of the window, given what one
+        contender costs (policy_lifecycle.contender_minutes)."""
         if self.validation_reserve_minutes is not None:
             return self.validation_reserve_minutes
-        per_contender = self.approx_minutes_each + self.model_startup_minutes
         return self.max_contenders * per_contender + 15
 
 
@@ -81,11 +76,14 @@ class PolicyIn(BaseModel):
     image: str = Field(min_length=1, max_length=255)
     repo_url: str = ""
     version: str = ""
-    gpus_in_container: bool = True
+    # Off by default: most policies delegate, asking the platform to launch
+    # engines, and need neither. A self-serving policy, which runs engines in
+    # its own container, turns both on. (Rows registered before keep theirs.)
+    gpus_in_container: bool = False
     # Mount the campaign's weights at /model. False for a delegated-only policy:
     # it never reads them, and on k8s the mount would pin a placement-free
     # controller pod to a weights-bearing node.
-    needs_model: bool = True
+    needs_model: bool = False
     env: dict[str, str] = Field(default_factory=dict)
     ports: int = Field(default=4, ge=1, le=16)
 
@@ -450,6 +448,10 @@ class SessionOut(BaseModel):
     sdk_version: str
     plan: dict[str, Any]
     finalized_at: datetime | None
+    # A human asked it to wind down (Force stop) or to stop now (Abort); the
+    # worker acts on its next tick.
+    finalize_requested_at: datetime | None = None
+    abort_requested_at: datetime | None = None
     serving_contender_id: int | None
     exit_code: int | None
     failure_class: str
@@ -462,6 +464,9 @@ class SessionDetailOut(SessionOut):
     hard_deadline: datetime | None = None
     trials: list[TrialOut] = Field(default_factory=list)
     contenders: list[ContenderOut] = Field(default_factory=list)
+    # While STARTING: what the container is waiting on, read live from the
+    # substrate (e.g. a pod no node can take yet). Empty otherwise.
+    waiting: str = ""
 
 
 # -- coverage (platform-derived, human-facing) -----------------------------------------

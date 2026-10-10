@@ -20,7 +20,6 @@ from app.api import (
     objectives,
     policies,
     policy_sessions,
-    promotions,
     runs,
     search_spaces,
 )
@@ -108,7 +107,7 @@ class SpaStaticFiles(StaticFiles):
 
 app = FastAPI(
     title="LLM Autotune",
-    version="0.1.2",
+    version="0.2.0",
     description=DESCRIPTION,
     openapi_tags=TAGS,
     # The interactive docs are the integration guide for the lease API, so they
@@ -141,7 +140,6 @@ app.include_router(search_spaces.router, prefix=api_prefix)
 app.include_router(objectives.router, prefix=api_prefix)
 app.include_router(benchmarks.router, prefix=api_prefix)
 app.include_router(baselines.router, prefix=api_prefix)
-app.include_router(promotions.router, prefix=api_prefix)
 app.include_router(policies.router, prefix=api_prefix)
 app.include_router(policy_sessions.router, prefix=api_prefix)
 app.include_router(agent.router, prefix=api_prefix)

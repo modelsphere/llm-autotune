@@ -17,7 +17,6 @@ from app.control.orchestrator.supervisor import Supervisor
 from app.control.run_nodes import machine_hosts_live_gang, nodes_of
 from app.db.base import Base
 from app.db.models import (
-    BaselineStatus,
     Campaign,
     CampaignStatus,
     Candidate,
@@ -45,7 +44,6 @@ def _seed(factory, *, pinned: list[str]) -> None:
                 Machine(
                     id=machine_id, name=name, host=f"10.0.0.{machine_id}",
                     state=MachineState.AVAILABLE.value, gpu_count=8,
-                    baseline_status=BaselineStatus.CLEARED.value,
                 )
             )
         session.add(

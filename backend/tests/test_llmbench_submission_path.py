@@ -16,7 +16,6 @@ from sqlalchemy.orm import sessionmaker
 from app.control.orchestrator.supervisor import Supervisor
 from app.db.base import Base
 from app.db.models import (
-    BaselineStatus,
     Campaign,
     CampaignStatus,
     Candidate,
@@ -38,8 +37,7 @@ def _stack():
     with factory() as session:
         session.add(User(id=1, username="u", password_hash="x"))
         session.add(Machine(id=1, name="gpu-a", host="198.51.100.10", gpu_count=8,
-                            gpu_type="H100", state=MachineState.AVAILABLE.value,
-                            baseline_status=BaselineStatus.CLEARED.value))
+                            gpu_type="H100", state=MachineState.AVAILABLE.value))
         session.add(Campaign(id=1, owner_id=1, name="c", engine="sglang", image="img",
                              model_path="/m", served_model_name="m",
                              search_space={"grid": {"tp": [2]}},

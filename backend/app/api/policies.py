@@ -27,6 +27,7 @@ from app.db.models import (
     Policy,
     PolicyContender,
     PolicySession,
+    PolicySessionStatus,
     PolicyTrial,
     User,
 )
@@ -180,6 +181,11 @@ async def session_detail(
     detail.hard_deadline = hard
     detail.trials = [TrialOut.model_validate(t) for t in trials]
     detail.contenders = [ContenderOut.model_validate(c) for c in contenders]
+    if (session.status == PolicySessionStatus.STARTING.value and machine is not None
+            and session.container_name):
+        detail.waiting = await anyio.to_thread.run_sync(
+            _live_waiting, machine, session.container_name
+        )
     return detail
 
 
@@ -214,19 +220,40 @@ async def session_coverage(
     )
 
 
+def _policy_handle(machine: Machine, container_name: str):
+    """The driver for the machine's own cluster, and a handle on its policy
+    container: marked a workload, so on a cluster it selects the policy's pod
+    and never an engine's."""
+    driver = get_driver(machine.driver or "ssh_docker", cluster_id=machine.cluster_id)
+    handle = DeploymentHandle(
+        driver=getattr(driver, "name", ""),
+        container_name=container_name,
+        machine=MachineInfo.of(machine),
+        endpoint_url="",
+        workload=True,
+    )
+    return driver, handle
+
+
 def _live_workload_log(machine: Machine, container_name: str) -> str:
     """Best-effort read-only fetch of a running policy container's log (docker
     logs merges stdout+stderr). Any ssh hiccup returns empty, and the caller
     falls back to the captured file."""
     try:
-        driver = get_driver(machine.driver or "ssh_docker")
-        handle = DeploymentHandle(
-            driver=getattr(driver, "name", ""),
-            container_name=container_name,
-            machine=MachineInfo.of(machine),
-            endpoint_url="",
-        )
+        driver, handle = _policy_handle(machine, container_name)
         return driver.logs(handle, tail=2000) or ""
+    except Exception:
+        return ""
+
+
+def _live_waiting(machine: Machine, container_name: str) -> str:
+    """What a policy container that has not started is waiting on, as the
+    substrate says it (a pod nothing can schedule yet, an image still pulling
+    back off). Empty when nothing looks wrong or it cannot be read."""
+    try:
+        driver, handle = _policy_handle(machine, container_name)
+        reason = driver.failure_reason(handle)
+        return reason[1] if reason else ""
     except Exception:
         return ""
 

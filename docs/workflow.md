@@ -13,7 +13,7 @@ measured the same way every time, ranked against what production runs today.
 
 ## A campaign, end to end
 
-![Define, lend machines, tune night after night, read the report, promote the winner](assets/campaign-journey.svg)
+![Define, lend machines, tune night after night, read the report, roll out the winner](assets/campaign-journey.svg)
 
 1. **Define** the model and engine, the **search space** (the settings and
    values to try), the **objective** (one metric to improve, plus **redlines**
@@ -24,17 +24,16 @@ measured the same way every time, ranked against what production runs today.
    runs and measures them. A large search spans several nights and resumes
    where it stopped.
 4. **Read the report** each morning.
-5. **Promote** the winner as a merge request against your deploy repo.
+5. **Roll out** the winner with its exact launch command and image.
 
 ## One night
 
-![Take over, baseline, search until the deadline, validate the best, hand back](assets/tuning-night.svg)
+![Lease, baseline, search until the deadline, validate the best, hand back](assets/tuning-night.svg)
 
-The platform captures the production service so it can be put back exactly,
-then measures production's own config as the **baseline** to beat. The policy
-searches until the deadline; the platform then re-measures the policy's best
-configs itself, restores production, checks it answers, and hands the machine
-back. Nothing starts that cannot finish inside the window, and a measurement
+The machine is leased to the platform free. The platform first measures
+production's own config as the **baseline** to beat. The policy searches until
+the deadline; the platform then re-measures the policy's best configs itself,
+stops its own runs, and hands the machine back. Nothing starts that cannot finish inside the window, and a measurement
 that decides anything gets its machine to itself.
 
 ## How a config earns its place
@@ -87,8 +86,8 @@ than the lead as **unstable**.
 
 ## What you can rely on
 
-- **Production is protected.** Captured before it is touched, restored and
-  checked before the machine goes back.
+- **Production is never touched.** The platform runs only on machines leased
+  to it, and stops only what it launched.
 - **The platform measures.** Every config is benchmarked the same way, and a
   policy's own numbers never decide the result.
 - **Results are comparable.** One frozen dataset per campaign, production

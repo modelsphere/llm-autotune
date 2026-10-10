@@ -17,18 +17,11 @@ The lifecycle, in full:
         ACTIVE --POST .../lease/end {polite}--> DRAINING  (finish live runs)
         ACTIVE --POST .../lease/end {eager}---> DRAINING  (kill live runs now)
         ACTIVE --lease_due_at passes----------> DRAINING  (polite, automatic)
-      DRAINING --runs done, production back---> RELEASED
+      DRAINING --our runs done--------------> RELEASED
 
-Whether production is put back before RELEASED is a deployment decision, not a
-mode: with `AUTOTUNE_AUTO_RESTORE_PRODUCTION` on, the captured services are
-started again and the lease closes only once that lands; with it off (the
-default) the box is handed back exactly as we left it and the put-back is the
-admin's, recorded as a `production_left_down` event. Neither hand-back mode
-changes that — an eager end kills the benchmarks, not the restore. A machine
-whose capture was empty has nothing to put back either way.
-
-Read `stage.hand_back` before ending a lease: it is the branch this will take,
-in words.
+A lease is the hand-over: the machine is given to the platform free, and the
+platform only ever stops what it launched itself. `stage.hand_back` says, in
+words, what ending the lease will do right now.
 """
 
 from datetime import UTC, datetime, timedelta
@@ -154,7 +147,7 @@ class LeaseStatus(BaseModel):
         description=(
             "`busy` — our runs are on it.\n\n"
             "`idle` — ours, nothing running; work may still be queued.\n\n"
-            "`returnable` — production is back up and the machine is yours."
+            "`returnable` — not ours any more; the machine is yours."
         ),
     )
     returnable_at: datetime | None = Field(
@@ -162,18 +155,10 @@ class LeaseStatus(BaseModel):
         description="Worst case for when a polite hand-back completes, from each live "
         "run's own cutoff. Null when nothing is running.",
     )
-    production_status: str = Field(
-        ..., description="`none` | `captured` | `cleared` | `restored` — what has been "
-        "done to the services we were handed.\n\n"
-        "`cleared` does NOT by itself mean production is down: a capture that found "
-        "nothing running lands here too, with an empty service list. `stage.hand_back` "
-        "tells the two apart."
-    )
     live_runs: list[LiveRun]
-    stage: dict = Field(..., description="Human-readable position in the hand-over "
-                                          "sequence: headline, detail, step index, and "
-                                          "`hand_back` — what ending the lease does to "
-                                          "production on this machine.")
+    stage: dict = Field(..., description="Human-readable position in the lease: "
+                                          "headline, detail, step index, and "
+                                          "`hand_back` — what ending the lease does now.")
 
 
 # -- helpers ------------------------------------------------------------------
@@ -208,14 +193,7 @@ def _snapshot(machine_id: int) -> dict:
                 select(RunNode).where(RunNode.machine_id == machine.id)
             ).all()
         }
-        settings = get_settings()
-        stage = describe(
-            session,
-            machine,
-            settings.default_max_run_minutes,
-            auto=settings.auto_baseline_lifecycle,
-            auto_restore=settings.auto_restore_production,
-        )
+        stage = describe(session, machine, get_settings().default_max_run_minutes)
         return {
             "machine": machine.name,
             "host": machine.host,
@@ -233,7 +211,6 @@ def _snapshot(machine_id: int) -> dict:
             "lease_released_at": machine.lease_released_at,
             "readiness": readiness(session, machine),
             "returnable_at": free_at,
-            "production_status": machine.baseline_status,
             "live_runs": [
                 {
                     "run_id": r.id,
@@ -249,8 +226,8 @@ def _snapshot(machine_id: int) -> dict:
                 "detail": stage.detail,
                 "step": stage.step,
                 "state": stage.state,
-                # What ending the lease does to production, so a caller can read
-                # the consequence before it posts to .../lease/end.
+                # What ending the lease does, so a caller can read the
+                # consequence before it posts to .../lease/end.
                 "hand_back": stage.hand_back.as_dict(),
             },
         }
@@ -276,9 +253,8 @@ async def _by_name(name: str, session: AsyncSession) -> Machine:
         "Hand a GPU box over for a period. Idempotent on `name`: the first call "
         "registers the machine, later calls update its details and start a fresh "
         "lease, so a caller may retry freely.\n\n"
-        "The platform will then, on its own: record what production is running, "
-        "benchmark it as the night's control, stop it, run experiments, and put it "
-        "back. Nothing is stopped until the control benchmark has passed.\n\n"
+        "Hand it over free: the platform runs campaigns on it until the lease ends, "
+        "and never touches anything it did not launch.\n\n"
         "**Refused** while the machine is draining — finish or wait out the "
         "hand-back first, otherwise the new lease would inherit a teardown already "
         "in progress."
@@ -427,9 +403,6 @@ async def lease_status(
         "`returnable_at` for the worst case.\n\n"
         "**eager** — live runs are killed on the next worker tick (~10s) and their "
         "measurements are lost.\n\n"
-        "What happens to production afterwards is the same for both modes and is "
-        "reported in `stage.hand_back`: restored by us (a further minute or two while "
-        "the service loads), left down for the admin to restore, or nothing to do. "
         "`deadline_seconds` bounds the whole thing: past it, a polite end starts "
         "killing too."
     ),

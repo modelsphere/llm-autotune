@@ -6,7 +6,7 @@
 #   demo     a try-out with no GPUs: the mock engine and a demo campaign
 set -euo pipefail
 
-LLMBENCH_VERSION=0.1.2
+LLMBENCH_VERSION=0.2.0
 KIND_CLUSTER=${KIND_CLUSTER:-llm-autotune}
 AUTOTUNE_PORT=${AUTOTUNE_PORT:-8080}
 LLMBENCH_PORT=${LLMBENCH_PORT:-8081}
@@ -23,7 +23,7 @@ say() { printf '\n==> %s\n' "$*"; }
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
 need() { command -v "$1" >/dev/null 2>&1 || die "$1 is required ($2)"; }
 
-action=up ui=1 yes=0 kind=0 context="" registry="" policy_dir="" policy_name="" gpus=0 needs_model=0
+action=up ui=1 forward=0 yes=0 kind=0 context="" registry="" policy_dir="" policy_name="" gpus=0 needs_model=0
 policy_env=""
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -45,6 +45,7 @@ while [ $# -gt 0 ]; do
       [ "$MODE" = demo ] || die "--kind is for deploy/demo.sh: a kind cluster has no GPUs"
       kind=1 ;;
     --no-ui) ui=0 ;;
+    --port-forward) forward=1 ;;
     --yes|-y) yes=1 ;;
     -h|--help) sed -n '2,/^$/p' "$0" | sed '$d'; exit 0 ;;
     *) die "unknown argument: $1 (see --help)" ;;
@@ -74,6 +75,17 @@ else
 fi
 k() { kubectl --context "$CTX" "$@"; }
 h() { helm --kube-context "$CTX" "$@"; }
+
+# A context is only a name: kubeadm calls every cluster's admin context
+# "kubernetes-admin@kubernetes", so the same name can lead to another cluster
+# after KUBECONFIG changes. The install remembers its API server as well, and
+# refuses to act on a different one.
+server_of_ctx() { k config view --minify -o jsonpath='{.clusters[0].cluster.server}' 2>/dev/null || true; }
+if [ "$kind" != 1 ] && [ -f "$STATE/server" ]; then
+  current_server=$(server_of_ctx)
+  [ "$current_server" = "$(cat "$STATE/server")" ] ||
+    die "context $CTX now points at ${current_server:-nothing}, but this install lives on $(cat "$STATE/server"). Point KUBECONFIG at that cluster's kubeconfig$([ "$action" = up ] && echo ", or run $SCRIPT down there first to install elsewhere")."
+fi
 
 # The registry, once given, is remembered for later commands (policy).
 if [ -n "$registry" ]; then
@@ -191,7 +203,7 @@ if [ "$action" = down ]; then
   # The namespaces take the databases' volumes with them: a new install then
   # starts clean, with new secrets. Your *.custom.yaml files are kept.
   k delete namespace "$TUNE_NS" "$BENCH_NS" --ignore-not-found --wait
-  rm -f "$STATE/secrets.env" "$STATE/context" "$STATE"/*.values.yaml
+  rm -f "$STATE/secrets.env" "$STATE/context" "$STATE/server" "$STATE/ui.env" "$STATE"/*.values.yaml
   if [ "$kind" = 1 ] && kind get clusters 2>/dev/null | grep -qx "$KIND_CLUSTER"; then
     kind delete cluster --name "$KIND_CLUSTER"
   fi
@@ -204,16 +216,76 @@ fi
 
 # -- ui ------------------------------------------------------------------------
 
+# How a person reaches the two UIs. An ingress of your own (publicUiUrl in the
+# custom values) is used as it is. A cluster on this machine (kind, Docker
+# Desktop, ...) is reached by port-forward, as is any cluster with
+# --port-forward. Any other cluster opens both UIs on a NodePort: every node
+# answers on it, so the UIs are reachable without a tunnel from wherever the
+# nodes are. The address and ports are kept in ui.env, so later runs reuse them.
+ui_access() {
+  if [ "$forward" = 1 ]; then echo port-forward
+  elif grep -qs '^publicUiUrl:' "$STATE/llm-autotune.custom.yaml"; then echo ingress
+  else
+    case "$CTX" in
+      kind-*|k3d-*|minikube|docker-desktop|rancher-desktop|orbstack|colima*) echo port-forward ;;
+      *) echo nodeport ;;
+    esac
+  fi
+}
+ACCESS=$(ui_access)
+node_host_env=${NODE_HOST:-}
+NODE_HOST="" AUTOTUNE_NODEPORT="" LLMBENCH_NODEPORT=""
+# shellcheck disable=SC1091
+[ ! -f "$STATE/ui.env" ] || . "$STATE/ui.env"
+[ -z "$node_host_env" ] || NODE_HOST=$node_host_env
+
+# The address of the first Ready node; NODE_HOST names another.
+pick_node_host() {
+  k get nodes -o jsonpath='{range .items[*]}{range .status.conditions[?(@.type=="Ready")]}{.status}{end} {range .status.addresses[?(@.type=="InternalIP")]}{.address}{end}{"\n"}{end}' |
+    awk '$1 == "True" && $2 != "" {print $2; exit}'
+}
+
+# AUTOTUNE_URL and LLMBENCH_URL: where a browser opens each UI. Empty while a
+# NodePort is not assigned yet. PUBLIC_API_URL: where a policy container on a
+# GPU cluster calls the platform back, the UI's own address (its nginx serves
+# /api); empty when that is only localhost, which no GPU cluster can reach.
+ui_urls() {
+  AUTOTUNE_URL="" LLMBENCH_URL="" PUBLIC_API_URL=""
+  case "$ACCESS" in
+    port-forward)
+      AUTOTUNE_URL="http://localhost:$AUTOTUNE_PORT" LLMBENCH_URL="http://localhost:$LLMBENCH_PORT" ;;
+    nodeport)
+      if [ -n "$NODE_HOST" ] && [ -n "$AUTOTUNE_NODEPORT" ]; then AUTOTUNE_URL="http://$NODE_HOST:$AUTOTUNE_NODEPORT"; fi
+      if [ -n "$NODE_HOST" ] && [ -n "$LLMBENCH_NODEPORT" ]; then LLMBENCH_URL="http://$NODE_HOST:$LLMBENCH_NODEPORT"; fi
+      PUBLIC_API_URL=$AUTOTUNE_URL ;;
+    ingress)
+      AUTOTUNE_URL=$(sed -n 's/^publicUiUrl: *"\{0,1\}\([^"]*\)"\{0,1\} *$/\1/p' "$STATE/llm-autotune.custom.yaml")
+      PUBLIC_API_URL=$AUTOTUNE_URL
+      LLMBENCH_URL=$(sed -n 's/^ *webUrl: *"\{0,1\}\([^"]*\)"\{0,1\} *$/\1/p' "$STATE/llm-autotune.custom.yaml" | head -1) ;;
+  esac
+}
+
 open_ui() {
   # shellcheck disable=SC1091
   . "$STATE/secrets.env"
+  ui_urls
   cat <<EOF
 
-  LLM AutoTune   http://localhost:$AUTOTUNE_PORT   admin / $AUTOTUNE_ADMIN_PASSWORD
-  LLMBench       http://localhost:$LLMBENCH_PORT   $LLMBENCH_ADMIN_EMAIL / $LLMBENCH_ADMIN_PASSWORD
-
-Port-forwarding both UIs; Ctrl-C stops it ($SCRIPT ui starts it again).
+  LLM AutoTune   ${AUTOTUNE_URL:-(see your ingress)}   admin / $AUTOTUNE_ADMIN_PASSWORD
+  LLMBench       ${LLMBENCH_URL:-(see your ingress)}   $LLMBENCH_ADMIN_EMAIL / $LLMBENCH_ADMIN_PASSWORD
 EOF
+  case "$ACCESS" in
+    nodeport)
+      cat <<EOF
+
+Both UIs are open on these ports on every node; $NODE_HOST is one of them
+(NODE_HOST=<address> $SCRIPT names another). --port-forward reaches them through
+kubectl instead.
+EOF
+      return ;;
+    ingress) return ;;
+  esac
+  printf '\nPort-forwarding both UIs; Ctrl-C stops it (%s ui starts it again).\n' "$SCRIPT"
   k -n "$TUNE_NS" port-forward svc/llm-autotune-frontend "$AUTOTUNE_PORT:80" >/dev/null &
   k -n "$BENCH_NS" port-forward svc/llm-bench-frontend "$LLMBENCH_PORT:80" >/dev/null &
   trap 'kill $(jobs -p) 2>/dev/null' EXIT INT TERM
@@ -229,6 +301,10 @@ fi
 
 if [ "$action" = policy ]; then
   need docker "to build the policy image"
+  # Policy pods run on the GPU clusters, not on this one: only the demo, whose
+  # mock runs live here, can load the image into the cluster directly.
+  [ "$MODE" = demo ] || [ -n "$registry" ] ||
+    die "pass --registry REPO: a registry you can push to and your GPU clusters' nodes pull from"
   dir=$(cd "$policy_dir" 2>/dev/null && pwd) || die "no such directory: $policy_dir"
   if [ ! -f "$dir/Dockerfile" ] && [ "${dir#"$REPO/policies"}" != "$dir" ]; then
     say "Fetching the policies submodule"
@@ -286,29 +362,14 @@ fi
 
 confirm_context "Install"
 
-# A deployment you keep runs engines on GPUs: say so now if there are none.
-gpu_nodes=0
-gpu_runtime=""
-if [ "$MODE" = install ]; then
-  gpu_nodes=$(k get nodes -o jsonpath='{range .items[*]}{.status.allocatable.nvidia\.com/gpu}{"\n"}{end}' |
-    awk '$1 > 0 {n++} END {print n + 0}')
-  if k get runtimeclass nvidia >/dev/null 2>&1; then gpu_runtime=nvidia; fi
-  if [ "$gpu_nodes" = 0 ]; then
-    printf '\nNo node in %s offers nvidia.com/gpu, so runs here would wait for cards.\n' "$CTX"
-    printf 'GPUs can also come from another cluster or from ssh machines (docs/after-installing.md);\n'
-    printf 'to try the platform without GPUs, use deploy/demo.sh instead.\n'
-    if [ "$yes" != 1 ]; then
-      [ -t 0 ] || die "no GPU nodes in $CTX; pass --yes to install anyway"
-      printf 'Install anyway? [y/N] '
-      read -r reply
-      case "$reply" in y|Y|yes) ;; *) die "aborted" ;; esac
-    fi
-  fi
-fi
+# The platform itself needs no GPUs: GPU clusters are added afterwards, from
+# the Resources page, with a kubeconfig deploy/gpu-cluster.sh writes for each.
+# Only the demo runs its mock engine on this same cluster (values-demo.yaml).
 
 mkdir -p "$STATE"
 chmod 700 "$STATE"
 echo "$CTX" > "$STATE/context"
+[ "$kind" = 1 ] || server_of_ctx > "$STATE/server"
 
 # Secrets, once. URL-safe alphabet only, so they need no quoting anywhere.
 token() { openssl rand -base64 "$1" | tr '+/' '-_' | tr -d '=\n'; }
@@ -394,7 +455,11 @@ else
     # warns, and a checkout of one prints git's detached-HEAD advice.
     rm -rf "$src.partial"
     git init -q "$src.partial"
-    git -C "$src.partial" fetch -q --depth 1 https://github.com/modelsphere/llm-bench tag "v$LLMBENCH_VERSION"
+    # Some proxies break git's HTTP/2 mid-response ("Error in the HTTP2
+    # framing layer"); HTTP/1.1 gets through them.
+    git -C "$src.partial" fetch -q --depth 1 https://github.com/modelsphere/llm-bench tag "v$LLMBENCH_VERSION" ||
+      git -C "$src.partial" -c http.version=HTTP/1.1 fetch -q --depth 1 https://github.com/modelsphere/llm-bench tag "v$LLMBENCH_VERSION" ||
+      die "could not fetch the LLMBench $LLMBENCH_VERSION chart from GitHub; with a clone of llm-bench at hand, set LLMBENCH_CHART=<clone>/deploy/helm/llm-bench"
     git -C "$src.partial" -c advice.detachedHead=false checkout -q "v$LLMBENCH_VERSION"
     mv "$src.partial" "$src"
   fi
@@ -408,10 +473,13 @@ if [ "$MODE" = demo ]; then
   mock_image=$(deliver_image "llm-autotune-mock-engine:$app_version" "$REPO/mock-engine")
 fi
 
-# Values files hold the secrets, so they stay out of the process list.
-umask 077
-{
-  cat <<EOF
+# Values files hold the secrets, so they stay out of the process list. Written
+# again once the UIs' NodePorts are known, so each UI's links point at the other.
+write_values() {
+  ui_urls
+  umask 077
+  {
+    cat <<EOF
 secrets:
   secretKey: "$LLMBENCH_SECRET_KEY"
   platformSecretKey: "$LLMBENCH_PLATFORM_SECRET_KEY"
@@ -423,40 +491,128 @@ secrets:
 postgres:
   password: "$LLMBENCH_POSTGRES_PASSWORD"
 EOF
-  if [ -n "${HF_ENDPOINT:-}" ]; then
-    printf 'app:\n  extraEnv:\n    - name: HF_ENDPOINT\n      value: "%s"\n' "$HF_ENDPOINT"
-  fi
-} > "$STATE/llm-bench.values.yaml"
-{
-  cat <<EOF
+    if [ -n "${HF_ENDPOINT:-}" ]; then
+      printf 'app:\n  extraEnv:\n    - name: HF_ENDPOINT\n      value: "%s"\n' "$HF_ENDPOINT"
+    fi
+    if [ "$ACCESS" = nodeport ]; then
+      printf 'service:\n  frontend:\n    type: NodePort\n'
+      [ -z "$LLMBENCH_NODEPORT" ] || printf '    nodePort: %s\n' "$LLMBENCH_NODEPORT"
+    fi
+  } > "$STATE/llm-bench.values.yaml"
+  {
+    cat <<EOF
 jwtSecret: "$AUTOTUNE_JWT_SECRET"
 adminPassword: "$AUTOTUNE_ADMIN_PASSWORD"
-publicUiUrl: "http://localhost:$AUTOTUNE_PORT"
+publicUiUrl: "$AUTOTUNE_URL"
+publicApiUrl: "$PUBLIC_API_URL"
 postgresql:
   password: "$AUTOTUNE_POSTGRES_PASSWORD"
 llmbench:
   url: http://llm-bench-backend.$BENCH_NS:8000
-  webUrl: "http://localhost:$LLMBENCH_PORT"
+  webUrl: "$LLMBENCH_URL"
   apiKey: "$SERVICE_API_KEY"
 EOF
-  if [ "$MODE" = demo ]; then
-    printf 'mockModel:\n  image: "%s"\n' "$mock_image"
-  else
-    # Runs land on this cluster's GPU nodes. Engine logs need a ReadWriteMany
-    # volume, which a cluster may not have: off until the custom values say.
-    printf 'gpuCluster:\n  inCluster: true\n  runtimeClass: "%s"\nrunLogs:\n  enabled: false\n' "$gpu_runtime"
-  fi
-} > "$STATE/llm-autotune.values.yaml"
+    if [ "$MODE" = demo ]; then
+      printf 'mockModel:\n  image: "%s"\n' "$mock_image"
+    else
+      # Engine logs need a ReadWriteMany volume, which a cluster may not have:
+      # off until the custom values say.
+      printf 'runLogs:\n  enabled: false\n'
+    fi
+    if [ "$ACCESS" = nodeport ]; then
+      printf 'frontend:\n  service:\n    type: NodePort\n'
+      [ -z "$AUTOTUNE_NODEPORT" ] || printf '    nodePort: %s\n' "$AUTOTUNE_NODEPORT"
+    fi
+  } > "$STATE/llm-autotune.values.yaml"
+}
+write_values
 
 # First pulls of the images can take a while on a slow connection; nothing
 # here fails before this budget runs out.
 WAIT=20m
 
+# A run stopped mid-install (Ctrl-C, a lost shell) leaves its release failed or
+# pending, and helm then refuses or half-redoes the next install. A release
+# that never finished a first install holds nothing worth keeping: remove it
+# and start that one over. One stopped mid-upgrade goes back to its last
+# working revision first.
+recover_release() {  # <release> <namespace>
+  local status
+  status=$(h status "$1" -n "$2" 2>/dev/null | sed -n 's/^STATUS: //p') || true
+  case "$status" in
+    failed|pending-install|pending-upgrade|pending-rollback) ;;
+    *) return 0 ;;
+  esac
+  if ! h history "$1" -n "$2" -o json 2>/dev/null | grep -qE '"status":"(deployed|superseded)"'; then
+    say "An earlier install of $1 did not finish ($status); removing it to start over"
+    h uninstall "$1" -n "$2" --wait >/dev/null
+    # Its migrate job is a hook, which helm does not remove with the release.
+    k -n "$2" delete jobs --all --ignore-not-found >/dev/null 2>&1 || true
+  elif [ "$status" != failed ]; then
+    say "An earlier upgrade of $1 did not finish ($status); rolling back to its last working revision"
+    h rollback "$1" -n "$2" --wait >/dev/null
+  fi
+}
+
+# Pods in <namespace> that are stuck rather than starting, one line each: an
+# image that will not pull, a container that keeps crashing (with the end of
+# its log), a pod nothing can schedule.
+stuck_pods() {  # <namespace>
+  local name reasons message
+  k -n "$1" get pods -o jsonpath='{range .items[*]}{.metadata.name}{"|"}{range .status.initContainerStatuses[*]}{.state.waiting.reason}{" "}{end}{range .status.containerStatuses[*]}{.state.waiting.reason}{" "}{end}{"|"}{range .status.conditions[?(@.type=="PodScheduled")]}{.status}{":"}{.message}{end}{"\n"}{end}' 2>/dev/null |
+    # "|", not a tab: read collapses empty tab-separated fields, and a pod
+    # with nothing waiting has an empty middle one.
+    while IFS='|' read -r name reasons message; do
+      case "$reasons" in
+        *ImagePullBackOff*|*ErrImagePull*|*InvalidImageName*|*CreateContainerConfigError*)
+          printf '   %s: %s %s\n' "$name" "$(echo "$reasons" | xargs)" \
+            "$(k -n "$1" get pod "$name" -o jsonpath='{.spec.initContainers[*].image} {.spec.containers[*].image}' 2>/dev/null)" ;;
+        *CrashLoopBackOff*|*RunContainerError*)
+          printf '   %s: %s\n' "$name" "$(echo "$reasons" | xargs)"
+          k -n "$1" logs "$name" --all-containers --tail=3 2>/dev/null | sed 's/^/       | /' || true ;;
+        *)
+          case "$message" in
+            False:?*) printf '   %s: not scheduled: %s\n' "$name" "${message#False:}" ;;
+          esac ;;
+      esac
+    done
+}
+
+# Run a command that waits on <namespace>, saying what is stuck while it does:
+# helm and kubectl wait silently, so a crash-looping pod looked like a hang.
+watching() {  # <namespace> <command...>
+  local ns=$1 pid seen="" now log
+  shift
+  log=$(mktemp)
+  "$@" >"$log" 2>&1 &
+  pid=$!
+  while kill -0 "$pid" 2>/dev/null; do
+    sleep 10
+    kill -0 "$pid" 2>/dev/null || break
+    now=$(stuck_pods "$ns")
+    if [ -n "$now" ] && [ "$now" != "$seen" ]; then
+      printf '   still waiting; stuck in %s:\n%s\n' "$ns" "$now"
+    fi
+    seen=$now
+  done
+  if ! wait "$pid"; then
+    cat "$log" >&2
+    rm -f "$log"
+    now=$(stuck_pods "$ns")
+    [ -z "$now" ] || printf 'stuck in %s:\n%s\n' "$ns" "$now" >&2
+    die "waiting on $ns failed (above); kubectl --context $CTX -n $ns get pods"
+  fi
+  # On success the output is helm's release notes and kubectl's progress
+  # lines: the script says where the UIs are itself, at the end.
+  rm -f "$log"
+}
+
 say "Installing LLMBench into namespace $BENCH_NS"
-h upgrade --install llm-bench "$bench_chart" -n "$BENCH_NS" --create-namespace --timeout "$WAIT" \
-  -f "$STATE/llm-bench.values.yaml" -f "$STATE/llm-bench.custom.yaml" >/dev/null
+recover_release llm-bench "$BENCH_NS"
+watching "$BENCH_NS" h upgrade --install llm-bench "$bench_chart" -n "$BENCH_NS" --create-namespace \
+  --timeout "$WAIT" -f "$STATE/llm-bench.values.yaml" -f "$STATE/llm-bench.custom.yaml"
 for d in postgres redis backend worker frontend; do
-  k -n "$BENCH_NS" rollout status "deploy/llm-bench-$d" --timeout="$WAIT"
+  watching "$BENCH_NS" k -n "$BENCH_NS" rollout status "deploy/llm-bench-$d" --timeout="$WAIT"
 done
 
 say "Waiting for LLMBench to accept AutoTune's service key"
@@ -475,13 +631,39 @@ done
 say "Installing LLM AutoTune into namespace $TUNE_NS"
 demo_values=()
 if [ "$MODE" = demo ]; then demo_values=(-f "$CHART/values-demo.yaml"); fi
-h upgrade --install llm-autotune "$CHART" -n "$TUNE_NS" --create-namespace --timeout "$WAIT" \
-  ${demo_values[@]+"${demo_values[@]}"} -f "$STATE/llm-autotune.values.yaml" \
-  -f "$STATE/llm-autotune.custom.yaml" >/dev/null
-k -n "$TUNE_NS" rollout status statefulset/llm-autotune-postgresql --timeout="$WAIT"
-for d in api worker frontend; do k -n "$TUNE_NS" rollout status "deploy/llm-autotune-$d" --timeout="$WAIT"; done
+install_autotune() {
+  watching "$TUNE_NS" h upgrade --install llm-autotune "$CHART" -n "$TUNE_NS" --create-namespace \
+    --timeout "$WAIT" ${demo_values[@]+"${demo_values[@]}"} -f "$STATE/llm-autotune.values.yaml" \
+    -f "$STATE/llm-autotune.custom.yaml"
+  watching "$TUNE_NS" k -n "$TUNE_NS" rollout status statefulset/llm-autotune-postgresql --timeout="$WAIT"
+  for d in api worker frontend; do
+    watching "$TUNE_NS" k -n "$TUNE_NS" rollout status "deploy/llm-autotune-$d" --timeout="$WAIT"
+  done
+}
+recover_release llm-autotune "$TUNE_NS"
+install_autotune
+
+# With NodePorts, the ports are only known now. Keep them (so later runs ask
+# for the same ones) and point each UI's links at the other's address.
+if [ "$ACCESS" = nodeport ]; then
+  [ -n "$NODE_HOST" ] || NODE_HOST=$(pick_node_host)
+  [ -n "$NODE_HOST" ] || die "no Ready node with an InternalIP to reach the UIs on; set NODE_HOST=<address>"
+  old_urls="$AUTOTUNE_NODEPORT $LLMBENCH_NODEPORT"
+  AUTOTUNE_NODEPORT=$(k -n "$TUNE_NS" get svc llm-autotune-frontend -o jsonpath='{.spec.ports[0].nodePort}')
+  LLMBENCH_NODEPORT=$(k -n "$BENCH_NS" get svc llm-bench-frontend -o jsonpath='{.spec.ports[0].nodePort}')
+  printf 'NODE_HOST=%s\nAUTOTUNE_NODEPORT=%s\nLLMBENCH_NODEPORT=%s\n' \
+    "$NODE_HOST" "$AUTOTUNE_NODEPORT" "$LLMBENCH_NODEPORT" > "$STATE/ui.env"
+  if [ "$old_urls" != "$AUTOTUNE_NODEPORT $LLMBENCH_NODEPORT" ] ||
+      ! grep -q "publicUiUrl: \"http://$NODE_HOST:$AUTOTUNE_NODEPORT\"" "$STATE/llm-autotune.values.yaml"; then
+    # The ports exist only once the services do: a second, short upgrade
+    # gives each UI the other's address for its links.
+    say "Pointing each UI's links at the other (http://$NODE_HOST, ports $AUTOTUNE_NODEPORT and $LLMBENCH_NODEPORT)"
+    write_values
+    install_autotune
+  fi
+fi
 if k -n "$TUNE_NS" get ds/llm-autotune-mock-model >/dev/null 2>&1; then
-  k -n "$TUNE_NS" rollout status ds/llm-autotune-mock-model --timeout="$WAIT"
+  watching "$TUNE_NS" k -n "$TUNE_NS" rollout status ds/llm-autotune-mock-model --timeout="$WAIT"
 fi
 
 if [ "$MODE" = demo ]; then say "Wiring the two and starting the demo campaign"; else say "Wiring the two"; fi
@@ -564,7 +746,6 @@ if campaign is None:
         "objective": {k: obj[k] for k in ("name", "target_metric", "direction", "redlines")},
         "verify_benchmark_slug": "", "verify_top_k": 0, "verify_max_run_minutes": 180,
         "verify_objective": {}, "dataset_profile": "", "dataset_policy": "rebuild_at_start",
-        "deploy_branch": "", "auto_promote": False,
     }, token)
     if status != 200:
         sys.exit(f"could not create the demo campaign: {status} {campaign}")
@@ -587,18 +768,24 @@ ranks the faster configuration first. Each run is also a submission on LLMBench.
 EOF
 else
   cat <<EOF
-GPU nodes found: $gpu_nodes. In LLM AutoTune, on Resources, use Refresh capacity on
-local-cluster and then Lease to platform; then add a search space and a campaign.
+Next, give the platform GPUs. For each GPU cluster, with that cluster's admin
+kubeconfig:
+
+  deploy/gpu-cluster.sh            # writes llm-autotune-runs.kubeconfig
+
+then in LLM AutoTune open Resources > Add GPU cluster, upload the file, and
+pick the GPU nodes to register. Lease them to the platform, then add a search
+space and a campaign. Bare-metal boxes over ssh: Resources > Add machine.
 EOF
 fi
 cat <<EOF
 
-Search policies: $SCRIPT policy policies/random-search
+Search policies: $SCRIPT policy policies/random-search$([ "$MODE" = demo ] || echo " --registry <registry your GPU nodes pull from>")
 Your own values go in ${STATE#"$REPO/"}/llm-autotune.custom.yaml and
 ${STATE#"$REPO/"}/llm-bench.custom.yaml; run $SCRIPT again to apply them.
 More in docs/after-installing.md.
 EOF
-if [ "$ui" = 1 ] && [ -t 1 ]; then
+if [ "$ACCESS" != port-forward ] || { [ "$ui" = 1 ] && [ -t 1 ]; }; then
   open_ui
 else
   # shellcheck disable=SC1091

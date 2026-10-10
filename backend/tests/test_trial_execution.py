@@ -35,7 +35,6 @@ from app.control.search import CandidateConfig
 from app.db.base import Base
 from app.db.models import (
     TERMINAL_RUN_STATES,
-    BaselineStatus,
     Campaign,
     CampaignStatus,
     Candidate,
@@ -71,8 +70,7 @@ def _platform(metrics=None, environment=None):
         session.add(User(id=1, username="u", password_hash="x"))
         session.add(
             Machine(id=1, name="node-24", host="10.0.0.1", gpu_count=8, gpu_type="A100",
-                    state=MachineState.AVAILABLE.value,
-                    baseline_status=BaselineStatus.CLEARED.value)
+                    state=MachineState.AVAILABLE.value)
         )
         session.add(
             Campaign(id=1, owner_id=1, name="manual", engine="sglang", image="img",
@@ -192,3 +190,19 @@ def test_an_infeasible_result_still_completes_and_is_recorded():
     assert result.objective_value == 69288.3, "still scored, so it can be compared"
     assert "functional_acceptance.pass_rate" in result.breaches[0]
     assert result.constraints[0] > 0, "crossed reads positive"
+
+
+def test_a_finished_run_teaches_the_campaign_its_run_length():
+    """The platform times the engine coming up and the benchmark coming back,
+    and keeps both on the campaign, so the window math needs no guesses."""
+    from app.control.orchestrator import timing
+
+    supervisor, factory, _ = _platform()
+    _execute(supervisor, factory, CONFIG)
+
+    with factory() as session:
+        campaign = session.get(Campaign, 1)
+        assert len(campaign.run_timing["startup"]) == 1
+        assert len(campaign.run_timing["bench_screen"]) == 1
+        # Ticks a moment apart: whole minutes of headroom on near-zero samples.
+        assert timing.run_minutes(campaign) is not None

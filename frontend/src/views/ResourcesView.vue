@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { api, type Cluster, type Machine, type MachineGroup, type MachineGroupPreflight, type MachineLifecycle } from '../api/client'
 import InfoHint from '../components/InfoHint.vue'
 import LinkButton from '../components/LinkButton.vue'
@@ -10,6 +10,8 @@ import { relativeTime } from '../utils/time'
 /** Reaching `window` from a template needs it bound explicitly under
  *  `<script setup>`; the component instance is not the global object. */
 const openDocs = () => window.open('/api/docs', '_blank')
+/** Where giving the platform access to a machine is written down. */
+const setupDocs = 'https://github.com/modelsphere/llm-autotune/blob/main/docs/after-installing.md#gpus'
 
 const machines = ref<Machine[]>([])
 const groups = ref<MachineGroup[]>([])
@@ -17,12 +19,9 @@ const groups = ref<MachineGroup[]>([])
  *  a machine means the platform-default cluster, which has no row here. */
 const clusters = ref<Cluster[]>([])
 const steps = ref<string[]>([])
-const autoLifecycle = ref(true)
-/** Whether WE put production back when a lease ends. Off by default, and the
- *  one setting an operator must not discover after pressing End lease. */
-const autoRestore = ref(true)
 const lifecycle = ref<Record<number, MachineLifecycle>>({})
 const showAdd = ref(false)
+const addAdvanced = ref<string[]>([])
 const busy = ref(false)
 const poll = usePoll(() => load(), 10000)
 
@@ -77,7 +76,7 @@ const emptyClusterForm = () => ({
   name: '',
   api_mode: 'client',
   kubeconfig: '',
-  namespace: 'autotune',
+  namespace: '',
   workload_kind: 'deployment',
   node_host: '',
   gpu_resource: 'nvidia.com/gpu',
@@ -94,6 +93,125 @@ const emptyClusterForm = () => ({
 })
 const clusterForm = ref(emptyClusterForm())
 const probingCluster = ref<number | null>(null)
+
+/** -- adding a GPU cluster ---------------------------------------------------
+ *
+ * Upload the kubeconfig deploy/gpu-cluster.sh wrote (it names its namespace),
+ * then pick which of the cluster's GPU nodes to register: each becomes a
+ * machine pinned to that node. The node step also re-opens from a cluster's
+ * Nodes button, to register nodes added since or see ones that left.
+ */
+interface GpuNode {
+  node: string
+  hostname: string
+  gpu_count: number
+  gpu_type: string
+  gpu_product: string
+  ready: boolean
+  schedulable: boolean
+  machine: { id: number; name: string } | null
+}
+interface NodesView {
+  cluster: string
+  namespace: string
+  nodes: GpuNode[]
+  gone: { id: number; name: string; hostname: string }[]
+}
+const showAddCluster = ref(false)
+const addStep = ref<'connect' | 'nodes'>('connect')
+const clusterAdvanced = ref<string[]>([])
+const newCluster = ref({
+  name: '', kubeconfig: '', namespace: '', workload_kind: 'deployment',
+  runtime_class: 'nvidia', gpu_resource: 'nvidia.com/gpu', tolerations: '',
+  image_pull_secrets: '',
+})
+const nodesCluster = ref<{ id: number; name: string } | null>(null)
+const nodesView = ref<NodesView | null>(null)
+const nodesError = ref('')
+const pickedNodes = ref<string[]>([])
+const kubeconfigFile = ref<HTMLInputElement | null>(null)
+
+/** A name for the cluster from its API server's host, until one is typed. */
+function nameFromKubeconfig(text: string): string {
+  const host = /server:\s*https?:\/\/([^:/\s]+)/.exec(text)?.[1] ?? ''
+  return host.split('.')[0].toLowerCase().replace(/[^a-z0-9-]/g, '-').slice(0, 64)
+}
+watch(() => newCluster.value.kubeconfig, (text, before) => {
+  const derived = nameFromKubeconfig(text)
+  if (!newCluster.value.name || newCluster.value.name === nameFromKubeconfig(before ?? '')) {
+    newCluster.value.name = derived
+  }
+})
+
+function openAddCluster() {
+  newCluster.value = {
+    name: '', kubeconfig: '', namespace: '', workload_kind: 'deployment',
+    runtime_class: 'nvidia', gpu_resource: 'nvidia.com/gpu', tolerations: '',
+    image_pull_secrets: '',
+  }
+  clusterAdvanced.value = []
+  addStep.value = 'connect'
+  nodesView.value = null
+  nodesError.value = ''
+  showAddCluster.value = true
+}
+
+async function readKubeconfigFile(event: Event) {
+  const file = (event.target as HTMLInputElement).files?.[0]
+  if (file) newCluster.value.kubeconfig = await file.text()
+  ;(event.target as HTMLInputElement).value = ''
+}
+
+async function loadNodes(cluster: { id: number; name: string }) {
+  nodesCluster.value = cluster
+  nodesView.value = null
+  nodesError.value = ''
+  try {
+    nodesView.value = (await api.get(`/clusters/${cluster.id}/nodes`)).data
+    pickedNodes.value = nodesView.value!.nodes
+      .filter((n) => !n.machine && n.ready && n.schedulable).map((n) => n.hostname)
+  } catch (error: any) {
+    nodesError.value = error.response?.data?.detail ?? 'Could not read the cluster\'s nodes'
+  }
+}
+
+async function connectCluster() {
+  busy.value = true
+  try {
+    const { data } = await api.post('/clusters', newCluster.value)
+    await load()
+    addStep.value = 'nodes'
+    await loadNodes(data)
+  } catch (error: any) {
+    ElMessage.error(error.response?.data?.detail ?? 'Could not add the cluster')
+  } finally {
+    busy.value = false
+  }
+}
+
+function openNodes(c: Cluster) {
+  showClusters.value = false
+  addStep.value = 'nodes'
+  showAddCluster.value = true
+  loadNodes(c)
+}
+
+async function registerNodes() {
+  if (!nodesCluster.value) return
+  busy.value = true
+  try {
+    const { data } = await api.post(`/clusters/${nodesCluster.value.id}/nodes`,
+      { nodes: pickedNodes.value })
+    ElMessage.success(data.registered.length
+      ? `Registered ${data.registered.join(', ')}` : 'Nothing new to register')
+    showAddCluster.value = false
+    await load()
+  } catch (error: any) {
+    ElMessage.error(error.response?.data?.detail ?? 'Could not register the nodes')
+  } finally {
+    busy.value = false
+  }
+}
 
 /** Group preflight: the per-machine probes plus the interconnect a gang adds —
  *  boxes can each be perfect and still be unable to reach each other, which no
@@ -152,8 +270,6 @@ async function load() {
   }
   const { data } = await api.get('/machines/lifecycle')
   steps.value = data.steps
-  autoLifecycle.value = data.auto
-  autoRestore.value = data.auto_restore
   lifecycle.value = Object.fromEntries(
     (data.machines as MachineLifecycle[]).map((m) => [m.machine_id, m]),
   )
@@ -427,23 +543,15 @@ async function endLease(machine: Machine, mode: 'polite' | 'eager') {
             stage?.returnable_at ? ` — expect to wait until ${exactClock(stage.returnable_at)}` : ''
           }.`
         : ''
-  // What happens to production is NOT a property of the mode — it depends on
-  // what was captured and on whether this deployment restores on hand-back. The
-  // dialog used to promise a restore unconditionally, which was false for a
-  // machine captured empty and false again wherever auto-restore is off. Ask
-  // the backend, which reads it off the branch the drain will take.
-  const back = stage?.hand_back
   try {
     await ElMessageBox.confirm(
-      `Hand ${machine.name} back to production?${warning}\n\n` +
-        (back?.summary ?? 'Check the machine before handing it back.'),
+      `Hand ${machine.name} back?${warning}\n\nOnly the platform's own runs stop; ` +
+        'nothing else on the machine is touched.',
       mode === 'eager' ? 'End lease now' : 'End lease',
       {
         confirmButtonText: mode === 'eager' ? 'Stop everything' : 'End it',
         cancelButtonText: 'Cancel',
-        // Leaving production down is the outcome worth a red dialog even on a
-        // polite end — it is the one the operator cannot undo by waiting.
-        type: mode === 'eager' || back?.owed ? 'error' : 'warning',
+        type: mode === 'eager' ? 'error' : 'warning',
       },
     )
   } catch {
@@ -451,10 +559,7 @@ async function endLease(machine: Machine, mode: 'polite' | 'eager') {
   }
   try {
     await api.post(`/machines/${machine.name}/lease/end`, { mode, reason: 'ended from the UI' })
-    const runs = mode === 'eager' ? 'Stopping runs' : 'No new runs will start'
-    if (back?.owed) ElMessage.warning(`${runs}; production stays down — restore it yourself`)
-    else if (back?.restores) ElMessage.success(`${runs}; production comes back after that`)
-    else ElMessage.success(`${runs}; nothing of production's is affected`)
+    ElMessage.success(mode === 'eager' ? 'Stopping runs' : 'No new runs will start')
     await load()
   } catch (error: any) {
     ElMessage.error(error.response?.data?.detail ?? 'Could not end the lease')
@@ -466,19 +571,17 @@ function exactClock(iso: string | null): string {
   return new Date(iso).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
 }
 
-const busyBaseline = ref<number | null>(null)
+const busyMachine = ref<number | null>(null)
 /** The controlled GPU-type vocabulary, from the backend so a card added there
  *  (B300, …) shows up in the dropdowns without a frontend change. */
 const gpuTypes = ref<string[]>([])
 
-/** One handler for the overflow menu: an eager hand-back sits next to the
- *  baseline overrides because both are "I know what I am doing" actions. */
+/** One handler for the overflow menu. */
 function menu(machine: Machine, command: string) {
   if (command === 'end-eager') return endLease(machine, 'eager')
   if (command === 'probe') return probeCapacity(machine)
   if (command === 'edit') return openEdit(machine)
   if (command === 'remove') return removeMachine(machine)
-  return baselineAction(machine, command as 'capture' | 'clear' | 'restore')
 }
 
 /** "Can the platform reach this machine at all?" The backend walks the path a
@@ -519,13 +622,13 @@ async function runSmoke() {
   }
 }
 
-/** Re-read a k8s machine's GPU count and card type from the cluster. The
- *  capacity behind a node-slice drifts as nodes are added/drained/relabelled,
- *  so this is the "read it from the source of truth" button. Surfaces the
+/** Re-read a machine's GPU count and card type from the machine itself
+ *  (nvidia-smi, or the k8s nodes its selector matches) — capacity drifts as
+ *  nodes are added, drained and re-carded. Surfaces the
  *  probe's own warnings — a selector that matched nothing, an unknown card, a
  *  pool spanning two card types. */
 async function probeCapacity(machine: Machine) {
-  busyBaseline.value = machine.id
+  busyMachine.value = machine.id
   try {
     const { data } = await api.post(`/machines/${machine.id}/probe-capacity`)
     const p = data.probe ?? {}
@@ -538,52 +641,7 @@ async function probeCapacity(machine: Machine) {
   } catch (error: any) {
     ElMessage.error(error.response?.data?.detail ?? 'Probe failed')
   } finally {
-    busyBaseline.value = null
-  }
-}
-
-/** The manual overrides. Named as such: the sequence runs itself, and every
- *  one of these interrupts it somewhere. Clear is the dangerous one — it stops
- *  the very service the baseline canary is queued to measure, which is how
- *  three canaries failed against a machine that was fine. */
-async function baselineAction(machine: Machine, action: 'capture' | 'clear' | 'restore') {
-  const stage = stageOf(machine)
-  if (action === 'clear') {
-    const services = machine.baseline?.services ?? []
-    const warning = stage?.canary_pending
-      ? `\n\nThe baseline canary has not passed yet. Stopping production now leaves ` +
-        `this campaign with nothing to compare its results against.`
-      : ''
-    try {
-      await ElMessageBox.confirm(
-        `Stop ${services.length} production service(s) on ${machine.name}? ` +
-          `They can be restored from the captured deploy scripts.${warning}`,
-        'Clear production services',
-        {
-          confirmButtonText: 'Stop them',
-          cancelButtonText: 'Cancel',
-          type: stage?.canary_pending ? 'error' : 'warning',
-        },
-      )
-    } catch {
-      return
-    }
-  }
-  busyBaseline.value = machine.id
-  try {
-    const { data } = await api.post(`/machines/${machine.id}/baseline/${action}`)
-    const count = data.baseline?.services?.length ?? 0
-    ElMessage.success(
-      action === 'capture' ? `Captured ${count} service(s)` : `Baseline ${action}d`,
-    )
-    if (action === 'restore') {
-      ElMessage.warning('The deploy script returns in seconds; the model loads for minutes')
-    }
-    await load()
-  } catch (error: any) {
-    ElMessage.error(error.response?.data?.detail ?? `${action} failed`)
-  } finally {
-    busyBaseline.value = null
+    busyMachine.value = null
   }
 }
 
@@ -593,50 +651,10 @@ async function baselineAction(machine: Machine, action: 'capture' | 'clear' | 'r
 function leaseLook(m: Machine): { type: string; text: string } {
   if (m.lease_state === 'draining') return { type: 'warning', text: 'handing back' }
   if (m.state === 'away' || m.lease_state === 'released' || m.lease_state === 'none') {
-    return { type: 'info', text: 'with production' }
+    return { type: 'info', text: 'not leased' }
   }
   if (m.state === 'reserved') return { type: 'warning', text: 'running' }
   return { type: 'success', text: 'leased' }
-}
-
-/** What has been done to PRODUCTION on this box — a separate question from what
- *  the lease says, and one `baseline_status` cannot answer alone: `cleared`
- *  covers both "we stopped production" and "there was nothing to stop", and only
- *  the first is owed a restore. Two machines that read identically on the page
- *  while meaning opposite things is what this tag exists to end. */
-function productionLook(m: Machine): { type: string; text: string; title: string } | null {
-  if (m.state === 'away' && m.lease_state === 'none') return null
-  const n = m.baseline?.services?.length ?? 0
-  if (m.baseline_status === 'captured') {
-    return {
-      type: 'success',
-      text: `production up · ${n} captured`,
-      title: `${n} service(s) written down, still running. They can be restored from the capture.`,
-    }
-  }
-  if (m.baseline_status === 'cleared') {
-    return n
-      ? {
-          type: 'danger',
-          text: `production down · ${n} to restore`,
-          title: `We stopped ${n} production service(s) on this machine. They are owed back.`,
-        }
-      : {
-          type: 'info',
-          text: 'nothing was captured',
-          title:
-            'Capture reached the machine and found no production services — it was ' +
-            'already free when it was handed over, so nothing is owed back.',
-        }
-  }
-  if (m.baseline_status === 'restored') {
-    return { type: 'success', text: 'production restored', title: 'Production was put back.' }
-  }
-  return {
-    type: 'info',
-    text: 'not captured yet',
-    title: 'Nothing has been recorded or stopped on this machine.',
-  }
 }
 
 const readinessLook: Record<string, { type: string; text: string }> = {
@@ -667,10 +685,6 @@ function stepClass(machine: Machine, index: number): string {
   return stage.state === 'waiting' ? 'now pending' : 'now'
 }
 
-const anyBlocked = computed(() =>
-  Object.values(lifecycle.value).some((m) => m.state === 'blocked'),
-)
-
 onMounted(async () => {
   try {
     gpuTypes.value = (await api.get('/machines/gpu-types')).data.gpu_types
@@ -686,44 +700,24 @@ onMounted(async () => {
   <div class="page">
     <div class="header-row">
       <div>
-        <h1 class="page-title">Resources</h1>
-        <span class="muted">
-          Lease a machine, schedule a campaign — the platform does the rest.
+        <h1 class="page-title">Resources
           <InfoHint :width="400">
-            Per machine, automatically: <b>capture</b> what production is running,
-            <b>benchmark</b> it while it is still up, <b>clear</b> it only once that
-            control run passes, run the experiments, then <b>restore</b> production when
-            the lease ends or the campaign's window closes.
+            Leasing hands a machine to the platform, free: campaigns run on it until the
+            lease ends, and ending it stops only the platform's own runs.
             <br /><br />
             The same lease can be started and ended by an external fleet manager over the
             API — these buttons call exactly those endpoints.
           </InfoHint>
-        </span>
+        </h1>
       </div>
       <div>
         <el-button @click="openDocs">API</el-button>
         <el-button @click="openClusters">Clusters</el-button>
         <el-button @click="openAddGroup">Group machines</el-button>
-        <el-button type="primary" @click="openAdd">Add machine</el-button>
+        <el-button @click="openAdd">Add machine</el-button>
+        <el-button type="primary" @click="openAddCluster">Add GPU cluster</el-button>
       </div>
     </div>
-
-    <el-alert v-if="!autoLifecycle" type="warning" :closable="false" show-icon
-      style="margin-bottom: 12px"
-      title="Automatic hand-over is switched off"
-      description="AUTOTUNE_AUTO_BASELINE_LIFECYCLE is false, so capture, clear and
-        restore have to be driven from the Override menu below. Each machine still
-        shows the step it has actually reached — the switch stops the sequence
-        moving, it does not make the position unknown." />
-
-    <el-alert v-if="!autoRestore" type="info" :closable="false" show-icon
-      style="margin-bottom: 12px"
-      title="Ending a lease does not put production back"
-      description="AUTOTUNE_AUTO_RESTORE_PRODUCTION is false, so a machine whose
-        production we stopped is handed back with it still down and the restore is
-        yours to do (Override ▸ Restore, which keeps working after the lease closes).
-        Machines that were already free when we got them are unaffected — each card
-        says which it is." />
 
     <div v-if="groups.length" class="groups">
       <h2 class="section-title">
@@ -785,7 +779,8 @@ onMounted(async () => {
     </div>
 
     <div v-if="!machines.length" class="empty muted">
-      No machines registered yet.
+      No machines.
+      <el-button link type="primary" @click="openAddCluster">Add a GPU cluster</el-button>
     </div>
 
     <div v-for="m in machines" :key="m.id" class="card">
@@ -814,10 +809,6 @@ onMounted(async () => {
             title="What an external fleet manager is told when it asks for this machine">
             {{ readinessLook[stageOf(m)!.readiness]?.text ?? stageOf(m)!.readiness }}
           </el-tag>
-          <el-tag v-if="productionLook(m)" size="small" effect="plain"
-            :type="(productionLook(m)!.type as any)" :title="productionLook(m)!.title">
-            {{ productionLook(m)!.text }}
-          </el-tag>
           <span class="muted tiny">
             {{ m.gpus_busy }}/{{ m.gpu_count }} cards in use
             <template v-if="m.gpu_type"> · {{ m.gpu_type }}</template>
@@ -838,34 +829,16 @@ onMounted(async () => {
 
           <el-button size="small" text @click="openSmoke(m)">Smoke test</el-button>
           <el-dropdown trigger="click" @command="(a: any) => menu(m, a)">
-            <el-button size="small" text :loading="busyBaseline === m.id">More ▾</el-button>
+            <el-button size="small" text :loading="busyMachine === m.id">More ▾</el-button>
             <template #dropdown>
               <el-dropdown-menu>
-                <el-dropdown-item command="edit">
-                  Edit — change fields / node selector
-                </el-dropdown-item>
-                <el-dropdown-item command="remove" class="risky">
-                  Remove — delete this machine
-                </el-dropdown-item>
-                <el-dropdown-item v-if="m.driver === 'k8s'" command="probe" divided>
-                  Refresh capacity — re-read GPUs from the cluster
-                </el-dropdown-item>
-                <el-dropdown-item command="end-eager" :divided="m.driver !== 'k8s'"
+                <el-dropdown-item command="edit">Edit</el-dropdown-item>
+                <el-dropdown-item command="remove" class="risky">Remove</el-dropdown-item>
+                <el-dropdown-item command="probe" divided>Re-read GPUs</el-dropdown-item>
+                <el-dropdown-item command="end-eager"
                   :disabled="m.lease_state === 'none'
                   || m.lease_state === 'released'" class="risky">
-                  End lease now — stop runs immediately
-                </el-dropdown-item>
-                <el-dropdown-item command="capture" divided :disabled="m.state === 'away'">
-                  Capture — record production now
-                </el-dropdown-item>
-                <el-dropdown-item command="clear"
-                  :disabled="m.baseline_status !== 'captured'"
-                  :class="stageOf(m)?.canary_pending ? 'risky' : ''">
-                  Clear — stop production now
-                </el-dropdown-item>
-                <el-dropdown-item command="restore"
-                  :disabled="!m.baseline?.services?.length || m.state === 'reserved'">
-                  Restore — put production back
+                  End lease now (stops runs)
                 </el-dropdown-item>
               </el-dropdown-menu>
             </template>
@@ -893,14 +866,13 @@ onMounted(async () => {
       <div class="say">
         <span class="dot" :class="dotClass[stageOf(m)?.state ?? 'waiting']" />
         <b>{{ stageOf(m)?.headline ?? '…' }}</b>
-        <span class="muted">{{ stageOf(m)?.detail }}</span>
-      </div>
-
-      <div v-if="(m.lease_state === 'active' || m.lease_state === 'draining')
-        && stageOf(m)?.hand_back?.summary" class="handback"
-        :class="{ owed: stageOf(m)!.hand_back.owed }">
-        <span class="muted tiny label">On hand-back</span>
-        <span class="tiny">{{ stageOf(m)!.hand_back.summary }}</span>
+        <InfoHint v-if="stageOf(m)?.detail || stageOf(m)?.hand_back?.summary" :width="340">
+          {{ stageOf(m)?.detail }}
+          <template v-if="(m.lease_state === 'active' || m.lease_state === 'draining')
+            && stageOf(m)?.hand_back?.summary">
+            <br /><br /><b>On hand-back:</b> {{ stageOf(m)!.hand_back.summary }}
+          </template>
+        </InfoHint>
       </div>
 
       <div v-if="stageOf(m)?.campaigns?.length" class="for">
@@ -911,34 +883,34 @@ onMounted(async () => {
         </LinkButton>
       </div>
 
-      <p v-if="m.baseline_status === 'cleared' && !m.baseline?.services?.length"
-        class="muted tiny fold-note">
-        No production services were found on this machine when it was captured, so there
-        is no service list here and nothing to put back.
-      </p>
-
-      <el-collapse v-if="m.baseline?.services?.length" class="fold">
-        <el-collapse-item :title="`Production on this machine (${m.baseline.services.length})`">
-          <div v-for="s in m.baseline.services" :key="s.container" class="mono svc">
-            {{ s.container }} · :{{ s.port }} · {{ s.served_model_name }}
-          </div>
-        </el-collapse-item>
-      </el-collapse>
     </div>
-
-    <p v-if="anyBlocked" class="muted tiny foot">
-      A blocked machine never has its production torn down — that is the point.
-      A machine we could not measure is the one not to clear.
-    </p>
 
     <el-dialog v-model="showAdd" :title="editingId === null ? 'Add machine' : 'Edit machine'"
       width="480px">
       <el-form label-position="top">
         <el-form-item label="Name"><el-input v-model="form.name" /></el-form-item>
-        <el-form-item label="Driver">
+        <el-form-item>
+          <template #label>
+            Driver
+            <!-- What has to be true before this machine can be reached at all,
+                 set up outside this page. -->
+            <InfoHint :width="380">
+              <template v-if="form.driver === 'k8s'">
+                A slice of a cluster added with <b>Add GPU cluster</b>, which already
+                registers each GPU node; add one here only for a custom node selector.
+              </template>
+              <template v-else>
+                Needs ssh access: put the public half of the worker's ssh key (set at
+                install, <span class="mono">worker.ssh</span>) in the user's
+                <span class="mono">~/.ssh/authorized_keys</span> on the machine, which
+                needs Docker and the NVIDIA container toolkit.
+              </template>
+              <a :href="setupDocs" target="_blank" rel="noopener">Setup guide</a>
+            </InfoHint>
+          </template>
           <el-select v-model="form.driver" style="width: 100%">
-            <el-option label="SSH + Docker (bare-metal machine)" value="" />
-            <el-option label="Kubernetes (a slice of the GPU cluster)" value="k8s" />
+            <el-option label="SSH + Docker" value="" />
+            <el-option label="Kubernetes" value="k8s" />
           </el-select>
         </el-form-item>
         <el-form-item v-if="form.driver === 'k8s'" label="Cluster">
@@ -947,15 +919,21 @@ onMounted(async () => {
             <el-option v-for="c in clusters" :key="c.id"
               :label="`${c.name} · ${c.namespace} · ${c.workload_kind}`" :value="c.id" />
           </el-select>
-          <div class="muted tiny">
-            Which apiserver this slice's pods land in. Empty = the platform-default
-            cluster (the <span class="mono">AUTOTUNE_K8S_*</span> env). Manage them under
-            <strong>Clusters</strong>.
-          </div>
         </el-form-item>
-        <el-form-item :label="form.driver === 'k8s' ? 'Label (host is unused on k8s)' : 'Host'">
-          <el-input v-model="form.host" class="mono" />
+        <el-form-item v-if="form.driver !== 'k8s'" label="Host">
+          <el-input v-model="form.host" class="mono" placeholder="10.0.0.24" />
         </el-form-item>
+        <el-form-item v-if="form.driver === 'k8s'">
+          <template #label>
+            Node selector
+            <InfoHint>Which nodes its pods may land on, as
+              <span class="mono">label=value</span> pairs — for a model whose weights live
+              on only some nodes. Empty: any node with free GPUs.</InfoHint>
+          </template>
+          <el-input v-model="form.node_selector" class="mono" placeholder="label=value" />
+        </el-form-item>
+        <el-collapse v-model="addAdvanced" class="dialog-advanced">
+          <el-collapse-item name="advanced" title="Advanced">
         <div v-if="form.driver !== 'k8s'" class="grid-2">
           <el-form-item label="SSH user"><el-input v-model="form.ssh_user" /></el-form-item>
           <el-form-item label="SSH port">
@@ -963,7 +941,11 @@ onMounted(async () => {
           </el-form-item>
         </div>
         <div class="grid-2">
-          <el-form-item :label="form.driver === 'k8s' ? 'GPU count (pool to borrow)' : 'GPU count'">
+          <el-form-item>
+            <template #label>
+              GPU count
+              <InfoHint>Read from the machine on save; set it only if it cannot be read.</InfoHint>
+            </template>
             <el-input-number v-model="form.gpu_count" :min="1" :max="64" />
           </el-form-item>
           <el-form-item label="GPU type">
@@ -973,43 +955,29 @@ onMounted(async () => {
             </el-select>
           </el-form-item>
         </div>
-        <el-form-item v-if="form.driver === 'k8s'" label="Node selector">
-          <el-input v-model="form.node_selector" class="mono"
-            placeholder="kubernetes.io/hostname=gpu-a100-1" />
-          <div class="muted tiny">
-            Which cluster nodes this slice's pods may land on, as
-            <span class="mono">label=value</span> pairs (comma-separated). Pin one node
-            (<span class="mono">kubernetes.io/hostname=…</span>) or a whole card type
-            (<span class="mono">nvidia.com/gpu.product=NVIDIA-H100-80GB-HBM3</span>). Needed
-            when a model's weights live on only some nodes. Empty = the scheduler is free.
-          </div>
-        </el-form-item>
-        <div v-if="form.driver === 'k8s'" class="muted tiny" style="margin: -6px 0 10px">
-          GPU count and type are read from the cluster on save (and via
-          <strong>Refresh capacity</strong> later) and overwrite what is set here. Set
-          them anyway: a credential that cannot read nodes (a cluster we are a guest
-          on) leaves these values as the only record, and a machine with no GPU type
-          is passed over by anything that matches machines by card type.
-        </div>
         <template v-if="form.driver !== 'k8s'">
-          <el-form-item label="Interior address (multi-node)">
+          <el-form-item>
+            <template #label>
+              Interior address
+              <InfoHint :width="360">Where the engine reaches this machine for inter-node
+                traffic (NCCL / dist-init). Leave empty unless its rail NIC differs from the
+                management address — which ssh and LLMBench use. Only matters inside a node
+                group.</InfoHint>
+            </template>
             <el-input v-model="form.data_host" class="mono" placeholder="(same as host)" />
-            <div class="muted tiny">
-              Where the <strong>engine</strong> reaches this machine for inter-node
-              traffic (NCCL / dist-init). Leave empty unless its rail NIC differs from the
-              management address above — which is also the address LLMBench is given and
-              the one ssh uses. Only matters inside a node group.
-            </div>
           </el-form-item>
-          <el-form-item label="NCCL interface">
+          <el-form-item>
+            <template #label>
+              NCCL interface
+              <InfoHint><span class="mono">NCCL_SOCKET_IFNAME</span>, when the routable IP and
+                the InfiniBand/RoCE rail differ. Usually set on the group instead.</InfoHint>
+            </template>
             <el-input v-model="form.nccl_ifname" class="mono" placeholder="(engine default)" />
-            <div class="muted tiny">
-              <span class="mono">NCCL_SOCKET_IFNAME</span>, when the routable IP and the
-              InfiniBand/RoCE rail differ. Usually set on the group instead.
-            </div>
           </el-form-item>
         </template>
         <el-form-item label="Notes"><el-input v-model="form.notes" /></el-form-item>
+          </el-collapse-item>
+        </el-collapse>
       </el-form>
       <template #footer>
         <el-button @click="showAdd = false">Cancel</el-button>
@@ -1025,20 +993,18 @@ onMounted(async () => {
         <el-form-item label="Name">
           <el-input v-model="groupForm.name" :disabled="editingGroupId !== null"
             placeholder="e.g. nv-pair-a" />
-          <div v-if="editingGroupId !== null" class="muted tiny">
-            A name is permanent — campaigns pin the group by it.
-          </div>
         </el-form-item>
-        <el-form-item label="Members — selection order is the rank order, first is master">
-          <el-select v-model="groupForm.members" multiple style="width: 100%"
-            placeholder="Pick the machines this group may deploy across">
+        <el-form-item>
+          <template #label>
+            Members
+            <InfoHint :width="340">Selection order is the rank order; the first is the
+              master. All members must share a substrate, a GPU type and a card count. A
+              machine already in another group is greyed out.</InfoHint>
+          </template>
+          <el-select v-model="groupForm.members" multiple style="width: 100%">
             <el-option v-for="c in memberChoices" :key="c.name" :label="c.label"
               :value="c.name" :disabled="c.disabled" />
           </el-select>
-          <div class="muted tiny">
-            All members must share a substrate, a GPU type and a card count. A machine
-            already in another group is greyed out.
-          </div>
         </el-form-item>
         <div class="grid-2">
           <el-form-item label="Substrate">
@@ -1048,18 +1014,22 @@ onMounted(async () => {
               <el-option label="Kubernetes" value="k8s" />
             </el-select>
           </el-form-item>
-          <el-form-item label="Rendezvous port">
+          <el-form-item>
+            <template #label>
+              Rendezvous port
+              <InfoHint>0 picks a free port per run on the master.</InfoHint>
+            </template>
             <el-input-number v-model="groupForm.dist_port" :min="0" :max="65535" />
-            <div class="muted tiny">0 = pick a free port per run on the master.</div>
           </el-form-item>
         </div>
-        <el-form-item label="NCCL environment">
+        <el-form-item>
+          <template #label>
+            NCCL environment
+            <InfoHint>One <span class="mono">KEY=VALUE</span> per line, applied to every
+              rank's container.</InfoHint>
+          </template>
           <el-input v-model="groupForm.ncclEnvText" type="textarea" :rows="3" class="mono"
             placeholder="NCCL_SOCKET_IFNAME=ib0" />
-          <div class="muted tiny">
-            One <span class="mono">KEY=VALUE</span> per line, applied to every rank's
-            container — one fact about one fabric.
-          </div>
         </el-form-item>
         <el-form-item label="Notes"><el-input v-model="groupForm.notes" /></el-form-item>
       </el-form>
@@ -1073,20 +1043,15 @@ onMounted(async () => {
     </el-dialog>
 
     <el-dialog v-model="showGroupPreflight" :title="`Preflight · ${preflightGroup}`" width="640px">
-      <div v-if="!groupPreflight" class="muted">
-        Probing every member and the interior links between them…
-      </div>
+      <div v-if="!groupPreflight" class="muted">Probing…</div>
       <template v-else>
         <el-alert v-if="groupPreflight.note" type="info" :closable="false"
           :title="groupPreflight.note" style="margin-bottom: 12px" />
         <el-alert v-if="groupPreflight.ok" type="success" :closable="false" show-icon
           title="Every member is ready and can reach the master"
-          description="Advisory only: the scheduler re-checks at launch."
           style="margin-bottom: 12px" />
         <el-alert v-else-if="!groupPreflight.note" type="error" :closable="false" show-icon
-          title="Something would stop this group deploying"
-          description="These are cheap checks for expensive failures — fix them before a run
-            spends its window discovering them." style="margin-bottom: 12px" />
+          title="Something would stop this group deploying" style="margin-bottom: 12px" />
         <div v-for="row in groupPreflight.machines" :key="row.machine" class="pf-row">
           <div class="pf-head">
             <span class="mono">{{ row.machine }}</span>
@@ -1110,19 +1075,15 @@ onMounted(async () => {
 
     <el-dialog v-model="showSmoke" :title="`Smoke test · ${smoke.machine?.name ?? ''}`" width="640px">
       <div v-if="smoke.running" class="muted">
-        {{ smoke.pod
-          ? 'Checking the path a launch takes, then placing a probe pod (up to ~40 s)…'
-          : 'Checking the path a launch takes…' }}
+        {{ smoke.pod ? 'Checking (up to ~40 s)…' : 'Checking…' }}
       </div>
       <el-alert v-else-if="smoke.error" type="error" :closable="false" :title="smoke.error" />
       <template v-else-if="smoke.result">
         <el-alert v-if="smoke.result.ok" type="success" :closable="false" show-icon
           title="The platform can reach this machine"
-          description="Reachability only — a campaign's preflight still checks the model, image and ports."
           style="margin-bottom: 12px" />
         <el-alert v-else type="error" :closable="false" show-icon
           title="A launch on this machine would fail"
-          description="The first failed step is the one to fix; later steps were not tried."
           style="margin-bottom: 12px" />
         <div v-for="c in smoke.result.checks" :key="c.name" class="pf-check">
           <el-tag size="small" :type="(checkTag[c.status] as any)" effect="plain">
@@ -1135,18 +1096,133 @@ onMounted(async () => {
       <template #footer>
         <el-checkbox v-if="smoke.machine?.driver === 'k8s'" v-model="smoke.pod"
           :disabled="smoke.running" style="margin-right: 12px">
-          Also place a probe pod on the node (created and deleted; asks for no GPUs)
+          Probe pod
+          <InfoHint>Also place a pod on the node — created and deleted, asking for no
+            GPUs.</InfoHint>
         </el-checkbox>
         <el-button :loading="smoke.running" @click="runSmoke">Run again</el-button>
         <el-button @click="showSmoke = false">Close</el-button>
       </template>
     </el-dialog>
 
+    <el-dialog v-model="showAddCluster" width="680px"
+      :title="addStep === 'connect' ? 'Add GPU cluster' : `GPU nodes · ${nodesCluster?.name ?? ''}`">
+      <el-form v-if="addStep === 'connect'" label-position="top">
+        <el-form-item>
+          <template #label>
+            Kubeconfig
+            <InfoHint :width="380">
+              A scoped kubeconfig for the GPU cluster. Write one with
+              <span class="mono">deploy/gpu-cluster.sh</span>, run with that cluster's admin
+              kubeconfig: it creates a namespace for engine pods and an account limited to
+              it. Stored encrypted; never shown again.
+              <a :href="setupDocs" target="_blank" rel="noopener">Setup guide</a>
+            </InfoHint>
+            <el-button link type="primary" class="label-link"
+              @click="kubeconfigFile?.click()">Upload file</el-button>
+          </template>
+          <input ref="kubeconfigFile" type="file" hidden @change="readKubeconfigFile" />
+          <el-input v-model="newCluster.kubeconfig" type="textarea" :rows="6" class="mono"
+            placeholder="paste or upload the kubeconfig" />
+        </el-form-item>
+        <el-form-item label="Name">
+          <el-input v-model="newCluster.name" placeholder="gpu-cluster-a" />
+        </el-form-item>
+        <el-collapse v-model="clusterAdvanced" class="dialog-advanced">
+          <el-collapse-item name="advanced" title="Advanced">
+            <div class="grid-2">
+              <el-form-item label="Namespace">
+                <el-input v-model="newCluster.namespace" class="mono"
+                  placeholder="from the kubeconfig" />
+              </el-form-item>
+              <el-form-item label="Workload kind">
+                <el-select v-model="newCluster.workload_kind" style="width: 100%">
+                  <el-option label="deployment (no operator)" value="deployment" />
+                  <el-option label="custom (TuningRun CRD)" value="custom" />
+                </el-select>
+              </el-form-item>
+              <el-form-item label="RuntimeClass">
+                <el-input v-model="newCluster.runtime_class" class="mono" />
+              </el-form-item>
+              <el-form-item label="GPU resource">
+                <el-input v-model="newCluster.gpu_resource" class="mono" />
+              </el-form-item>
+              <el-form-item label="Extra tolerations">
+                <el-input v-model="newCluster.tolerations" class="mono"
+                  placeholder="key=value:NoSchedule" />
+              </el-form-item>
+              <el-form-item label="Image pull secrets">
+                <el-input v-model="newCluster.image_pull_secrets" class="mono" placeholder="(none)" />
+              </el-form-item>
+            </div>
+          </el-collapse-item>
+        </el-collapse>
+      </el-form>
+
+      <template v-else>
+        <div v-if="nodesError" class="pf-check">
+          <el-alert type="error" :closable="false" show-icon :title="nodesError" />
+        </div>
+        <div v-else-if="!nodesView" class="muted">Reading the cluster's nodes…</div>
+        <template v-else>
+          <div class="muted tiny nodes-head">
+            Namespace <span class="mono">{{ nodesView.namespace }}</span>
+            · {{ nodesView.nodes.length }} GPU node(s)
+          </div>
+          <el-table :data="nodesView.nodes" size="small" row-key="hostname"
+            empty-text="No GPU nodes visible to this kubeconfig">
+            <el-table-column width="48">
+              <template #default="{ row }">
+                <el-checkbox v-if="!row.machine" :model-value="pickedNodes.includes(row.hostname)"
+                  @update:model-value="(on: any) => pickedNodes = on
+                    ? [...pickedNodes, row.hostname]
+                    : pickedNodes.filter((h) => h !== row.hostname)" />
+              </template>
+            </el-table-column>
+            <el-table-column label="Node" min-width="160">
+              <template #default="{ row }"><span class="mono">{{ row.node }}</span></template>
+            </el-table-column>
+            <el-table-column label="GPUs" min-width="150">
+              <template #default="{ row }">
+                {{ row.gpu_count }}× {{ row.gpu_type || row.gpu_product || 'GPU' }}
+              </template>
+            </el-table-column>
+            <el-table-column label="Status" min-width="170">
+              <template #default="{ row }">
+                <el-tag v-if="row.machine" size="small" type="success" effect="plain">
+                  registered as {{ row.machine.name }}
+                </el-tag>
+                <el-tag v-else-if="!row.ready" size="small" type="danger" effect="plain">
+                  not ready
+                </el-tag>
+                <el-tag v-else-if="!row.schedulable" size="small" type="warning" effect="plain">
+                  cordoned
+                </el-tag>
+                <span v-else class="muted tiny">new</span>
+              </template>
+            </el-table-column>
+          </el-table>
+          <el-alert v-if="nodesView.gone.length" type="warning" :closable="false" show-icon
+            class="gone"
+            :title="`Gone from the cluster: ${nodesView.gone.map((g) => g.name).join(', ')}`" />
+        </template>
+      </template>
+
+      <template #footer>
+        <el-button @click="showAddCluster = false">
+          {{ addStep === 'connect' ? 'Cancel' : 'Close' }}
+        </el-button>
+        <el-button v-if="addStep === 'connect'" type="primary" :loading="busy"
+          :disabled="!newCluster.kubeconfig.trim() || !newCluster.name.trim()"
+          @click="connectCluster">Connect</el-button>
+        <el-button v-else type="primary" :loading="busy" :disabled="!pickedNodes.length"
+          @click="registerNodes">
+          Register {{ pickedNodes.length || '' }} node{{ pickedNodes.length === 1 ? '' : 's' }}
+        </el-button>
+      </template>
+    </el-dialog>
+
     <el-dialog v-model="showClusters" title="Kubernetes clusters" width="680px">
-      <p class="muted tiny" style="margin-top: -6px">
-        A k8s machine lands in one of these. The kubeconfig is stored encrypted
-        and never shown again — leave the box empty when editing to keep it.
-      </p>
       <div v-for="c in clusters" :key="c.id" class="card" style="margin-bottom: 8px">
         <div class="top">
           <div class="who">
@@ -1165,6 +1241,7 @@ onMounted(async () => {
             </el-tag>
           </div>
           <div class="acts">
+            <el-button size="small" type="primary" plain @click="openNodes(c)">Nodes</el-button>
             <el-button size="small" :loading="probingCluster === c.id"
               @click="probeCluster(c)">Probe</el-button>
             <el-button size="small" @click="openEditCluster(c)">Edit</el-button>
@@ -1187,14 +1264,14 @@ onMounted(async () => {
         </div>
       </div>
       <div v-if="!clusters.length" class="empty muted">
-        No clusters yet — the platform-default cluster is still served from
-        <span class="mono">AUTOTUNE_K8S_*</span>.
+        No clusters.
+        <el-button link type="primary" @click="showClusters = false; openAddCluster()">
+          Add a GPU cluster</el-button>
       </div>
 
+      <template v-if="editingClusterId !== null">
       <el-divider />
-      <h3 class="muted">
-        {{ editingClusterId === null ? 'Add a cluster' : `Edit ${clusterForm.name}` }}
-      </h3>
+      <h3 class="muted">Edit {{ clusterForm.name }}</h3>
       <el-form label-position="top">
         <div class="grid-2">
           <el-form-item label="Name">
@@ -1219,7 +1296,12 @@ onMounted(async () => {
             </el-select>
           </el-form-item>
         </div>
-        <el-form-item label="Kubeconfig (scoped, never an admin one)">
+        <el-form-item>
+          <template #label>
+            Kubeconfig
+            <InfoHint>A scoped one, never an admin one. Stored encrypted and never shown
+              again; leave empty when editing to keep it.</InfoHint>
+          </template>
           <el-input v-model="clusterForm.kubeconfig" type="textarea" :rows="5" class="mono"
             :placeholder="editingClusterId === null
               ? 'paste the kubeconfig YAML'
@@ -1244,16 +1326,17 @@ onMounted(async () => {
         <el-form-item label="Default node selector">
           <el-input v-model="clusterForm.node_selector" class="mono" placeholder="(none)" />
         </el-form-item>
-        <el-form-item label="Extra tolerations">
+        <el-form-item>
+          <template #label>
+            Extra tolerations
+            <InfoHint :width="360">Comma-separated
+              <span class="mono">key[=value][:effect]</span>. Needed for a cordoned pool: a
+              pod that tolerates <span class="mono">node.kubernetes.io/unschedulable</span>
+              still schedules onto it. The GPU taint is handled when “tolerate GPU taint”
+              is on.</InfoHint>
+          </template>
           <el-input v-model="clusterForm.tolerations" class="mono"
-            placeholder="e.g. node.kubernetes.io/unschedulable" />
-          <div class="muted tiny">
-            Comma-separated <span class="mono">key[=value][:effect]</span>. Needed for a
-            <strong>cordoned</strong> pool: a pod that tolerates
-            <span class="mono">node.kubernetes.io/unschedulable</span> still schedules
-            onto it, where one that does not sits Pending forever. The GPU taint is
-            handled automatically when “tolerate GPU taint” is on.
-          </div>
+            placeholder="node.kubernetes.io/unschedulable" />
         </el-form-item>
         <el-form-item label="Image pull secrets">
           <el-input v-model="clusterForm.image_pull_secrets" class="mono"
@@ -1279,17 +1362,31 @@ onMounted(async () => {
           <el-input v-model="clusterForm.notes" />
         </el-form-item>
       </el-form>
+      </template>
       <template #footer>
         <el-button @click="showClusters = false">Close</el-button>
-        <el-button type="primary" :loading="busy" @click="saveCluster">
-          {{ editingClusterId === null ? 'Add cluster' : 'Save' }}
-        </el-button>
+        <el-button v-if="editingClusterId !== null" type="primary" :loading="busy"
+          @click="saveCluster">Save</el-button>
       </template>
     </el-dialog>
   </div>
 </template>
 
 <style scoped>
+.dialog-advanced {
+  border-top: none;
+}
+.nodes-head {
+  margin-bottom: 8px;
+}
+.gone {
+  margin-top: 10px;
+}
+.label-link {
+  margin-left: 10px;
+  font-size: 12px;
+  font-weight: 400;
+}
 .header-row {
   display: flex;
   justify-content: space-between;
@@ -1484,58 +1581,15 @@ onMounted(async () => {
 .dot-done {
   background: var(--el-color-success);
 }
-.handback {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  margin-top: 6px;
-  padding: 5px 8px;
-  border-left: 2px solid var(--el-border-color);
-  background: var(--el-fill-color-lighter);
-  border-radius: 0 3px 3px 0;
-}
-.handback .label {
-  flex: none;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
-/* Production left down is the outcome an operator cannot undo by waiting, so
-   it is the one that gets colour. */
-.handback.owed {
-  border-left-color: var(--el-color-danger);
-  background: var(--el-color-danger-light-9);
-}
-.fold-note {
-  margin: 6px 0 0;
-}
 .for {
   display: flex;
   align-items: center;
   gap: 6px;
   margin-top: 4px;
 }
-.fold {
-  margin-top: 6px;
-  border-top: none;
-}
-.fold :deep(.el-collapse-item__header) {
-  font-size: 12px;
-  height: 32px;
-  line-height: 32px;
-  border-bottom: none;
-}
-.fold :deep(.el-collapse-item__wrap) {
-  border-bottom: none;
-}
-.svc {
-  line-height: 1.7;
-}
 .empty {
   padding: 24px;
   text-align: center;
-}
-.foot {
-  margin-top: 4px;
 }
 .grid-2 {
   display: grid;

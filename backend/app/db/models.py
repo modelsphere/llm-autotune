@@ -72,26 +72,11 @@ class LeaseEndMode(StrEnum):
     EAGER = "eager"
 
 
-class BaselineStatus(StrEnum):
-    """Lifecycle of the handed-over production services on a borrowed machine.
-
-    NONE -> CAPTURED (services + restore scripts recorded)
-         -> CLEARED  (production stopped; the machine is ours to experiment on)
-         -> RESTORED (production brought back and verified before hand-back)
-
-    Experiments may only run while CLEARED: capture is what makes teardown
-    reversible, so we never destroy something we cannot put back.
-    """
-
-    NONE = "none"
-    CAPTURED = "captured"
-    CLEARED = "cleared"
-    RESTORED = "restored"
-
-
 class RunKind(StrEnum):
     EXPERIMENT = "experiment"
-    BASELINE = "baseline"  # canary against the handed-over production service
+    # A benchmark of a production service measured in place. No longer
+    # created; kept so runs recorded before 0.2.0 still read.
+    BASELINE = "baseline"
     # An engine the platform launched FOR a policy container ("delegated
     # launch"). Launched and health-gated like an experiment, but then held at
     # SERVING for the policy to use instead of being benchmarked and torn down.
@@ -390,13 +375,6 @@ class Machine(Base):
         DateTime(timezone=True), nullable=True
     )
     notes: Mapped[str] = mapped_column(Text, default="")
-    # What was running when the machine was handed to us, and how to put it
-    # back: {"services": [{container, image, port, served_model_name,
-    # endpoint_url, restore_script}], "captured_at": ...}
-    baseline: Mapped[dict] = mapped_column(JsonCol, default=dict)
-    baseline_status: Mapped[str] = mapped_column(
-        String(16), default=BaselineStatus.NONE.value
-    )
 
     # -- the lease: who handed this machine over, and until when --------------
     #
@@ -592,6 +570,11 @@ class Campaign(Base):
     # validation_reserve_minutes, heartbeat_timeout_s. JSON rather than columns
     # because they only mean anything when policy_id is set.
     policy_settings: Mapped[dict] = mapped_column(JsonCol, default=dict)
+    # What this campaign's runs have actually taken: recent minutes for the
+    # engine to come up and for each stage's benchmark. Written by the worker
+    # as runs come up and come back, read wherever the window math needs a run
+    # length (control/orchestrator/timing.py).
+    run_timing: Mapped[dict] = mapped_column(JsonCol, default=dict)
     # Before crowning a winner, re-run the best candidates and see whether the
     # result holds. One benchmark is a signal, not a decision: measurement
     # noise on this rig is ~0.25%, but a config can also be fast on average and
@@ -646,19 +629,6 @@ class Campaign(Base):
     # a build and it finishing; a worker restart resumes polling from here
     # rather than triggering a second one.
     dataset_build_row: Mapped[int] = mapped_column(Integer, default=0)
-
-    # Open the winner's merge request by itself, the moment the campaign is
-    # done, instead of waiting for someone to press Generate MR. Off by
-    # default: a proposal that appears while nobody is watching is only welcome
-    # when it was asked for. It honours the same dry-run setting as the button,
-    # so an unarmed platform records the draft and writes nothing.
-    auto_promote: Mapped[bool] = mapped_column(Boolean, default=False)
-    # Which release branch of the deploy repo a winner of this campaign is
-    # proposed onto. The repo keeps one branch per (model x card x engine), so
-    # the same bound baseline can face several of them — a model tuned for the
-    # next release line is not a change to the one in production. Empty = the
-    # branch the baseline's binding tracks.
-    deploy_branch: Mapped[str] = mapped_column(String(255), default="")
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
@@ -1069,9 +1039,8 @@ class Baseline(Base):
     # Production's engine args — the same shape a search config carries, so the
     # relaunch and the card-norm read it identically.
     engine_args: Mapped[dict] = mapped_column(JsonCol, default=dict)
-    # Provenance: "capture:<machine>" when inventoried on hand-over, "manual"
-    # when a user entered it, "capture:<machine>" when captured from a box,
-    # "gitlab:<branch>@<sha>" when synced from the deploy repo.
+    # Provenance: "manual" when a user entered it; plugins may record their
+    # own (older rows may read "capture:<machine>").
     source: Mapped[str] = mapped_column(String(128), default="manual")
     notes: Mapped[str] = mapped_column(Text, default="")
     # -- the rest of the LaunchConfig ------------------------------------------
@@ -1098,68 +1067,6 @@ class Baseline(Base):
     updated_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), onupdate=func.now(), nullable=True
     )
-
-    binding: Mapped["DeployBinding | None"] = relationship(
-        back_populates="baseline", uselist=False, cascade="all, delete-orphan"
-    )
-
-
-class DeployBinding(Base):
-    """Where a baseline's production config lives in git, and the decisions
-    that make the two comparable.
-
-    Production is deployed from a GitLab repo, one release branch per
-    (model × card × engine); the model developer's configuration is one file
-    on it. A bound baseline mirrors that file. But the platform's copy and the
-    file are allowed to differ in ways that are not configuration — a weights
-    path spelled for our machines, a mirror image tag, a draft model mounted
-    somewhere else — and none of that may be reconciled silently. So the
-    binding carries, beside the address of the file:
-
-      format        which adapter reads/edits the file, and its options
-                    (where the args list is, how it is spelled, …)
-      policy        who owns each field/knob: `platform` (proposed in merge
-                    requests, adopted on sync), `repo` (never written, every
-                    difference reported), `ignore` (never written, not
-                    reported — an explicit decision)
-      equivalences  value pairs that mean the same thing on both sides
-                    (ours ↔ theirs) — translated in both directions
-      divergences   the differences found at the last sync, each unresolved
-                    or resolved with how, by whom, when
-
-    `document` is the file text at the last sync: the diff base when a merge
-    request is opened, and the offline fallback for a preview.
-    """
-
-    __tablename__ = "deploy_bindings"
-
-    id: Mapped[int] = mapped_column(primary_key=True)
-    baseline_id: Mapped[int] = mapped_column(
-        ForeignKey("baselines.id", ondelete="CASCADE"), unique=True, index=True
-    )
-    project: Mapped[str] = mapped_column(String(255), default="")
-    branch: Mapped[str] = mapped_column(String(255), default="")
-    path: Mapped[str] = mapped_column(String(255), default="config/model.yaml")
-    format: Mapped[dict] = mapped_column(JsonCol, default=dict)
-    policy: Mapped[dict] = mapped_column(JsonCol, default=dict)
-    equivalences: Mapped[dict] = mapped_column(JsonCol, default=dict)
-    divergences: Mapped[list] = mapped_column(JsonCol, default=list)
-    commit: Mapped[str] = mapped_column(String(64), default="")
-    document: Mapped[str] = mapped_column(Text, default="")
-    synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
-    updated_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), onupdate=func.now(), nullable=True
-    )
-
-    baseline: Mapped[Baseline] = relationship(back_populates="binding")
-
-    @property
-    def unresolved(self) -> int:
-        return sum(1 for d in (self.divergences or []) if d.get("status") == "unresolved")
 
 
 class ApiKey(Base):
@@ -1209,60 +1116,6 @@ class ApiKey(Base):
     @property
     def active(self) -> bool:
         return self.revoked_at is None
-
-
-class PromotionState(StrEnum):
-    """Lifecycle of a winner's rollout. Mirrors
-    app.control.promotion.base.PromotionState; the DB stores the plain string so
-    a new target's states never need a migration."""
-
-    DRAFT = "draft"
-    SUBMITTED = "submitted"
-    AB_TESTING = "ab_testing"
-    ROLLED_OUT = "rolled_out"
-    REJECTED = "rejected"
-    FAILED = "failed"
-    CANCELLED = "cancelled"
-
-
-class Promotion(Base):
-    """A campaign winner handed to CICD to roll onto the serving cluster.
-
-    The record of a decision: which run's config was promoted, the exact payload
-    that crossed the seam (config, so it is reproducible even if the run is later
-    pruned), where the external system put it (refs — an MR url, a pipeline id),
-    and how far the rollout got. One campaign can have several over its life
-    (a re-tune supersedes an earlier winner), so this is not one-to-one.
-    """
-
-    __tablename__ = "promotions"
-
-    id: Mapped[int] = mapped_column(primary_key=True)
-    campaign_id: Mapped[int] = mapped_column(ForeignKey("campaigns.id"), index=True)
-    run_id: Mapped[int] = mapped_column(ForeignKey("runs.id"), index=True)
-    # Which PromotionTarget opened it ("manual", "gitlab", …).
-    target: Mapped[str] = mapped_column(String(32), default="manual")
-    state: Mapped[str] = mapped_column(
-        String(24), default=PromotionState.DRAFT.value, index=True
-    )
-    # The exact config that was promoted — self-contained, so the rollout is
-    # reproducible without re-deriving it from the run/candidate later.
-    config: Mapped[dict] = mapped_column(JsonCol, default=dict)
-    # External identifiers the target created and polls (mr_url, pipeline_id,
-    # branch, artifact). Shape is target-specific.
-    refs: Mapped[dict] = mapped_column(JsonCol, default=dict)
-    detail: Mapped[str] = mapped_column(Text, default="")
-    error: Mapped[str] = mapped_column(Text, default="")
-    created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
-    updated_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
-    )
-
-    campaign: Mapped[Campaign] = relationship()
-    run: Mapped[Run] = relationship()
 
 
 class Event(Base):

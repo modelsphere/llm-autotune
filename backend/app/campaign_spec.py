@@ -46,13 +46,16 @@ from app.schemas.core import CampaignCreate
 # by the clock and by Force start, and copying them would start a clone at a
 # moment that has already passed.
 _RUNTIME_ONLY = frozenset({"window_start", "window_end"})
+# Workloads that become benchmark slugs when the campaign is created; a saved
+# campaign carries the slugs, so that is what its spec says.
+_CREATE_ONLY = frozenset({"benchmark_spec", "verify_benchmark_spec"})
 
 # Every field a campaign is defined by — exactly CampaignCreate's, minus the
 # runtime ones. Derived, not listed, so a field added to CampaignCreate travels
 # through export, import and clone without anyone remembering to add it here.
 # (The frontend keeps its own copy for the YAML editor; a test checks the two.)
 SPEC_KEYS: tuple[str, ...] = tuple(
-    k for k in CampaignCreate.model_fields if k not in _RUNTIME_ONLY
+    k for k in CampaignCreate.model_fields if k not in _RUNTIME_ONLY | _CREATE_ONLY
 )
 
 # The drafted grid stays small enough to finish in one night on one machine:

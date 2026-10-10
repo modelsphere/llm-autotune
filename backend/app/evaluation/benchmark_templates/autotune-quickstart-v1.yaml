@@ -17,6 +17,7 @@ description: >
   LLM AutoTune; edit the template in AutoTune, not this benchmark.
 version: "1"
 status: active
+group_tags: [llm-autotune]
 modules:
   - module_name: perf_guidellm_sweep
     order_index: 0

@@ -7,7 +7,7 @@ contract a policy implements is the [policy API](policy-api.md). 中文：[平�
 
 ## The pieces
 
-![Platform architecture: the policy on a GPU machine asks the API for runs; the supervisor launches each config, LLMBench benchmarks it, and the winner becomes a merge request](diagrams/platform-architecture.svg)
+![Platform architecture: the policy on a GPU machine asks the API for runs; the supervisor launches each config, LLMBench benchmarks it, and the platform validates the best](diagrams/platform-architecture.svg)
 
 - **Browser** — operators create campaigns and watch them run.
 - **API** — one HTTP service: the REST API behind the UI, and the policy API
@@ -20,7 +20,6 @@ contract a policy implements is the [policy API](policy-api.md). 中文：[平�
   **engines** (sglang or vLLM) on them.
 - **LLMBench** — the benchmark platform. It drives load against an engine and
   returns the numbers.
-- **Deploy repo** — where a promoted winner lands, as a merge request.
 - **Plugins** — optional packages that add pages, API routes, scheduled steps
   and search strategies ([plugins](../plugins.md)).
 
@@ -44,16 +43,16 @@ own measurement, so results from different policies are comparable.
 
 ## One campaign
 
-1. **Set up.** When the window opens, the platform reserves a machine, clears
-   it, and starts the policy on it.
+1. **Set up.** When the window opens, the platform reserves a leased machine
+   and starts the policy on it.
 2. **Search.** The policy proposes configs; the platform launches and
    benchmarks each one and returns the result. The platform never decides what
    to try.
 3. **Deadline.** The policy stops and finalizes.
 4. **Verdict.** The platform launches the policy's top contender itself and
    measures it, the same way for every campaign.
-5. **Done.** The verdict is recorded, and the machine is restored and handed
-   back.
+5. **Done.** The verdict is recorded, the platform stops its own runs, and
+   the machine is handed back.
 
 Without a policy, the platform enumerates the search space itself; steps 3 to
 5 are the same.
@@ -62,8 +61,7 @@ Without a policy, the platform enumerates the search space itself; steps 3 to
 
 - **The verdict is the platform's measurement**, on the campaign's pinned
   dataset. Nothing a policy reports about itself decides a ranking.
-- **A machine is cleared before tuning and restored before it goes back.** The
-  platform never destroys what it did not capture.
+- **A machine is leased free, and the platform stops only what it launched.**
 - **A container is confirmed gone before its GPUs are reused**, so a
   half-stopped engine cannot disturb the next run.
 - **Every result records the dataset it ran on**, so only comparable numbers

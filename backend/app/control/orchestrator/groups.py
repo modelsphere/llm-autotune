@@ -20,7 +20,6 @@ from app.control.orchestrator.lifecycle import accepts_new_work, machine_has_liv
 from app.control.run_nodes import machine_hosts_live_gang
 from app.db.models import (
     TERMINAL_RUN_STATES,
-    BaselineStatus,
     Machine,
     MachineGroup,
     MachineGroupMember,
@@ -94,8 +93,6 @@ def member_blockers(session: Session, machine: Machine) -> list[str]:
         blockers.append(f"{machine.name} is not leased")
     elif not accepts_new_work(machine):
         blockers.append(f"{machine.name} is being handed back")
-    if machine.baseline_status != BaselineStatus.CLEARED.value:
-        blockers.append(f"{machine.name}'s production has not been cleared")
     if machine_has_live_session(session, machine):
         blockers.append(f"{machine.name} is hosting a policy session")
     if machine_hosts_live_gang(session, machine.id):

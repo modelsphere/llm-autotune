@@ -24,7 +24,9 @@ class ClusterIn(BaseModel):
     # The scoped kubeconfig YAML. Stored encrypted; "" on edit = keep existing.
     kubeconfig: str = ""
     context: str = ""
-    namespace: str = "autotune"
+    # Where engine pods run. Empty = the namespace the kubeconfig's context
+    # names, which is how deploy/gpu-cluster.sh writes it.
+    namespace: str = ""
     workload_kind: WorkloadKind = "deployment"
     node_host: str = ""
     gpu_resource: str = "nvidia.com/gpu"
@@ -49,12 +51,23 @@ class ClusterIn(BaseModel):
     engine_cpu_limit: str = ""
     engine_memory_limit: str = ""
 
-    @field_validator("name", "namespace")
+    @field_validator("name")
     @classmethod
     def _non_empty(cls, v: str) -> str:
         if not v.strip():
             raise ValueError("must not be empty")
         return v.strip()
+
+    @field_validator("namespace")
+    @classmethod
+    def _strip(cls, v: str) -> str:
+        return v.strip()
+
+
+class RegisterNodes(BaseModel):
+    """GPU nodes of a cluster to register as machines, by hostname label."""
+
+    nodes: list[str] = Field(..., min_length=1)
 
 
 class ClusterOut(BaseModel):

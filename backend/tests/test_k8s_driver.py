@@ -487,15 +487,6 @@ def test_default_transport_is_unavailable_until_configured():
     assert isinstance(driver.api, UnavailableK8sApi)
 
 
-def test_baseline_lifecycle_is_a_cluster_managed_noop():
-    driver = _driver(_clone(k8s_workload_kind="deployment"))
-    machine = MachineInfo(name="pool-a", host="", gpu_count=8, driver="k8s")
-    captured = driver.capture_baseline(machine)
-    assert captured["services"] == []
-    assert driver.clear_baseline(machine, captured) == []
-    assert driver.restore_baseline(machine, captured) == []
-
-
 # -- tolerations -------------------------------------------------------------
 #
 # A GPU node is commonly tainted so that pods with no use for cards keep off

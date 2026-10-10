@@ -45,7 +45,7 @@
   <rect x="880" y="62" width="140" height="84" rx="8" fill="#e8f6ee" stroke="#3b9a68" stroke-width="1.4"/>
   <text x="950" y="92" font-size="15" font-weight="700" fill="#1b2733" text-anchor="middle">优胜者</text>
   <text x="950" y="113" font-size="12.5" fill="#4a5a6a" text-anchor="middle">报告 +</text>
-  <text x="950" y="131" font-size="12.5" fill="#4a5a6a" text-anchor="middle">merge request</text>
+  <text x="950" y="131" font-size="12.5" fill="#4a5a6a" text-anchor="middle">启动命令</text>
 
   <!-- stage arrows -->
   <line x1="180" y1="104" x2="218" y2="104" stroke="#5b6b7a" stroke-width="1.6" marker-end="url(#arr)"/>

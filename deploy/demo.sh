@@ -7,7 +7,7 @@
 #
 #   deploy/demo.sh --kind               create (or reuse) a kind cluster and install there
 #   deploy/demo.sh                      install on the cluster kubectl points at
-#   deploy/demo.sh ui                   port-forward both UIs
+#   deploy/demo.sh ui                   print both UIs' addresses (or port-forward them)
 #   deploy/demo.sh policy DIR           build a search policy, load it into the cluster, register it
 #   deploy/demo.sh down [--kind]        uninstall both (and delete the kind cluster)
 #
@@ -22,6 +22,8 @@
 #   --context NAME    the kubectl context to install into (default: the current one)
 #   --registry REPO   push images built here to REPO for the cluster to pull
 #   --no-ui           finish without port-forwarding the UIs
+#   --port-forward    reach the UIs through kubectl port-forward instead of a
+#                     NodePort (the default only on a cluster on this machine)
 #   --yes             do not ask before acting on a context that does not look local
 #
 # State lives in .demo/ (git-ignored).

@@ -31,10 +31,8 @@ What is NOT here on purpose:
 - No node/device selection: `spec.gpu_indices` becomes a *count*; the cluster
   assigns actual devices. Packing several runs onto specific cards of one box
   is a bare-metal concern — on k8s the scheduler bin-packs.
-- No production teardown: `capture/clear/restore_baseline` are no-ops that
-  report "cluster-managed". The nightly baseline is therefore measured by
-  *relaunching* the production config as its own workload, not by canarying an
-  in-place service we are not allowed to stop.
+- Nothing but our own workloads: production keeps running elsewhere in the
+  cluster, and the baseline is measured by *relaunching* its config.
 """
 
 from __future__ import annotations
@@ -504,6 +502,13 @@ def render_policy_job(spec: WorkloadSpec, settings: Settings) -> dict:
             pod_spec["nodeSelector"] = selector
         if gpus and settings.k8s_runtime_class:
             pod_spec["runtimeClassName"] = settings.k8s_runtime_class
+    # The same tolerations an engine with these cards would carry: a policy
+    # that takes cards lands on a tainted GPU node like an engine does, and the
+    # explicitly declared ones apply to every pod. Without them a self-serving
+    # policy sat Pending on a GPU node's taint.
+    tolerations = _tolerations(gpus, settings)
+    if tolerations:
+        pod_spec["tolerations"] = tolerations
     if settings.k8s_policy_priority_class:
         pod_spec["priorityClassName"] = settings.k8s_policy_priority_class
 
@@ -661,8 +666,15 @@ _GPU_RESOURCE = "nvidia.com/gpu"
 # question, and it is answered before any image is pulled — so the image is
 # never waited on and an air-gapped node that cannot fetch it still answers.
 SMOKE_POD_IMAGE = "registry.k8s.io/pause:3.9"
-SMOKE_LABEL = "autotune.4paradigm.com/smoke"
+SMOKE_LABEL = "autotune.modelsphere.dev/smoke"
 _SMOKE_POD_WAIT_SECONDS = 40
+# A campaign preflight's probe Job: the campaign's own images, on the machine's
+# node, with the model mounted the way a run mounts it.
+PREFLIGHT_LABEL = "autotune.modelsphere.dev/preflight"
+_PREFLIGHT_WAIT_SECONDS = 45
+# A waiting reason that settles the image question: the node could not get it.
+_IMAGE_PULL_FAILURES = {"ErrImagePull", "ImagePullBackOff", "InvalidImageName",
+                        "ErrImageNeverPull"}
 # The kubelet listens on every node, so a connect to it says whether the
 # platform can route to the node's address at all — which a NodePort needs.
 _KUBELET_PORT = 10250
@@ -1164,32 +1176,6 @@ class K8sDriver(DeploymentDriver):
             return WorkloadState.EXITED
         return WorkloadState.RUNNING
 
-    # -- baseline lifecycle (cluster-managed; nothing for us to do) -----------
-    #
-    # On bare metal the platform borrows a box and must stop/restore the
-    # production services on it. On k8s it borrows GPU *quota*: the cluster
-    # keeps production running elsewhere and schedules our workloads on whatever
-    # it frees. So there is nothing to capture, clear or restore — and returning
-    # an empty capture is exactly right: the supervisor reads "no production
-    # services to stop" as "the pool is already ours" and proceeds, while the
-    # nightly baseline is measured by relaunching the production config.
-
-    def capture_baseline(self, machine: MachineInfo) -> dict:
-        return {
-            "driver": self.name,
-            "services": [],
-            "note": "k8s pool: production is cluster-managed and is not stopped by the platform",
-        }
-
-    def clear_baseline(self, machine: MachineInfo, baseline: dict) -> list[str]:
-        return []
-
-    def restore_baseline(self, machine: MachineInfo, baseline: dict) -> list[str]:
-        return []
-
-    def verify_baseline(self, machine: MachineInfo, baseline: dict) -> list[dict]:
-        return []
-
     # -- helpers -------------------------------------------------------------
 
     def _resolve_endpoint(self, spec: LaunchSpec) -> str:
@@ -1492,6 +1478,117 @@ class K8sDriver(DeploymentDriver):
             except Exception:  # noqa: BLE001 — labelled; findable by SMOKE_LABEL
                 logger.warning("could not delete smoke pod %s", name)
 
+    # -- campaign preflight --------------------------------------------------
+
+    def preflight(
+        self,
+        machine: MachineInfo,
+        *,
+        image: str,
+        model_path: str,
+        policy_images: list[str] | tuple[str, ...] = (),
+        widest_candidate_cards: int = 0,
+        timeout: float = _PREFLIGHT_WAIT_SECONDS,
+    ) -> list[Any]:
+        """The campaign's checks, answered by the cluster itself: the node the
+        machine pins, its cards, and one probe Job on that node that pulls
+        every image the campaign runs and mounts the model the way a run does.
+        The node's own registry credentials and mirrors decide the pull, so the
+        answer is the one a run would get. Never raises."""
+        from app.control.launch import preflight as pf
+
+        try:
+            api = self.api
+        except Exception as exc:  # noqa: BLE001 — a preflight reports, never raises
+            return [pf.Check("cluster", "Cluster", pf.FAIL, f"transport unavailable: {exc}")]
+        checks: list[Any] = []
+        nodes, node = self._smoke_nodes(api, machine)
+        checks.append(pf.Check("node", "Node", node["status"], node["detail"]))
+        if widest_candidate_cards and nodes:
+            biggest = max(_node_gpu_count(n) for n in nodes)
+            if widest_candidate_cards > biggest:
+                checks.append(pf.Check(
+                    "gpus", "GPUs", pf.FAIL,
+                    f"the widest candidate needs {widest_candidate_cards} cards, "
+                    f"{machine.name} has {biggest}",
+                    "Narrow the search space or pick a bigger machine.",
+                ))
+            else:
+                checks.append(pf.Check("gpus", "GPUs", pf.PASS, f"{biggest} allocatable"))
+        if node["status"] == "fail":
+            return checks
+        checks.extend(self._probe_job(api, machine, image, model_path, policy_images, timeout))
+        return checks
+
+    def _probe_job(
+        self,
+        api: K8sApi,
+        machine: MachineInfo,
+        image: str,
+        model_path: str,
+        policy_images: list[str] | tuple[str, ...],
+        timeout: float,
+    ) -> list[Any]:
+        from app.control.launch import preflight as pf
+
+        s = self.settings
+        name = f"autotune-preflight-{secrets.token_hex(4)}"
+        images = [("engine", "Container image", "image", image)] if image else []
+        images += [
+            (f"policy-{i}", "Policy image", f"policy_image:{ref}", ref)
+            for i, ref in enumerate(dict.fromkeys(p for p in policy_images if p))
+        ]
+        if not images and not model_path:
+            return []
+        manifest, reads_log = render_preflight_job(name, machine, images, model_path, s)
+        try:
+            api.apply(manifest)
+        except Exception as exc:  # noqa: BLE001
+            return [pf.Check("probe", "Probe pod", pf.SKIP,
+                             f"could not create a probe Job: {str(exc)[:300]}")]
+        verdict = ProbeVerdict()
+        deadline = time.monotonic() + timeout
+        try:
+            while True:
+                pods = api.list("pods", label_selector=f"{PREFLIGHT_LABEL}={name}")
+                events = self._events_for(api, pods)
+                verdict = read_probe(pods, events, [c for c, *_ in images])
+                if verdict.settled or time.monotonic() >= deadline:
+                    break
+                time.sleep(2)
+            log = ""
+            if reads_log and verdict.finished.get("engine"):
+                try:
+                    log = api.logs(f"{PREFLIGHT_LABEL}={name}", tail=5)
+                except Exception:  # noqa: BLE001
+                    log = ""
+        except Exception as exc:  # noqa: BLE001
+            verdict.error = str(exc)[:300]
+            log = ""
+        finally:
+            # A pull still in flight is left to finish: the image lands on the
+            # node for the first run, and the Job reaps itself.
+            if not verdict.pulling:
+                try:
+                    api.delete("job", name)
+                except Exception:  # noqa: BLE001 — labelled; findable by PREFLIGHT_LABEL
+                    logger.warning("could not delete preflight job %s", name)
+        return verdict.checks(images, model_path, machine.name, log if reads_log else None)
+
+    def _events_for(self, api: K8sApi, pods: list[dict]) -> list[dict]:
+        names = {(p.get("metadata") or {}).get("name") for p in pods}
+        if not names:
+            return []
+        try:
+            events = api.list("events")
+        except Exception:  # noqa: BLE001
+            return []
+        return [
+            e for e in events
+            if (e.get("involvedObject") or {}).get("kind") == "Pod"
+            and (e.get("involvedObject") or {}).get("name") in names
+        ]
+
     def _node_card_type(self, node_name: str) -> str:
         """The canonical card type of one node by name, for run provenance."""
         if not node_name:
@@ -1504,6 +1601,225 @@ class K8sDriver(DeploymentDriver):
             if _node_name(node) == node_name or len(nodes) == 1:
                 return _node_gpu_type(node)
         return ""
+
+
+_FILE_SUFFIXES = (".gguf", ".safetensors", ".bin", ".pt", ".pth")
+
+
+def render_preflight_job(
+    name: str,
+    machine: MachineInfo,
+    images: list[tuple[str, str, str, str]],
+    model_path: str,
+    settings: Settings,
+) -> tuple[dict, bool]:
+    """The preflight probe: one container per image, each doing nothing, on
+    the machine's node, the engine's with the model mounted as a run mounts it.
+
+    A hostPath model is mounted with a type check, so a missing path fails the
+    mount rather than appearing as an empty directory; the mount happens before
+    any pull, so a pull that starts proves the path. On a weights claim the
+    engine container looks for the path itself and says so in its log — the
+    second value returned."""
+    volumes: list[dict[str, Any]] = []
+    mounts: list[dict[str, Any]] = []
+    command = "exit 0"
+    reads_log = False
+    if model_path and images and images[0][0] == "engine":
+        pvc = (settings.k8s_model_pvc or "").strip()
+        if pvc:
+            volumes.append({"name": "weights",
+                            "persistentVolumeClaim": {"claimName": pvc, "readOnly": True}})
+            mounts.append({"name": "weights", "mountPath": "/weights", "readOnly": True})
+            target = shlex.quote("/weights/" + _model_subpath(model_path, settings))
+            command = f"if [ -e {target} ]; then echo model-present; else echo model-missing; fi"
+            reads_log = True
+        else:
+            kind = "File" if model_path.endswith(_FILE_SUFFIXES) else "Directory"
+            volumes.append({"name": "model", "hostPath": {"path": model_path, "type": kind}})
+            mounts.append({"name": "model", "mountPath": MODEL_MOUNT, "readOnly": True})
+    containers = []
+    for container_name, _, _, ref in images:
+        container: dict[str, Any] = {
+            "name": container_name,
+            "image": ref,
+            "command": ["sh", "-c", command if container_name == "engine" else "exit 0"],
+            # No cards: keep the NVIDIA runtime from handing it every GPU on the
+            # node because the image says "all".
+            "env": [{"name": "NVIDIA_VISIBLE_DEVICES", "value": "void"},
+                    {"name": "NVIDIA_DISABLE_REQUIRE", "value": "1"}],
+            "resources": {
+                "requests": {"cpu": "10m", "memory": "16Mi"},
+                "limits": {"cpu": "100m", "memory": "64Mi"},
+            },
+        }
+        if container_name == "engine" and mounts:
+            container["volumeMounts"] = mounts
+        containers.append(container)
+    pod_spec: dict[str, Any] = {
+        "restartPolicy": "Never",
+        "automountServiceAccountToken": False,
+        "terminationGracePeriodSeconds": 0,
+        "containers": containers,
+    }
+    if volumes:
+        pod_spec["volumes"] = volumes
+    selector = _node_selector_pairs(machine.node_selector, settings)
+    if selector:
+        pod_spec["nodeSelector"] = selector
+    # Where an engine would go: it asks for cards, so it tolerates the GPU taint.
+    tolerations = _tolerations(1, settings)
+    if tolerations:
+        pod_spec["tolerations"] = tolerations
+    pull_secrets = _image_pull_secrets(settings)
+    if pull_secrets:
+        pod_spec["imagePullSecrets"] = pull_secrets
+    labels = {MANAGED_LABEL: "true", PREFLIGHT_LABEL: name}
+    job = {
+        "apiVersion": "batch/v1",
+        "kind": "Job",
+        "metadata": {"name": name, "labels": labels},
+        "spec": {
+            "backoffLimit": 0,
+            # Left running only while a pull is still going; it reaps itself.
+            "ttlSecondsAfterFinished": 600,
+            "activeDeadlineSeconds": 3600,
+            "template": {"metadata": {"labels": labels}, "spec": pod_spec},
+        },
+    }
+    return job, reads_log
+
+
+class ProbeVerdict:
+    """What the preflight probe pod has shown so far."""
+
+    def __init__(self) -> None:
+        self.node = ""
+        self.images: dict[str, tuple[bool, str]] = {}  # container -> (pulled, message)
+        self.finished: dict[str, bool] = {}
+        self.mounted = False
+        self.mount_failed = ""
+        self.unschedulable = ""
+        self.error = ""
+        self.containers: list[str] = []
+
+    @property
+    def settled(self) -> bool:
+        if self.unschedulable or self.mount_failed:
+            return True
+        return bool(self.containers) and all(
+            c in self.images and (not self.images[c][0] or self.finished.get(c))
+            for c in self.containers
+        )
+
+    @property
+    def pulling(self) -> bool:
+        return not self.settled and not self.error and bool(self.containers)
+
+    def checks(
+        self,
+        images: list[tuple[str, str, str, str]],
+        model_path: str,
+        machine_name: str,
+        log: str | None,
+    ) -> list[Any]:
+        from app.control.launch import preflight as pf
+
+        where = self.node or machine_name
+        out: list[Any] = []
+        if self.unschedulable:
+            out.append(pf.Check(
+                "probe", "Placement", pf.FAIL,
+                f"no node took a pod with this machine's selector: {self.unschedulable[:300]}",
+                "A run is placed the same way, so it would wait here too.",
+            ))
+        for container_name, label, key, ref in images:
+            pulled = self.images.get(container_name)
+            if pulled and pulled[0]:
+                out.append(pf.Check(key, label, pf.PASS, f"{ref} is on {where}"))
+            elif pulled:
+                out.append(pf.Check(
+                    key, label, pf.FAIL, f"{where} cannot pull {ref}: {pulled[1][:300]}",
+                    "Check the name and tag, and that the nodes can reach the registry "
+                    "(credentials go in the cluster's image pull secrets).",
+                ))
+            elif self.mount_failed:
+                out.append(pf.Check(key, label, pf.SKIP,
+                                    f"{ref}: not checked, the model mount failed first"))
+            elif self.pulling:
+                out.append(pf.Check(
+                    key, label, pf.WARN,
+                    f"{ref} is still being pulled on {where}; the pull goes on in the "
+                    "background",
+                    "Re-run the checks in a few minutes to confirm it landed.",
+                ))
+            else:
+                out.append(pf.Check(key, label, pf.SKIP,
+                                    f"{ref}: not checked{': ' + self.error if self.error else ''}"))
+        if model_path and images and images[0][0] == "engine":
+            if self.mount_failed:
+                out.append(pf.Check(
+                    "model_path", "Model path", pf.FAIL,
+                    f"{model_path} is not on {where}: {self.mount_failed[:300]}",
+                    "Runs mount it from the node; put the weights there, or point the "
+                    "campaign at where they are.",
+                ))
+            elif log is not None and "model-present" in log:
+                out.append(pf.Check("model_path", "Model path", pf.PASS,
+                                    f"{model_path} is on the weights volume"))
+            elif log is not None and "model-missing" in log:
+                out.append(pf.Check(
+                    "model_path", "Model path", pf.FAIL,
+                    f"{model_path} is not on the weights volume",
+                    "Runs mount it from the cluster's weights claim; check the path "
+                    "against the claim's root.",
+                ))
+            elif log is None and self.mounted:
+                out.append(pf.Check("model_path", "Model path", pf.PASS,
+                                    f"{model_path} exists on {where}"))
+            else:
+                out.append(pf.Check("model_path", "Model path", pf.SKIP,
+                                    "not checked: the probe did not get that far"))
+        return out
+
+
+def read_probe(pods: list[dict], events: list[dict], containers: list[str]) -> ProbeVerdict:
+    """Read the preflight probe's pod and its events into a verdict."""
+    verdict = ProbeVerdict()
+    verdict.containers = list(containers)
+    for pod in pods[:1]:
+        verdict.node = (pod.get("spec") or {}).get("nodeName") or ""
+        status = pod.get("status") or {}
+        for cond in status.get("conditions") or []:
+            if (cond.get("type") == "PodScheduled" and cond.get("status") == "False"
+                    and cond.get("reason") == "Unschedulable"):
+                verdict.unschedulable = cond.get("message") or "Unschedulable"
+        for container in status.get("containerStatuses") or []:
+            name = container.get("name")
+            state = container.get("state") or {}
+            waiting = state.get("waiting") or {}
+            reason = waiting.get("reason") or ""
+            if reason in _IMAGE_PULL_FAILURES:
+                verdict.images[name] = (False, waiting.get("message") or reason)
+            elif state.get("running") or state.get("terminated") or (
+                reason and reason not in ("ContainerCreating", "PodInitializing")
+            ):
+                # Running, finished, or failing past the pull (no shell in the
+                # image): either way the node has the image.
+                verdict.images[name] = (True, "")
+                verdict.finished[name] = bool(state.get("terminated")) or bool(
+                    reason and not state.get("running"))
+                verdict.mounted = True
+    for event in sorted(events, key=lambda e: e.get("lastTimestamp") or e.get("eventTime") or ""):
+        reason = event.get("reason")
+        if reason == "FailedMount":
+            verdict.mount_failed = event.get("message") or reason
+        elif reason in ("Pulling", "Pulled"):
+            # Volumes are mounted before any image is pulled.
+            verdict.mounted = True
+    if verdict.mounted:
+        verdict.mount_failed = ""
+    return verdict
 
 
 def _yaml_ish(manifests: list[dict]) -> str:

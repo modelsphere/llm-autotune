@@ -3,7 +3,7 @@
 面向工程师：平台是怎么搭起来的，以及决定其余一切的几个关键选择。不涉及代码的版本见
 [产品视角](workflow.zh.md)。English：[Architecture](architecture.md)
 
-![平台架构：GPU 机器上的 policy 向 API 请求运行；supervisor 启动每个配置，LLMBench 压测，优胜者变成 merge request](api/diagrams/platform-architecture.zh.svg)
+![平台架构：GPU 机器上的 policy 向 API 请求运行；supervisor 启动每个配置，LLMBench 压测，平台验证最优配置](api/diagrams/platform-architecture.zh.svg)
 
 - **API** —— 一个 FastAPI 服务：UI 背后的 REST API、[policy API](api/policy-contract.md)、
   [agent API](api/agent-api.md) 和 [machine lease API](api/machine-lease.md)。
@@ -27,17 +27,17 @@ run 推进一个合法步骤，然后提交一次。每个 tick 都从数据库�
 policy 请求的 engine 还会用到一个状态 `serving`：像普通 run 一样启动并做健康检查，然后留给 policy 使用，
 而不是直接压测。
 
-一个 tick 的顺序：插件步骤 → campaign 时间窗 → 租约 → 停止请求 → dataset pin → 规划 → baseline 生命周期 →
-policy session → 调度 → 推进 run → 执行时间窗截止 → 回收已拆除的容器 → 自动晋级。时钟类步骤先跑，所以一个
+一个 tick 的顺序：插件步骤 → campaign 时间窗 → 租约 → 停止请求 → dataset pin → 规划 →
+policy session → 调度 → 推进 run → 执行时间窗截止 → 回收已拆除的容器。时钟类步骤先跑，所以一个
 tick 不会启动同一个 tick 就要拆掉的 run。
 
 ## 两种承载方式，同一个 launch spec
 
 两个 driver 把同一个 `LaunchSpec` 渲染成同一条 engine 命令，区别只在跑在哪里。
 
-![裸金属 ssh：捕获、清空、运行配置、恢复。Kubernetes：提交、调度、服务、删除。](assets/substrates-zh.svg)
+![裸金属 ssh：租用、运行配置、服务、移除。Kubernetes：提交、调度、服务、删除。](assets/substrates-zh.svg)
 
-裸金属机器和生产共用，所以清空之前先捕获，归还之前先恢复。Kubernetes 上的 run 借用空闲 GPU，所以不需要恢复。
+裸金属机器空闲地租给平台，平台只移除它自己启动的容器。Kubernetes 上的 run 借用空闲 GPU。
 Kubernetes driver 只申请 GPU 数量，由 scheduler 放置 pod（机器可以指定 node selector）；起不来的 pod，
 比如模型路径不存在、镜像拉不下来，会很快带着真实原因失败。它渲染一个普通 `Deployment`，或者交给
 [operator](../operator/README.md) 的 `TuningRun`。
@@ -74,7 +74,7 @@ replay benchmark 回放一份生产流量样本，而流量会变化。什么时
 
 每个边界都是一个窄接口，实现注册在 registry 里；核心不知道自己在和哪个实现打交道。
 
-![核心周围的接缝：policy、launch driver、engine adapter、evaluator、promotion target、插件](assets/seams-zh.svg)
+![核心周围的接缝：policy、launch driver、engine adapter、evaluator、插件](assets/seams-zh.svg)
 
 | 接缝 | 接口 | 实现 |
 |---|---|---|
@@ -82,7 +82,6 @@ replay benchmark 回放一份生产流量样本，而流量会变化。什么时
 | Launch driver | `launch · state · teardown · attach` | `ssh_docker`、`k8s` |
 | Engine adapter | 设置 → engine 命令 | `sglang`、`vllm` |
 | Evaluator | `start · poll` | health gate、LLMBench |
-| Promotion target | `open_rollout · status` | `manual`、`gitlab` |
 | 插件 | 路由、tick 步骤、表、页面 | [你的扩展包](plugins.md) |
 
 平台会校验并规范化 policy 提出的每个配置，并自己计算 objective，所以 policy 看到的和排行榜排出的不会不一致。
@@ -92,6 +91,6 @@ replay benchmark 回放一份生产流量样本，而流量会变化。什么时
 - **职责分离。** policy 从不碰机器。supervisor 是机器和 run 的唯一写入者。
 - **共用判断。** 生命周期问题（这个租约在排空吗？这个 run 塞得进时间窗吗？）由 worker 和 UI 共用同一段代码回答，
   所以两边不会不一致。
-- **baseline 互锁。** 在共用机器上，只有生产已被捕获并清空后才跑实验；只有生产已恢复并能响应后才归还机器。
+- **租约就是交接。** 机器空闲地交给平台，租约结束时归还；平台只停掉它自己启动的东西。
 - **结果可比。** 一个 campaign 在 pin 住的 dataset 上给每个配置打分，并用同样方式测量生产，所以即使绝对数字漂移，
   "比生产高 12%"依然成立。

@@ -167,7 +167,7 @@ async def test_the_platforms_routes_are_untouched(client):
 
 
 def test_its_planner_plans_only_the_campaigns_it_labels(tmp_path, monkeypatch):
-    from app.db.models import BaselineStatus, CampaignStatus, Candidate, Machine, MachineState
+    from app.db.models import CampaignStatus, Candidate, Machine, MachineState
 
     url, engine = _database(tmp_path)
     plugins.upgrade(example_plugin.plugin, url)
@@ -178,7 +178,6 @@ def test_its_planner_plans_only_the_campaigns_it_labels(tmp_path, monkeypatch):
             Machine(
                 id=1, name="gpu-01", host="10.0.0.1", gpu_count=8,
                 state=MachineState.AVAILABLE.value,
-                baseline_status=BaselineStatus.CLEARED.value,
             )
         )
         for campaign_id in (1, 2):

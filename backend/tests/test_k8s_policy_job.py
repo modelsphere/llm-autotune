@@ -103,6 +103,9 @@ def test_a_self_serving_policy_takes_cards_placement_and_weights():
     assert container["resources"]["limits"] == {"nvidia.com/gpu": 2}
     assert pod["nodeSelector"] == {"nvidia.com/gpu.product": "NVIDIA-A100-SXM4-80GB"}
     assert pod["runtimeClassName"] == "nvidia"
+    # A GPU node's taint keeps card-less pods off it, not GPU work.
+    assert {"key": "nvidia.com/gpu", "operator": "Exists", "effect": "NoSchedule"} \
+        in pod["tolerations"]
     assert pod["volumes"][0]["hostPath"]["path"] == "/mnt/disk0/models/qwen"
     assert container["volumeMounts"][0] == {
         "name": "vol-0", "mountPath": "/model", "readOnly": True
@@ -205,3 +208,10 @@ def test_an_ssh_machine_is_unaffected():
         host = "10.0.0.9"
 
     _require_self_serving_is_reachable(_M())  # no raise
+
+
+def test_a_delegated_policy_takes_only_the_declared_tolerations():
+    pod = render_policy_job(_spec(), _clone(k8s_tolerations="dedicated=ml:NoSchedule"))
+    tolerations = pod["spec"]["template"]["spec"]["tolerations"]
+    assert tolerations == [{"key": "dedicated", "operator": "Equal", "value": "ml",
+                            "effect": "NoSchedule"}]

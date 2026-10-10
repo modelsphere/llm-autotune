@@ -17,7 +17,6 @@ from app.datasets import pinning
 from app.datasets.profiles import BuildInFlight, DatasetBuild, same_dataset
 from app.db.base import Base
 from app.db.models import (
-    BaselineStatus,
     Campaign,
     CampaignStatus,
     Candidate,
@@ -98,8 +97,7 @@ def _stack(*, profile=PROFILE, policy=pinning.REBUILD_AT_START, profiles=None, *
         session.add(User(id=1, username="u", password_hash="x"))
         session.add(
             Machine(id=1, name="node-24", host="10.0.0.1", gpu_count=8,
-                    state=MachineState.AVAILABLE.value,
-                    baseline_status=BaselineStatus.CLEARED.value)
+                    state=MachineState.AVAILABLE.value)
         )
         session.add(
             Campaign(id=1, owner_id=1, name="c", engine="sglang", image="img",
@@ -176,8 +174,7 @@ def _single_stage_stack(profiles):
         session.add(User(id=1, username="u", password_hash="x"))
         session.add(
             Machine(id=1, name="node-24", host="10.0.0.1", gpu_count=8,
-                    state=MachineState.AVAILABLE.value,
-                    baseline_status=BaselineStatus.CLEARED.value)
+                    state=MachineState.AVAILABLE.value)
         )
         session.add(
             Campaign(id=1, owner_id=1, name="c", engine="sglang", image="img",

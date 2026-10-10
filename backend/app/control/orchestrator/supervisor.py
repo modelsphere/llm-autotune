@@ -19,8 +19,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app import plugins
-from app.control.baseline import resolve_baseline, same_config
-from app.control.engine_command import baseline_engine_args, engine_of_command
+from app.control.baseline import resolve_baseline
 from app.control.launch import (
     DeploymentDriver,
     DeploymentState,
@@ -38,24 +37,19 @@ from app.control.launch.failures import (
     is_transient_placement,
 )
 from app.control.orchestrator import schedule as sched
+from app.control.orchestrator import timing
 from app.control.orchestrator.groups import members_by_rank
 from app.control.orchestrator.lifecycle import (
-    CANARY_DUE,
     USER_STOP_ERROR,
     accepts_new_work,
     campaigns_using,
     campaigns_waiting_on,
-    canaries_since_activation,
-    canary_state,
     drain_kills_running,
     frozen_by_pause,
     has_valid_candidates,
-    last_activation,
-    last_cleared_at,
     lease_expired,
     live_runs_on,
     machine_has_live_session,
-    restore_due,
     teardown_pending_on,
     window_allows_new_run,
     window_allows_run_of,
@@ -70,7 +64,6 @@ from app.control.orchestrator.machine_queue import campaign_key, session_key, wa
 from app.control.orchestrator.occupancy import holds, reservations_on
 from app.control.orchestrator.packing import Placement, choose_next, free_indices
 from app.control.orchestrator.states import can_transition
-from app.control.promotion import winner as winner_of
 from app.control.run_nodes import machine_hosts_live_gang, nodes_of, run_ids_on_machine
 from app.control.search import CandidateConfig
 from app.control.search.space import expand
@@ -93,7 +86,6 @@ from app.db.models import (
     TERMINAL_RUN_STATES,
     TERMINAL_SESSION_STATES,
     Baseline,
-    BaselineStatus,
     Campaign,
     CampaignStatus,
     Candidate,
@@ -107,7 +99,6 @@ from app.db.models import (
     MachineState,
     PolicySession,
     PolicyTrial,
-    Promotion,
     Result,
     Run,
     RunKind,
@@ -277,7 +268,6 @@ class Supervisor:
             self._release_queued_while_paused(session)
             self._advance_dataset_pins(session)
             self._plan(session)
-            self._advance_baseline_lifecycle(session)
             # After the baseline lifecycle (a session needs a CLEARED machine),
             # before scheduling (its machine must be reserved before _schedule
             # could offer it to a classic campaign).
@@ -291,10 +281,6 @@ class Supervisor:
             # when its container goes quietly — matching the old immediate
             # release — and lingers only when it genuinely refuses to.
             self._reap_teardowns(session)
-            # Last of all, and deliberately after everything that can finish a
-            # campaign: a campaign that asked to propose its own winner does it
-            # in the same tick it becomes DONE.
-            self._advance_auto_promotions(session)
             session.commit()
 
     def _run_plugin_steps(self, session: Session) -> None:
@@ -312,130 +298,6 @@ class Supervisor:
                         plugin.name,
                         getattr(step, "__name__", repr(step)),
                     )
-
-    # ---------------------------------------------------- unattended promotion
-
-    def _advance_auto_promotions(self, session: Session) -> None:
-        """Propose the winner of a finished campaign that asked for it.
-
-        Keyed on the campaign being DONE rather than hooked into the places
-        that set it — a campaign reaches DONE from a closed schedule, an
-        exhausted search and a policy session ending, and a proposal that only
-        happened down some of those paths would be worse than none.
-
-        Runs at most once per campaign: the existence of ANY promotion row is
-        the mark. A failed one stays failed and visible on the campaign page
-        rather than being retried every ten seconds — and a winner promoted by
-        hand first means the platform has nothing left to say.
-
-        When there is nothing to propose — no successful run, a winner that
-        crosses a redline, a winner production already runs — it says so once
-        and keeps the flag ON. DONE is not final: retrying the failed runs of a
-        campaign whose every launch was refused revives it, and a campaign that
-        disarmed itself on the way past would never propose the winner it went
-        on to find. "Once" is one `auto_promotion_skipped` event per reason; a
-        DIFFERENT reason is news and is recorded again.
-        """
-        campaigns = session.scalars(
-            select(Campaign).where(
-                Campaign.status == CampaignStatus.DONE.value,
-                Campaign.auto_promote.is_(True),
-            )
-        ).all()
-        if not campaigns:
-            return
-        promoted = set(
-            session.scalars(
-                select(Promotion.campaign_id).where(
-                    Promotion.campaign_id.in_([c.id for c in campaigns])
-                )
-            ).all()
-        )
-        target_name = self.settings.promotion_target or "manual"
-        for campaign in campaigns:
-            if campaign.id in promoted:
-                continue
-            try:
-                found = winner_of.resolve(session, campaign)
-            except Exception:  # noqa: BLE001 — one campaign must not stop the pass
-                logger.exception("auto-promotion could not resolve campaign %d", campaign.id)
-                continue
-            if found is None:
-                self._skip_promotion(
-                    session, campaign, "no successful, benchmarked run to promote"
-                )
-                continue
-            if not found.holds_redlines:
-                # A winner that crosses an SLO is a rejected option. The button
-                # can force it past this; an unattended pass must not.
-                self._skip_promotion(
-                    session, campaign, "the best run crosses a redline",
-                    run_id=found.run.id, breaches=list(found.entry.breaches or []),
-                )
-                continue
-            draft = None
-            if target_name == "gitlab":
-                try:
-                    draft = winner_of.draft_for(
-                        found, actor="autotune", ui_url=self.settings.public_ui_url
-                    )
-                except Exception as exc:  # noqa: BLE001 — recorded, not raised
-                    logger.exception("auto-promotion could not draft campaign %d", campaign.id)
-                    draft = winner_of.failed_draft(str(exc))
-                if draft.unchanged:
-                    # The winner IS what production runs. Nothing to propose,
-                    # and nothing went wrong — a promotion row here would be a
-                    # red badge on a campaign that did its job.
-                    self._skip_promotion(
-                        session, campaign, draft.reason, run_id=found.run.id
-                    )
-                    continue
-            promotion = winner_of.promote(
-                session,
-                found,
-                actor="autotune",
-                target_name=target_name,
-                ui_url=self.settings.public_ui_url,
-                draft=draft,
-            )
-            self._event(
-                session, "promotion_opened", campaign_id=campaign.id, run_id=found.run.id,
-                payload={
-                    "promotion": promotion.id,
-                    "target": promotion.target,
-                    "state": promotion.state,
-                    "auto": True,
-                    "branch": (promotion.refs or {}).get("target_branch", ""),
-                    "mr_url": (promotion.refs or {}).get("mr_url", ""),
-                    "error": promotion.error,
-                },
-            )
-            logger.info(
-                "campaign %d proposed its winner (run %d) to %s: %s",
-                campaign.id, found.run.id, promotion.target, promotion.state,
-            )
-
-    def _skip_promotion(
-        self, session: Session, campaign: Campaign, reason: str, **payload
-    ) -> None:
-        """Record that there is nothing to propose — once per reason.
-
-        The flag stays on: a campaign that reaches DONE with nothing to say may
-        still gain a winner (retried runs, a reopened window), and one that
-        disarmed itself on the way past could never propose it.
-        """
-        last = session.scalars(
-            select(Event)
-            .where(Event.campaign_id == campaign.id, Event.kind == "auto_promotion_skipped")
-            .order_by(Event.id.desc())
-            .limit(1)
-        ).first()
-        if last is not None and (last.payload or {}).get("reason") == reason:
-            return
-        self._event(
-            session, "auto_promotion_skipped", campaign_id=campaign.id,
-            payload={"reason": reason, **payload},
-        )
 
     # ------------------------------------------------------- campaign clocks
 
@@ -757,291 +619,19 @@ class Supervisor:
                 self._finish(session, run, RunStatus.KILLED, error="lease ended")
             return  # release on the next tick, once teardown has settled
 
-        # Nothing is running. If we are configured to put production back it
-        # goes back before the machine does — handing over a box whose service
-        # is still down is the outcome the capture/restore mechanism exists to
-        # prevent. With auto-restore off (the default) the admin owns that
-        # put-back: we hand the box back with production exactly as we left it,
-        # flag the manual restore now owed, and drop our baseline claim so the
-        # next hand-over re-inspects the box rather than trusting a stale one.
-        if machine.baseline_status == BaselineStatus.CLEARED.value:
-            services = (machine.baseline or {}).get("services")
-            if services and self.settings.auto_restore_production:
-                self._restore_production(session, machine, trigger="lease_end")
-                return  # confirm the restore landed before closing the lease
-            if services:
-                self._event(
-                    session, "production_left_down",
-                    payload={"machine": machine.name,
-                             "services": [s.get("container") for s in services]},
-                )
-                machine.baseline_status = BaselineStatus.NONE.value
-            else:
-                machine.baseline_status = BaselineStatus.RESTORED.value
-
+        # Nothing of ours is running: the machine goes back as it is.
         machine.lease_state = LeaseState.RELEASED.value
         machine.lease_released_at = _now()
         machine.state = MachineState.AWAY.value
         self._event(
             session, "lease_released",
-            payload={"machine": machine.name, "mode": machine.lease_end_mode,
-                     "baseline_status": machine.baseline_status},
+            payload={"machine": machine.name, "mode": machine.lease_end_mode},
         )
         logger.info("lease on %s released; machine handed back", machine.name)
-
-    # -------------------------------------------------- baseline lifecycle
-
-    def _advance_baseline_lifecycle(self, session: Session) -> None:
-        """Drive capture -> cleared -> restored without a human in the loop.
-
-        A night is unattended by definition, so the platform must be able to
-        take production down and put it back on its own. The safety does not
-        come from someone being awake, it comes from:
-          - the machine being marked available (that IS the hand-over),
-          - a capture existing (teardown is reversible), and
-          - a canary having PASSED (the machine is healthy and measured).
-        A failed canary leaves production untouched — a suspect machine is
-        exactly the one not to clear.
-        """
-        if not self.settings.auto_baseline_lifecycle:
-            return
-        for machine in session.scalars(select(Machine)).all():
-            if machine.state == MachineState.RESERVED.value:
-                continue  # a run holds it; decide later
-            if machine.lease_state == LeaseState.DRAINING.value:
-                continue  # _advance_drain owns this machine until it is handed back
-            try:
-                if machine.baseline_status in (
-                    BaselineStatus.NONE.value,
-                    BaselineStatus.RESTORED.value,
-                ):
-                    self._maybe_capture(session, machine)
-                elif machine.baseline_status == BaselineStatus.CAPTURED.value:
-                    self._maybe_clear(session, machine)
-                elif machine.baseline_status == BaselineStatus.CLEARED.value:
-                    self._maybe_restore(session, machine)
-            except Exception:
-                logger.exception("baseline lifecycle for %s failed", machine.name)
-
-    def _maybe_capture(self, session: Session, machine: Machine) -> None:
-        """Take the inventory that makes teardown reversible, on our own.
-
-        Capture only reads — it inspects what is running and writes it down —
-        so the preconditions are just that the machine has been handed over
-        (state available) and that some campaign is actually waiting for it.
-
-        Requiring a human to press Capture meant only the FIRST night was
-        unattended: a night ends with production RESTORED, and nothing moved a
-        machine from there back to CAPTURED, so the next campaign sat behind a
-        banner until someone clicked. Automating clear-and-restore while
-        leaving capture manual automated every step except the one that starts
-        the sequence.
-        """
-        if machine.state != MachineState.AVAILABLE.value:
-            return  # away = not ours yet; the hand-over itself stays manual
-        if not self._campaigns_waiting_on(session, machine):
-            return  # nobody needs this machine; do not touch it
-
-        info = self._machine_info(machine)
-        baseline = self._driver_for(info).capture_baseline(info)
-        services = baseline.get("services", [])
-        prior = (machine.baseline or {}).get("services")
-        if not services and prior:
-            # Prod-priority safeguard. We captured production on this box before
-            # and now see nothing. A service restarting is far likelier than the
-            # box having quietly become ours — and overwriting the capture with
-            # an empty one would both strand production (nothing left to restore
-            # it with) and mark the machine free, clearing the way to run our own
-            # containers over it. Keep the existing capture and status; the empty
-            # reading is treated as transient and retried on the next tick, never
-            # as permission to discard how production comes back.
-            logger.warning(
-                "capture on %s found nothing but a prior baseline exists "
-                "(%d service(s)); keeping it — production may be restarting",
-                machine.name, len(prior),
-            )
-            self._event(
-                session, "baseline_capture_kept_prior",
-                payload={"machine": machine.name,
-                         "prior_services": [s.get("container") for s in prior]},
-            )
-            return
-        machine.baseline = baseline
-        if services:
-            machine.baseline_status = BaselineStatus.CAPTURED.value
-            self._upsert_baselines(session, machine, services)
-            self._event(
-                session,
-                "baseline_captured_auto",
-                payload={
-                    "machine": machine.name,
-                    "services": [s.get("container") for s in services],
-                },
-            )
-            logger.info(
-                "captured %d production service(s) on %s", len(services), machine.name
-            )
-        else:
-            # Nothing is running, so there is nothing to put back and nothing
-            # to clear — the machine is already ours. Note this is a MEASURED
-            # emptiness: capture raises if it cannot reach the machine, so an
-            # unreachable host never reads as a free one.
-            machine.baseline_status = BaselineStatus.CLEARED.value
-            self._event(
-                session, "baseline_capture_found_nothing", payload={"machine": machine.name}
-            )
-            logger.info("no production services on %s; machine is free", machine.name)
-
-    def _upsert_baselines(
-        self, session: Session, machine: Machine, services: list[dict]
-    ) -> None:
-        """Promote each captured production service to a first-class baseline,
-        keyed by (served_model_name, engine, card_type).
-
-        The machine's capture stays the source of truth for RESTORE; this is the
-        reusable reference a campaign compares against, no longer tied to the box
-        it was captured on. A baseline a user set by hand is left alone — capture
-        maintains only the ones it created, so an operator override is not
-        silently overwritten the next night.
-        """
-        card_type = machine.gpu_type or ""
-        for service in services:
-            model = service.get("served_model_name")
-            if not model:
-                continue
-            engine = engine_of_command(
-                service.get("command") or service.get("docker_run")
-            ) or "sglang"
-            engine_args = service.get("engine_args")
-            if engine_args is None:
-                engine_args = baseline_engine_args(
-                    service.get("command") or service.get("docker_run")
-                )
-            existing = session.scalars(
-                select(Baseline).where(
-                    Baseline.served_model_name == model,
-                    Baseline.engine == engine,
-                    Baseline.card_type == card_type,
-                )
-            ).first()
-            if existing is None:
-                session.add(
-                    Baseline(
-                        served_model_name=model, engine=engine, card_type=card_type,
-                        engine_args=engine_args, source=f"capture:{machine.name}",
-                    )
-                )
-            elif existing.source.startswith("capture"):
-                existing.engine_args = engine_args
-                existing.source = f"capture:{machine.name}"
 
     def _campaigns_waiting_on(self, session: Session, machine: Machine) -> list[Campaign]:
         """Campaigns that would start work on this machine right now."""
         return campaigns_waiting_on(session, machine, self.settings.default_max_run_minutes)
-
-    def _maybe_clear(self, session: Session, machine: Machine) -> None:
-        """Clear only once every campaign waiting on this machine has its OWN
-        passing canary.
-
-        A canary from an earlier campaign is stale evidence: it measured a
-        different production state at a different time. Accepting it once let
-        the lifecycle tear production down before this campaign's canary had
-        even been scheduled — so the night ran with no baseline at all.
-        """
-        waiting = self._campaigns_waiting_on(session, machine)
-        if not waiting:
-            return
-
-        canary_passed = None
-        for campaign in waiting:
-            if not self._in_place_canary_applies(session, campaign, machine):
-                # No in-place canary is owed: either the campaign wants no
-                # baseline, or production does not run the baseline config, so
-                # the baseline is measured by relaunch instead. Clearing waits on
-                # nothing here — the relaunch happens on the freed cards.
-                continue
-            canary = session.scalars(
-                select(Run)
-                .where(
-                    Run.campaign_id == campaign.id,
-                    Run.id.in_(run_ids_on_machine(machine.id)),
-                    Run.kind == RunKind.BASELINE.value,
-                )
-                .order_by(Run.id.desc())
-                .limit(1)
-            ).first()
-            if canary is None or canary.status != RunStatus.SUCCEEDED.value:
-                # Not yet run, still running, or failed — either way production
-                # stays up. A failed canary means the machine is suspect.
-                return
-            canary_passed = canary
-        info = self._machine_info(machine)
-        stopped = self._driver_for(info).clear_baseline(info, machine.baseline)
-        machine.baseline_status = BaselineStatus.CLEARED.value
-        self._event(
-            session, "baseline_cleared_auto",
-            payload={"machine": machine.name, "stopped": stopped,
-                     "after_canary_run": canary_passed.id if canary_passed else None},
-        )
-        logger.info(
-            "cleared production on %s (canary run %s)",
-            machine.name, canary_passed.id if canary_passed else "not required",
-        )
-
-    def _maybe_restore(self, session: Session, machine: Machine) -> None:
-        """Put production back once the night's window has closed.
-
-        Whether it is owed is `restore_due` — the same function the Resources
-        page reads to say "Restoring production". Asked twice, the two answers
-        drifted: the page promised a restore this method was never going to do.
-        """
-        if not self.settings.auto_restore_production:
-            return  # off by default: the admin owns the put-back, not us
-        if not restore_due(session, machine):
-            return
-        live = session.scalars(
-            select(Run)
-            .where(
-                Run.id.in_(run_ids_on_machine(machine.id)),
-                Run.status.not_in([s.value for s in TERMINAL_RUN_STATES]),
-            )
-            .limit(1)
-        ).first()
-        if live is not None:
-            return
-        # A live policy session holds the machine the way runs do — its
-        # self-served engines sit on the very ports a restore would reclaim.
-        if machine_has_live_session(session, machine):
-            return
-        self._restore_production(session, machine, trigger="window_end")
-
-    def _restore_production(self, session: Session, machine: Machine, trigger: str) -> None:
-        """Put production back and check that what came back is what we took.
-
-        Shared by the two things that can owe a machine its service: a
-        campaign window closing, and a lease ending. They are different
-        decisions with the same consequence, and having written the
-        consequence twice is how one of them would eventually skip
-        verification.
-        """
-        info = self._machine_info(machine)
-        driver = self._driver_for(info)
-        restored = driver.restore_baseline(info, machine.baseline)
-        findings = driver.verify_baseline(info, machine.baseline)
-        drift = [f for f in findings if not f.get("ok")]
-        machine.baseline_status = BaselineStatus.RESTORED.value
-        machine.baseline = {**machine.baseline, "restore_verification": findings}
-        self._event(
-            session,
-            "baseline_restored_auto" if not drift else "baseline_restored_auto_with_drift",
-            payload={"machine": machine.name, "restored": restored,
-                     "trigger": trigger, "verification": findings},
-        )
-        level = logger.warning if drift else logger.info
-        level("restored production on %s (%s; drift: %s)", machine.name, trigger, drift or "none")
-
-    def _last_cleared_at(self, session: Session, machine: Machine) -> datetime | None:
-        return last_cleared_at(session, machine)
 
     def _has_valid_candidates(self, session: Session, campaign: Campaign) -> bool:
         return has_valid_candidates(session, campaign)
@@ -1398,31 +988,13 @@ class Supervisor:
             if not is_staged(campaign) and self._waiting_on_dataset(campaign):
                 continue
 
-            # The night's control run, the shortcut path: benchmark the handed-
-            # over production service in place, BEFORE it is torn down, when it
-            # already runs the baseline config. Anchors cross-night comparison
-            # and catches an unhealthy machine before any experiment burns time.
-            canary_on = next(
-                (
-                    machine
-                    for machine in self._usable_machines(session, campaign)
-                    if self._baseline_canary_due(session, campaign, machine)
-                ),
-                None,
-            )
-            if canary_on is not None:
-                self._schedule_baseline_canary(session, campaign, canary_on)
-                continue
-
-            # A policy campaign keeps ONLY the canary above: its machine gate
-            # (capture → canary → clear) is shared, but its runs come from the
-            # session, and a relaunch baseline here would eat the session's
-            # cards for the whole screening benchmark.
+            # A policy campaign's runs come from its session; a relaunch
+            # baseline here would eat the session's cards for a whole benchmark.
             if campaign.policy_id:
                 continue
 
-            # No shortcut applied — measure the baseline by relaunching it, as
-            # one more config the pipeline screens (and later verifies).
+            # Measure the production reference by launching it, as one more
+            # config the pipeline screens (and later verifies).
             self._ensure_relaunch_baseline(session, campaign)
             waiting.append((campaign_key(session, campaign), "campaign", campaign))
 
@@ -1543,17 +1115,6 @@ class Supervisor:
             return self._start_gang(session, campaign, pending, by_id, blocked=blocked, busy=busy)
 
         for machine in self._usable_machines(session, campaign):
-            # Experiments need production off the machine: captured (so it can
-            # be restored) and cleared (so it is not competing for GPUs and
-            # skewing every measurement).
-            #
-            # CLEARED is the only state that says so. NONE used to be accepted
-            # too, on the assumption that a machine we had never inspected was
-            # empty — but that is precisely what we have not checked. A machine
-            # capture could not reach stays NONE, and launching there would put
-            # experiments next to whatever is already serving.
-            if machine.baseline_status != BaselineStatus.CLEARED.value:
-                continue
             if machine.id in blocked and not holds(session, machine, campaign.id):
                 busy.add(machine.id)
                 continue
@@ -1671,7 +1232,6 @@ class Supervisor:
             # one as it frees would push the gang back indefinitely.
             if busy is not None and all(
                 accepts_new_work(m) and not m.needs_attention
-                and m.baseline_status == BaselineStatus.CLEARED.value
                 for m in members
             ):
                 busy.update(m.id for m in members)
@@ -2004,19 +1564,6 @@ class Supervisor:
             port += 1
         return campaign.service_port  # give up; the driver's pre-check will refuse
 
-    def _baseline_canary_due(self, session: Session, campaign: Campaign, machine: Machine) -> bool:
-        """Is an in-place baseline canary owed right now?
-
-        The canary is a speedup, not a duty: measuring the deployed service in
-        place only stands in for the baseline when production already runs the
-        baseline config. When it does not, there is nothing to shortcut — the
-        baseline is measured by relaunching it — so the canary is not due and
-        clearing production is not gated on one."""
-        return (
-            canary_state(session, campaign, machine) == CANARY_DUE
-            and self._in_place_canary_applies(session, campaign, machine)
-        )
-
     def _campaign_baseline(
         self, session: Session, campaign: Campaign, machine: Machine | None = None
     ) -> Baseline | None:
@@ -2031,87 +1578,6 @@ class Supervisor:
             )
         return resolve_baseline(
             session, campaign.served_model_name, campaign.engine, card_type or ""
-        )
-
-    def _in_place_canary_applies(
-        self, session: Session, campaign: Campaign, machine: Machine
-    ) -> bool:
-        """Does production on this machine already serve the baseline config?
-
-        The one condition under which measuring the deployed service in place is
-        a valid stand-in for relaunching the baseline — and the thing `_maybe_
-        clear` reads to know whether clearing waits on a canary at all."""
-        if not campaign.run_baseline_canary:
-            return False
-        baseline = self._campaign_baseline(session, campaign, machine)
-        if baseline is None:
-            # No reference was defined, so there is no "other" config to prefer:
-            # production IS the baseline, and measuring it in place is the only
-            # sensible thing. (Capture upserts a reference on hand-over, so this
-            # is the pre-capture / no-baseline case, not the common one.)
-            return True
-        for service in (machine.baseline or {}).get("services", []):
-            config = service.get("engine_args") or baseline_engine_args(
-                service.get("command") or service.get("docker_run")
-            )
-            if same_config(config, baseline.engine_args):
-                return True
-        return False
-
-    def _canaries_since_activation(
-        self, session: Session, campaign: Campaign, machine: Machine
-    ) -> list[Run]:
-        return canaries_since_activation(session, campaign, machine)
-
-    def _last_activation(self, session: Session, campaign: Campaign) -> datetime:
-        return last_activation(session, campaign)
-
-    def _schedule_baseline_canary(
-        self, session: Session, campaign: Campaign, machine: Machine
-    ) -> None:
-        """A baseline run measures what is already deployed: nothing to launch,
-        nothing to tear down. It starts at the health gate."""
-        services = (machine.baseline or {}).get("services", [])
-        service = next((s for s in services if s.get("endpoint_url")), None)
-        if service is None:
-            return
-
-        # Production's real engine config, unified with search configs: the
-        # canary reads, renders and card-normalizes exactly like a candidate.
-        # Fall back to parsing the command for services captured before the
-        # config was stored. The run is never launched (it starts at the health
-        # gate against the deployed service), so carrying real args is safe.
-        config = dict(
-            service.get("engine_args")
-            or baseline_engine_args(service.get("command") or service.get("docker_run"))
-        )
-        candidate = Candidate(
-            campaign_id=campaign.id,
-            config=config,
-            config_hash=f"baseline-{machine.id}",
-            kind=CandidateKind.BASELINE.value,
-            is_baseline=True,
-            status=CandidateStatus.EXHAUSTED.value,
-        )
-        session.add(candidate)
-        session.flush()
-
-        machine.state = MachineState.RESERVED.value
-        run = Run(
-            campaign_id=campaign.id,
-            candidate_id=candidate.id,
-            machine_id=machine.id,
-            kind=RunKind.BASELINE.value,
-            status=RunStatus.HEALTH_CHECK.value,  # already deployed
-            endpoint_url=service["endpoint_url"],
-            container_name=service.get("container", ""),
-            started_at=_now(),
-        )
-        session.add(run)
-        session.flush()
-        self._event(
-            session, "baseline_canary_scheduled", campaign_id=campaign.id, run_id=run.id,
-            payload={"machine": machine.name, "endpoint": service["endpoint_url"]},
         )
 
     def _has_baseline_candidate(
@@ -2153,9 +1619,9 @@ class Supervisor:
         return candidate
 
     def _ensure_relaunch_baseline(self, session: Session, campaign: Campaign) -> None:
-        """Measure the baseline by relaunching it, when the in-place shortcut did
-        not apply. One screen baseline now; the verify baseline is added with the
-        shortlist in `_schedule_verification`, once there is a dataset to pin."""
+        """Measure the baseline by relaunching it. One screen baseline now; the
+        verify baseline is added with the shortlist in `_schedule_verification`,
+        once there is a dataset to pin."""
         if not campaign.run_baseline_canary:
             return
         if self._has_baseline_candidate(session, campaign, SCREEN):
@@ -2309,33 +1775,18 @@ class Supervisor:
                 self._capture_failure(session, run, handle)
 
     def _advance_baseline(self, session: Session, run: Run) -> None:
-        """Baseline canary: health-check then benchmark an already-running
-        production service. No launch, no teardown."""
+        """A run against an endpoint the platform did not launch: health-check
+        then benchmark it. No launch, no teardown."""
         campaign = run.campaign
-        served_model = (
-            next(
-                (
-                    s.get("served_model_name")
-                    for s in (run.machine.baseline or {}).get("services", [])
-                    if s.get("endpoint_url") == run.endpoint_url
-                ),
-                "",
-            )
-            if run.machine
-            else ""
-        ) or campaign.served_model_name
+        served_model = campaign.served_model_name
 
         if run.status == RunStatus.HEALTH_CHECK.value:
             ref = self.health.start(run.endpoint_url, served_model, {})
             outcome = self.health.poll(ref)
             if outcome.status != EvalStatus.PASSED and _looks_unreachable(outcome.error):
-                # Nothing is listening yet. A production service that has just
-                # been restored has its container up within seconds and its
-                # weights loaded minutes later, so an immediate probe finds a
-                # refused connection — and because a canary fails inside one
-                # tick, all three attempts burn in twenty seconds against a
-                # service that was about to be fine. Wait, as an experiment
-                # waiting for readiness would.
+                # Nothing is listening yet — an engine that has just come up
+                # loads its weights for minutes. Wait, as an experiment waiting
+                # for readiness would, rather than fail inside one tick.
                 if not self._ready_timed_out(run):
                     logger.info(
                         "baseline run %d: %s not answering yet, waiting",
@@ -2344,7 +1795,7 @@ class Supervisor:
                     return
                 self._record_result(session, run, "health", outcome)
                 self._fail(
-                    session, run, "baseline_unreachable",
+                    session, run, "endpoint_unreachable",
                     f"nothing answering at {run.endpoint_url} after "
                     f"{self.settings.ready_timeout_minutes} min: {outcome.error}",
                 )
@@ -2353,7 +1804,7 @@ class Supervisor:
             if outcome.status != EvalStatus.PASSED:
                 # It answered, and answered badly — the handed-over service is
                 # unhealthy, which is a fact worth knowing before the night.
-                self._fail(session, run, "baseline_unhealthy", outcome.error)
+                self._fail(session, run, "endpoint_unhealthy", outcome.error)
                 return
             try:
                 bench_ref = self.bench.start(
@@ -2389,6 +1840,7 @@ class Supervisor:
             if window_end is not None and _now() >= window_end:
                 if run.llmbench_submission_id:
                     self.bench.cancel(run.llmbench_submission_id)
+                timing.record_cut(session, run, stage_of_run(run), _now())
                 self._finish(session, run, RunStatus.KILLED, error="window cutoff")
 
     # --------------------------------------------------------------- helpers
@@ -2596,6 +2048,12 @@ class Supervisor:
             payload={"from": run.status, "to": target.value},
         )
         run.status = target.value
+        # The platform watches every run come up and come back anyway; keeping
+        # the numbers is what lets the window math stop asking for guesses.
+        if target in (RunStatus.BENCHING, RunStatus.SERVING):
+            timing.record_ready(session, run, _now())
+        elif target == RunStatus.SUCCEEDED:
+            timing.record_finished(session, run, stage_of_run(run), _now())
 
     def _note_placement(self, session: Session, run: Run, waiting: str) -> None:
         """Keep `runs.waiting_since` true, and announce each edge once.
@@ -2690,7 +2148,7 @@ class Supervisor:
         Bounded, so a genuinely unlaunchable config cannot loop forever.
         """
         if run.kind == RunKind.BASELINE.value:
-            return  # a canary is not a candidate; failing it is the signal
+            return  # a measurement of something we did not launch; not ours to retry
         if run.kind in (RunKind.POLICY_LAUNCH.value, RunKind.EXTERNAL.value):
             return  # the policy decides whether to retry its own requests
         if not is_infrastructure(run.failure_class):
@@ -3066,8 +2524,6 @@ class Supervisor:
             return sum(m.gpu_count for _, m in members_by_rank(session, group) if m.gpu_count > 0)
         slots = 0
         for machine in self._usable_machines(session, campaign):
-            if machine.baseline_status != BaselineStatus.CLEARED.value:
-                continue
             # A member of a live gang contributes no single-node slots while the
             # gang runs — the same closure `_start_one` applies, so the proposal
             # budget and the packer agree on the capacity.
@@ -3096,8 +2552,6 @@ class Supervisor:
         """
         for _, machine in members_by_rank(session, group):
             if not accepts_new_work(machine) or machine.needs_attention:
-                return False
-            if machine.baseline_status != BaselineStatus.CLEARED.value:
                 return False
             if machine.gpu_count <= 0:
                 return False
@@ -3158,7 +2612,11 @@ class Supervisor:
     def _window_allows_stage(self, campaign: Campaign, stage: str) -> bool:
         return window_allows_run_of(
             campaign,
-            _stage_max_run_minutes(campaign, stage, self.settings.default_max_run_minutes),
+            timing.window_minutes(
+                campaign, stage,
+                _stage_max_run_minutes(campaign, stage, self.settings.default_max_run_minutes),
+                self.settings.default_max_run_minutes,
+            ),
         )
 
     def _not_planned_yet(self, session: Session, campaign: Campaign) -> bool:

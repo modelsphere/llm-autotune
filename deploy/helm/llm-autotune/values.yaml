@@ -48,10 +48,10 @@ corsOrigins: "*"
 # (docs/deploying.md#other-settings lists the ones installs usually need).
 # Take secrets from a Secret, not a literal:
 #   extraEnv:
-#     - name: AUTOTUNE_PROMOTION_TARGET
-#       value: gitlab
-#     - name: AUTOTUNE_GITLAB_TOKEN
-#       valueFrom: {secretKeyRef: {name: autotune-gitlab, key: token}}
+#     - name: AUTOTUNE_DEFAULT_DAILY_START
+#       value: "23:00"
+#     - name: AUTOTUNE_LLMBENCH_API_KEY
+#       valueFrom: {secretKeyRef: {name: autotune-llmbench, key: api-key}}
 extraEnv: []
 
 # The cluster's DNS domain. The UI's nginx resolves the API service by its fully
@@ -91,6 +91,11 @@ worker:
 frontend:
   replicas: 1
   resources: {}
+  # How the UI is reached without an ingress: NodePort opens it on every
+  # node's address. nodePort empty lets Kubernetes pick a free one.
+  service:
+    type: ClusterIP
+    nodePort: ""
 
 # Engine logs: the worker writes them, the API serves them. Two pods, one
 # volume, so it wants ReadWriteMany. Without an RWX class, set enabled=false —
@@ -143,7 +148,7 @@ gpuCluster:
   # true = the cluster this release is installed into. The chart then grants
   # its ServiceAccount the RBAC the launch driver needs and the platform talks
   # to the local API server. false = register clusters from the Resources page
-  # by pasting a scoped kubeconfig (see deploy/k8s/remote-cluster/).
+  # by uploading the scoped kubeconfig deploy/gpu-cluster.sh writes.
   inCluster: false
   # Where engine pods go. Empty = this release's namespace.
   namespace: ""

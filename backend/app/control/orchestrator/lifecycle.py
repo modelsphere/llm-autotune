@@ -1,10 +1,12 @@
-"""Where a machine is in the hand-over sequence, and what moves it next.
+"""Where a machine is in its lease, and what moves it next.
 
 The supervisor decides this on every tick in order to *act*. The Resources
 page needs the same answer in order to *show* it. Computing it twice would
-drift — and drift here is what made an operator press Capture and Clear by
-hand, undoing the very canary those buttons exist to protect. So the
-predicates live here and both callers read them.
+drift, so the predicates live here and both callers read them.
+
+A lease is the hand-over: whoever leases a machine to the platform gives it
+over free, and the platform runs campaigns on it until the lease ends. It
+never stops or restarts anything it did not launch.
 
 Nothing in this module touches ssh or changes anything: it reads rows and
 returns a description.
@@ -16,23 +18,21 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.control.orchestrator.timing import run_minutes, window_minutes
 from app.control.run_nodes import run_ids_on_machine
 from app.db.models import (
     TERMINAL_RUN_STATES,
-    BaselineStatus,
     Campaign,
     CampaignStatus,
     Candidate,
     CandidateStatus,
-    Event,
     LeaseEndMode,
     LeaseState,
     Machine,
     MachineState,
     Run,
-    RunKind,
-    RunStatus,
 )
+from app.staging import SCREEN, stage_of_run
 
 
 def now() -> datetime:
@@ -47,11 +47,6 @@ def as_utc(value: datetime | None) -> datetime | None:
     return value.replace(tzinfo=UTC)
 
 
-# The baseline canary is bounded, counted from the campaign's last start:
-# production that cannot be benchmarked is a finding to report, not something
-# to keep re-measuring until morning.
-MAX_CANARY_ATTEMPTS_PER_START = 3
-
 # Written onto a run the user stopped by hand. The lifecycle reads it back:
 # re-scheduling one tick later would silently undo their Stop.
 USER_STOP_ERROR = "stopped by user"
@@ -63,15 +58,13 @@ USER_STOP_ERROR = "stopped by user"
 def campaigns_using(session: Session, machine: Machine) -> list[Campaign]:
     """Campaigns whose window is a live instruction about this machine.
 
-    SCHEDULED is included even though such a campaign is asleep: a nightly job
-    that stood down at 08:00 still owns the statement "hand production back at
-    08:00", and dropping it from this list would leave the machine cleared with
-    production down until someone noticed.
+    SCHEDULED is included even though such a campaign is asleep: it will want
+    the machine again at its next window.
 
     PAUSED is deliberately EXCLUDED: a paused campaign is frozen — the platform
-    must not act on the machine on its behalf, neither clearing nor restoring
-    production. Its lease is frozen too (see `frozen_by_pause`), so the machine
-    is left exactly as it is until a human resumes or ends the lease.
+    must not act on the machine on its behalf. Its lease is frozen too (see
+    `frozen_by_pause`), so the machine is left exactly as it is until a human
+    resumes or ends the lease.
     """
     campaigns = session.scalars(
         select(Campaign).where(
@@ -140,23 +133,15 @@ DEFAULT_LEASE_HOURS = 24
 
 BUSY = "busy"  # our runs are on it
 IDLE = "idle"  # ours, nothing running
-RETURNABLE = "returnable"  # production is back; take it whenever
+RETURNABLE = "returnable"  # not ours; take it whenever
 
 
 def readiness(session: Session, machine: Machine) -> str:
-    """The one-word answer an external fleet manager is asking for.
-
-    Deliberately not derived from `state` alone: RESERVED means a run holds the
-    machine, but a machine with no runs can still be un-returnable because
-    production has not been put back yet. Handing back a box whose production
-    service is still down is the failure this word exists to prevent.
-    """
+    """The one-word answer an external fleet manager is asking for."""
     if live_runs_on(session, machine):
         return BUSY
     if machine.lease_state in (LeaseState.NONE.value, LeaseState.RELEASED.value):
         return RETURNABLE
-    if machine.baseline_status == BaselineStatus.CLEARED.value:
-        return IDLE  # ours, free, but production is still down
     return IDLE
 
 
@@ -173,7 +158,11 @@ def returnable_at(session: Session, machine: Machine) -> datetime | None:
     latest = None
     for run in live:
         started = as_utc(run.started_at) or as_utc(run.created_at) or now()
-        limit = (run.campaign.max_run_minutes if run.campaign else 0) or 150
+        # The cap is the bound; what this campaign's runs have actually taken
+        # is a tighter one, once there is any.
+        cap = (run.campaign.max_run_minutes if run.campaign else 0) or 150
+        learned = run_minutes(run.campaign, stage_of_run(run)) if run.campaign else None
+        limit = min(cap, learned) if learned is not None else cap
         finish = started + timedelta(minutes=limit)
         latest = finish if latest is None else max(latest, finish)
     return latest
@@ -290,7 +279,8 @@ def window_allows_run_of(campaign: Campaign, minutes: int) -> bool:
 def window_allows_new_run(campaign: Campaign, default_max_run_minutes: int) -> bool:
     """Is there room before the window closes to finish one more run?"""
     return window_allows_run_of(
-        campaign, campaign.max_run_minutes or default_max_run_minutes
+        campaign,
+        window_minutes(campaign, SCREEN, campaign.max_run_minutes, default_max_run_minutes),
     )
 
 
@@ -367,78 +357,13 @@ def campaigns_waiting_on(
     ]
 
 
-def last_cleared_at(session: Session, machine: Machine) -> datetime | None:
-    """When production was last taken down on this machine.
-
-    Read from the audit trail rather than stored on the machine: the clear is
-    already an event, and a second copy of the same fact is a second thing to
-    keep in step.
-    """
-    events = session.scalars(
-        select(Event)
-        .where(Event.kind.in_(["baseline_cleared", "baseline_cleared_auto"]))
-        .order_by(Event.id.desc())
-        .limit(50)
-    ).all()
-    for event in events:
-        if (event.payload or {}).get("machine") == machine.name:
-            return as_utc(event.ts)
-    return None
-
-
-def nothing_was_captured(machine: Machine) -> bool:
-    """CLEARED, but from a capture that measured nothing.
-
-    Two machines read `cleared` and mean opposite things. One had production
-    stopped BY US and is owed it back; the other was already empty when it was
-    handed over, so there is nothing to put back and never was. They differ
-    only by whether the capture holds services — which is precisely what the
-    hand-back path branches on, and precisely what the page did not say.
-    """
-    return not (machine.baseline or {}).get("services")
-
-
-def restore_due(session: Session, machine: Machine) -> bool:
-    """Is production owed back on this machine?
-
-    Only a declared window triggers a restore: it is the "hand it back by"
-    contract. Without one the session is supervised and a human decides, so we
-    never yank a machine out from under someone still iterating.
-
-    And only windows that closed AFTER the machine was cleared can be telling
-    us to undo that clear. A campaign that finished days ago has already had
-    its hand-back honoured; reading its expired window as a standing
-    instruction restores production out from under whatever the machine was
-    cleared for next — observed live, eight seconds after an operator cleared
-    node-24 by hand, on the orders of a campaign done for four days.
-    """
-    cleared_at = last_cleared_at(session, machine)
-    windowed = [
-        c
-        for c in campaigns_using(session, machine)
-        if c.window_end is not None
-        and (cleared_at is None or as_utc(c.window_end) >= cleared_at)
-    ]
-    if not windowed:
-        return False
-    return all(now() >= as_utc(c.window_end) for c in windowed)
-
-
 def frozen_by_pause(session: Session, machine: Machine) -> bool:
     """Is this machine frozen because the campaign holding it was paused?
 
-    Seen live: an operator meant to end a lease but hit Pause,
-    reasonably expecting a paused campaign to leave the machine alone. It did
-    not — the lease kept its own clock, expired at the force-start window's end,
-    and (after a worker restart, hours late) auto-drained: production was torn
-    back down and relaunched from the baseline, stomping the service the
-    operator had restored by hand in the meantime.
-
     Pause must mean frozen. While a machine's only live claim is a paused
-    campaign, the platform touches nothing: the lease does not auto-expire, so
-    production is neither restored nor cleared on its own. The human is back in
-    control — they resume (work continues) or end the lease explicitly (the
-    machine is handed back the normal way). An ACTIVE or SCHEDULED campaign
+    campaign, the platform touches nothing: the lease does not auto-expire.
+    The human is back in control — they resume (work continues) or end the
+    lease explicitly (the machine is handed back the normal way). An ACTIVE or SCHEDULED campaign
     sharing the machine keeps normal expiry; only a pause with no other live
     claim freezes it. Explicit end-lease is unaffected: it sets the drain
     directly and never runs through here.
@@ -466,146 +391,34 @@ def frozen_by_pause(session: Session, machine: Machine) -> bool:
     )
 
 
-# -- the baseline canary ------------------------------------------------------
-
-CANARY_NOT_REQUIRED = "not_required"  # this campaign does not want one
-CANARY_NOT_READY = "not_ready"  # nothing captured yet to measure
-CANARY_PASSED = "passed"  # production measured; clearing is unblocked
-CANARY_LIVE = "live"  # one is in flight
-CANARY_DUE = "due"  # should be scheduled now
-CANARY_STOPPED = "stopped"  # a human stopped it; restarting is how to resume
-CANARY_EXHAUSTED = "exhausted"  # attempts used up without a pass
-
-
-def last_activation(session: Session, campaign: Campaign) -> datetime:
-    """When this campaign was last started, falling back to its creation."""
-    events = session.scalars(
-        select(Event)
-        .where(Event.campaign_id == campaign.id, Event.kind == "campaign_status_changed")
-        .order_by(Event.id.desc())
-        .limit(20)
-    ).all()
-    for event in events:
-        if (event.payload or {}).get("status") == CampaignStatus.ACTIVE.value:
-            return as_utc(event.ts)
-    return as_utc(campaign.created_at)
-
-
-def canaries_since_activation(
-    session: Session, campaign: Campaign, machine: Machine
-) -> list[Run]:
-    since = last_activation(session, campaign)
-    canaries = session.scalars(
-        select(Run)
-        .where(
-            Run.campaign_id == campaign.id,
-            Run.id.in_(run_ids_on_machine(machine.id)),
-            Run.kind == RunKind.BASELINE.value,
-        )
-        .order_by(Run.id)
-    ).all()
-    return [r for r in canaries if as_utc(r.created_at) >= since]
-
-
-def canary_state(session: Session, campaign: Campaign, machine: Machine) -> str:
-    """What the baseline canary owes this campaign on this machine.
-
-    One canary per campaign+machine, ever, was too few: a canary that failed or
-    was stopped left the campaign deadlocked forever, because clearing
-    production requires a canary that PASSED and nothing would schedule
-    another. Attempts are counted from the campaign's last start — pressing
-    Start again is how a human says "try again".
-    """
-    if not campaign.run_baseline_canary:
-        return CANARY_NOT_REQUIRED
-
-    attempts = canaries_since_activation(session, campaign, machine)
-    if any(r.status == RunStatus.SUCCEEDED.value for r in attempts):
-        return CANARY_PASSED
-    if any(r.status not in [s.value for s in TERMINAL_RUN_STATES] for r in attempts):
-        return CANARY_LIVE
-    if any(r.error == USER_STOP_ERROR for r in attempts):
-        return CANARY_STOPPED
-    if len(attempts) >= MAX_CANARY_ATTEMPTS_PER_START:
-        return CANARY_EXHAUSTED
-    # Only a captured machine has a production endpoint to point the benchmark
-    # at, and only a non-empty capture has anything worth measuring.
-    if machine.baseline_status != BaselineStatus.CAPTURED.value:
-        return CANARY_NOT_READY
-    if not (machine.baseline or {}).get("services"):
-        return CANARY_NOT_READY
-    return CANARY_DUE
-
-
 # -- what ending the lease will actually do -----------------------------------
 
 
 @dataclass(frozen=True)
 class HandBack:
-    """The consequence of pressing End lease, read off the branch the drain
-    will actually take.
+    """What End lease does, in one line, for the card and the confirm dialog."""
 
-    The confirm dialog used to promise "production is restored either way",
-    which was true of neither machine in testing: one was cleared from an
-    empty capture, so there was nothing to put back; and with auto-restore off
-    a real capture is handed back with production still DOWN and only an event
-    to say so. A dialog that describes a different code path than the one about
-    to run is worse than no dialog, so this mirrors `_advance_drain` field for
-    field and both the card and the dialog read it.
-    """
-
-    restores: bool  # the platform starts production again before releasing
-    owed: bool  # production is down and we are NOT the ones putting it back
-    services: int  # how many captured services that verdict is about
-    summary: str  # one line, shown on the card and in the confirm dialog
+    summary: str
 
     def as_dict(self) -> dict:
-        return {
-            "restores": self.restores,
-            "owed": self.owed,
-            "services": self.services,
-            "summary": self.summary,
-        }
+        return {"summary": self.summary}
 
 
-def hand_back(machine: Machine, auto_restore: bool) -> HandBack:
-    """What End lease does to production on this machine, right now."""
-    services = (machine.baseline or {}).get("services") or []
-    count = len(services)
-
-    if machine.baseline_status != BaselineStatus.CLEARED.value:
+def hand_back(session: Session, machine: Machine) -> HandBack:
+    live = live_runs_on(session, machine)
+    if live:
         return HandBack(
-            False, False, count,
-            "Production was never stopped here, so nothing on the machine is "
-            "touched — the lease just closes.",
+            f"{len(live)} run(s) of ours stop (or finish, ending politely), then the "
+            "machine goes back. Nothing else on it is touched."
         )
-    if not count:
-        return HandBack(
-            False, False, 0,
-            "Nothing was captured on this machine — it was already free when it "
-            "was handed over — so there is nothing to put back. The lease closes "
-            "and the machine goes straight back.",
-        )
-    if auto_restore:
-        return HandBack(
-            True, False, count,
-            f"{count} production service(s) are started again from the capture "
-            "before the lease closes. The deploy script returns in seconds; the "
-            "model then loads for minutes.",
-        )
-    return HandBack(
-        False, True, count,
-        f"Production stays DOWN. Auto-restore is off, so the {count} captured "
-        "service(s) are not started again — putting them back is yours to do, "
-        "from Override \u25b8 Restore (which keeps working after the lease closes).",
-    )
+    return HandBack("Nothing of ours is running; the machine goes straight back.")
 
 
 # -- the description the Resources page renders -------------------------------
 
-# The sequence a machine walks each night. The page draws these as steps, so
-# "what happens next" is a position rather than a paragraph.
-STEPS = ("Leased", "Captured", "Baseline measured", "Cleared", "Restored")
+# The sequence a machine walks. The page draws these as steps, so "what
+# happens next" is a position rather than a paragraph.
+STEPS = ("Leased", "Running campaigns", "Handed back")
 
 WAITING = "waiting"  # nothing to do until something outside changes
 WORKING = "working"  # the platform is moving this along on its own
@@ -617,26 +430,19 @@ DONE = "done"
 class MachineLifecycle:
     machine_id: int
     # The step now in play — everything before it has happened. When the state
-    # is `waiting` this is the step that has NOT happened yet and is being
-    # waited for, which is why the page draws it hollow; when `working`, it is
-    # the step happening right now.
+    # is `waiting` this is the step being waited for, which is why the page
+    # draws it hollow; when `working`, it is the step happening right now.
     step: int
     state: str
     headline: str
     detail: str
     campaigns: list[dict] = field(default_factory=list)
-    # A canary is owed and has not passed. Clearing production by hand right
-    # now destroys the service the canary exists to measure.
-    canary_pending: bool = False
     # busy | idle | returnable — the answer an external lease holder wants.
     readiness: str = IDLE
     # Worst-case completion of a polite hand-back, or None if nothing is running.
     returnable_at: datetime | None = None
-    # What End lease does to production on this machine, from the same branch
-    # the drain will take. Never None, so no caller has to guess a default.
-    hand_back: HandBack = field(
-        default_factory=lambda: HandBack(False, False, 0, "")
-    )
+    # What End lease does on this machine right now. Never None.
+    hand_back: HandBack = field(default_factory=lambda: HandBack(""))
 
     def as_dict(self) -> dict:
         return {
@@ -646,7 +452,6 @@ class MachineLifecycle:
             "headline": self.headline,
             "detail": self.detail,
             "campaigns": self.campaigns,
-            "canary_pending": self.canary_pending,
             "readiness": self.readiness,
             "returnable_at": (
                 self.returnable_at.isoformat() if self.returnable_at else None
@@ -700,179 +505,58 @@ def teardown_pending_on(session: Session, machine: Machine) -> list[Run]:
 
 
 def describe(
-    session: Session,
-    machine: Machine,
-    default_max_run_minutes: int,
-    auto: bool = True,
-    auto_restore: bool = False,
+    session: Session, machine: Machine, default_max_run_minutes: int
 ) -> MachineLifecycle:
-    """One machine's position in the sequence, in the words of what is true."""
-    status = machine.baseline_status
+    """One machine's position in its lease, in the words of what is true."""
     waiting = campaigns_waiting_on(session, machine, default_max_run_minutes)
     live = live_runs_on(session, machine)
-    # A drain is carried by `_advance_leases`, which is NOT gated on the
-    # baseline-lifecycle switch: a machine being handed back keeps moving on
-    # its own even with automation off. Every other step stops dead without it.
-    self_driving = auto or machine.lease_state == LeaseState.DRAINING.value
 
-    def out(step, state, headline, detail, canary_pending=False):
-        shown_state, shown_detail = state, detail
-        if not self_driving and state == WORKING:
-            # With the lifecycle switched off, a WORKING step is a lie: nothing
-            # is happening and nothing will. Say so — but keep the step and the
-            # headline, because WHERE the machine is stayed true the whole time.
-            # Collapsing all of it to a single "automation is off" banner at
-            # step 0 is what left two cleared machines reading as freshly
-            # leased, with no way to tell that their capture was empty.
-            shown_state = BLOCKED
-            shown_detail = (
-                f"{detail} Automatic hand-over is off "
-                "(AUTOTUNE_AUTO_BASELINE_LIFECYCLE=false), so this step will not "
-                "happen on its own — drive it by hand from the Override menu."
-            )
+    def out(step, state, headline, detail):
         return MachineLifecycle(
             machine_id=machine.id,
             step=step,
-            state=shown_state,
+            state=state,
             headline=headline,
-            detail=shown_detail,
+            detail=detail,
             campaigns=_named(waiting),
-            canary_pending=canary_pending,
             readiness=readiness(session, machine),
             returnable_at=returnable_at(session, machine),
-            hand_back=hand_back(machine, auto_restore),
+            hand_back=hand_back(session, machine),
         )
 
     if machine.state == MachineState.AWAY.value:
-        if status == BaselineStatus.RESTORED.value:
-            return out(4, DONE, "Returned to production",
-                       "Production is back up and the machine is out of the pool.")
-        return out(0, WAITING, "Held by production",
-                   "Lease it to hand the machine to the platform for a night.")
+        if machine.lease_state == LeaseState.RELEASED.value:
+            return out(2, DONE, "Handed back",
+                       "The lease has ended. Lease it again to run campaigns here.")
+        return out(0, WAITING, "Not leased",
+                   "Lease it to let campaigns run here.")
 
-    # -- being handed back ----------------------------------------------------
-    #
-    # Checked before the baseline states because a drain overrides all of them:
-    # a draining machine is not "waiting for a campaign", it is leaving.
+    # Checked first because a drain overrides everything: a draining machine is
+    # not waiting for a campaign, it is leaving.
     if machine.lease_state == LeaseState.DRAINING.value:
         eager = machine.lease_end_mode == LeaseEndMode.EAGER.value
         if live:
-            cards = sum(len(r.gpu_indices or []) for r in live)
             if eager or lease_deadline_passed(machine):
-                return out(4, WORKING, "Stopping runs to hand the machine back",
-                           f"{len(live)} run(s) on {cards} cards are being killed. "
-                           "Production goes back as soon as they are down.")
-            return out(3, WORKING, "Finishing up before hand-back",
-                       f"{len(live)} run(s) still going and no new ones will start. "
-                       + (f"Free by {_clock(returnable_at(session, machine))}."
-                          if returnable_at(session, machine) else ""))
-        return out(4, WORKING, "Handing the machine back",
-                   "Nothing is running. Production is being restored, then the "
-                   "lease closes on its own.")
+                return out(2, WORKING, "Stopping runs to hand the machine back",
+                           f"{len(live)} run(s) are being stopped.")
+            until = returnable_at(session, machine)
+            return out(2, WORKING, "Finishing up before hand-back",
+                       f"{len(live)} run(s) still going and no new ones will start."
+                       + (f" Free by {_clock(until)}." if until else ""))
+        return out(2, WORKING, "Handing the machine back",
+                   "Nothing is running; the lease closes on its own.")
 
-    # -- borrowed, production untouched --------------------------------------
-    if status in (BaselineStatus.NONE.value, BaselineStatus.RESTORED.value):
-        if not waiting:
-            if status == BaselineStatus.RESTORED.value:
-                return out(4, DONE, "Production restored",
-                           "The night is over. Return the machine, or start another "
-                           "campaign and the sequence begins again.")
-            return out(1, WAITING, "Leased, nothing to run",
-                       "No active campaign is pinned here with candidates left. "
-                       "Production keeps running until one is.")
-        return out(1, WORKING, "Recording production",
-                   "Listing what is deployed and how to bring it back. "
-                   "Nothing is stopped by this.")
-
-    # -- captured: production still up, and it is about to be measured -------
-    if status == BaselineStatus.CAPTURED.value:
-        services = len((machine.baseline or {}).get("services", []))
-        if not waiting:
-            return out(2, WAITING, "Production recorded",
-                       f"{services} service(s) written down. Waiting for an active "
-                       "campaign before anything is measured or stopped.")
-
-        states = {c.id: canary_state(session, c, machine) for c in waiting}
-        if CANARY_STOPPED in states.values():
-            return out(2, BLOCKED, "Baseline canary stopped",
-                       "Someone stopped it, so production is deliberately still up. "
-                       "Pause and Start the campaign to try again.", canary_pending=True)
-        if CANARY_EXHAUSTED in states.values():
-            return out(2, BLOCKED, "Baseline canary failed",
-                       "Production could not be benchmarked, so it is left running — "
-                       "a machine we cannot measure is the one not to tear down. "
-                       "Fix production, then Start the campaign again.", canary_pending=True)
-        if CANARY_LIVE in states.values():
-            return out(2, WORKING, "Benchmarking production",
-                       "Measuring what production does today, before it comes down. "
-                       "This is the number every candidate is compared against.",
-                       canary_pending=True)
-        if CANARY_DUE in states.values():
-            return out(2, WORKING, "Baseline canary queued",
-                       "Starts on the next tick, against the running production "
-                       "service.", canary_pending=True)
-        return out(3, WORKING, "Stopping production",
-                   "Production is measured. Clearing it now to free the GPUs.")
-
-    # -- cleared: the machine is ours ----------------------------------------
-    if status == BaselineStatus.CLEARED.value:
-        # Cleared from an EMPTY capture is a different machine than cleared by
-        # us, and saying "production is down" about a box that never had any is
-        # how an operator comes to expect a restore on hand-back. Split first:
-        # every sentence below this point assumes we took something down.
-        if nothing_was_captured(machine):
-            if live:
-                cards = sum(len(r.gpu_indices or []) for r in live)
-                return out(3, WORKING, f"{len(live)} run(s) in flight",
-                           f"Experiments hold {cards} of {machine.gpu_count} cards on a "
-                           "machine that was already free — nothing of production's is "
-                           "down, so nothing is owed back.")
-            if waiting:
-                return out(3, WORKING, "Free — nothing was running here",
-                           "Capture reached the machine and found no production "
-                           "services, so there was nothing to stop. All "
-                           f"{machine.gpu_count} cards are available; runs start on "
-                           "the next tick.")
-            # DONE at Cleared, not WAITING at Restored: a hollow "Restored"
-            # step is the page saying a restore is still coming, and on a
-            # machine that never had production there is none to come. The
-            # sequence is as far along as it will ever get here.
-            return out(3, DONE, "Free — nothing was running here",
-                       "Capture reached the machine and found no production services, "
-                       "so nothing was stopped and nothing is owed back. Ending the "
-                       "lease hands it straight back with no restore.")
-        if live:
-            cards = sum(len(r.gpu_indices or []) for r in live)
-            return out(3, WORKING, f"{len(live)} run(s) in flight",
-                       f"Experiments hold {cards} of {machine.gpu_count} cards. "
-                       "Production comes back at the campaign's window end.")
-        # The same question _maybe_restore asks. Asking it a second way here
-        # had the page promising a restore the worker was never going to do.
-        if restore_due(session, machine):
-            return out(4, WORKING, "Restoring production",
-                       "The window has closed and nothing is running. Production goes "
-                       "back on the next tick.")
-        if waiting:
-            return out(3, WORKING, "Ready for experiments",
-                       "Production is down and the GPUs are free. Runs start on the "
-                       "next tick.")
-        return out(4, WAITING, "Cleared, nothing queued",
-                   "Production is down and no campaign with a window is asking for this "
-                   "machine — so nothing will put it back on its own. End the lease to "
-                   "hand it back; what that does to production is spelled out under "
-                   "\u201cOn hand-back\u201d.")
-
-    return out(4, DONE, status, "")
+    if live:
+        cards = sum(len(r.gpu_indices or []) for r in live)
+        return out(1, WORKING, f"{len(live)} run(s) in flight",
+                   f"Campaigns hold {cards} of {machine.gpu_count} cards.")
+    if waiting:
+        return out(1, WORKING, "Ready",
+                   "A campaign wants this machine; its runs start on the next tick.")
+    return out(1, WAITING, "Leased, nothing to run",
+               "No active campaign is pinned here with work left.")
 
 
-def describe_all(
-    session: Session,
-    default_max_run_minutes: int,
-    auto: bool = True,
-    auto_restore: bool = False,
-) -> list[MachineLifecycle]:
+def describe_all(session: Session, default_max_run_minutes: int) -> list[MachineLifecycle]:
     machines = session.scalars(select(Machine).order_by(Machine.id)).all()
-    return [
-        describe(session, m, default_max_run_minutes, auto, auto_restore)
-        for m in machines
-    ]
+    return [describe(session, m, default_max_run_minutes) for m in machines]

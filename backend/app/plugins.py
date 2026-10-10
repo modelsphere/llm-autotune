@@ -134,21 +134,6 @@ class QueueWaiter:
     ident: int = 0
 
 
-@dataclass(frozen=True)
-class PromotionOrigin:
-    """What a campaign's winner stands for, when a plugin runs the campaign
-    for something of its own: what the merge request calls it, where it
-    links back to, and the release branch it goes onto when the campaign
-    names none."""
-
-    kind: str
-    page: str = ""
-    description: str = ""
-    deploy_branch: str = ""
-    # Whether a branch named on a promotion sticks to the campaign.
-    remember_branch: bool = True
-
-
 class SelectorRefused(ValueError):
     """Raised by a run_selector to answer the agent API with this error:
     `code` (machine-readable), `status` (HTTP), `detail`."""
@@ -223,10 +208,6 @@ class Plugin:
         the agent API does not know (`?baseline=` and friends take run ids;
         a plugin may accept its own spelling, e.g. a request id). Raise
         SelectorRefused to answer with a specific error.
-    promotion_origin: `(session, campaign, run_id) -> PromotionOrigin | None`,
-        what a winner of this campaign stands for in its merge request — its
-        name, its page, a fallback release branch — for a campaign the plugin
-        runs for something of its own. The first answer wins.
     queue_arrival: `(session, campaign) -> datetime | None`, when a campaign
         joined the machine queue, for a campaign that represents something
         older than itself (a request made before its campaign existed). None
@@ -249,7 +230,6 @@ class Plugin:
     submission_extras: Callable[[Session, Run, dict[str, Any]], dict[str, Any]] | None = None
     run_overlay: Callable[[Session, Run, Campaign | None], RunOverlay | None] | None = None
     run_selector: Callable[[Session, str], int | None] | None = None
-    promotion_origin: Callable[[Session, Campaign, int], PromotionOrigin | None] | None = None
 
     @property
     def version_table(self) -> str:
@@ -367,21 +347,6 @@ def run_overlay(session: Session, run: Any, campaign: Any) -> RunOverlay | None:
             continue
         if overlay is not None:
             return overlay
-    return None
-
-
-def promotion_origin_of(session: Session, campaign: Any, run_id: int) -> PromotionOrigin | None:
-    """What the first plugin that knows this campaign says its winner is."""
-    for plugin in enabled():
-        if plugin.promotion_origin is None:
-            continue
-        try:
-            told = plugin.promotion_origin(session, campaign, run_id)
-        except Exception:
-            logger.exception("plugin %s: promotion origin failed", plugin.name)
-            continue
-        if told is not None:
-            return told
     return None
 
 

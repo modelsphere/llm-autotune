@@ -64,7 +64,7 @@ No operator image is published. Build one into a registry your cluster pulls
 from, render the manifest against it, and apply that:
 
 ```sh
-IMG=<your-registry>/llm-autotune-operator:0.1.2
+IMG=<your-registry>/llm-autotune-operator:0.2.0
 make docker-build docker-push IMG=$IMG   # or `make docker-buildx IMG=$IMG` for several platforms
 make build-installer IMG=$IMG            # writes dist/install.yaml; the Makefile fetches its own tools
 kubectl apply -f dist/install.yaml
@@ -109,9 +109,9 @@ survives it.
 
 The operator alone is not enough: the autotune backend also needs a credential
 of its own to create `TuningRun` objects. That is a separate, **namespaced**
-ask — see [`deploy/k8s/remote-cluster/`](../deploy/k8s/remote-cluster/) in this
-repository (namespace, ServiceAccount, Role, token, and a script that turns them
-into a scoped kubeconfig).
+ask — [`deploy/gpu-cluster.sh`](../deploy/gpu-cluster.sh) in this repository
+creates the namespace, a ServiceAccount allowed to manage `TuningRun`s there,
+and a scoped kubeconfig for it.
 
 Then tell the platform to submit `TuningRun`s instead of Deployments:
 
@@ -125,6 +125,7 @@ Then tell the platform to submit `TuningRun`s instead of Deployments:
 
 | version | changes | compatibility |
 |---|---|---|
+| 0.2.0 | none (released with the platform) | same as 0.1.1 |
 | 0.1.2 | none (released with the platform) | same as 0.1.1 |
 | 0.1.1 | API group `tuning.modelsphere.dev` (was `tuning.llm-autotune.io`); pods labelled `tuning.modelsphere.dev/run` | **not compatible with 0.1.0**: a CRD group cannot be renamed in place, so uninstall 0.1.0 and install this one |
 | 0.1.0 | first public release: TuningRun → Deployment + Service, phase/endpoint status, TTL teardown, `spec.tolerations` (for tainted GPU pools), `spec.modelSubPath` (one shared weights PVC serving many models) | — |

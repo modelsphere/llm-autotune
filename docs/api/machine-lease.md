@@ -10,12 +10,10 @@ version: what the calls mean, and what the platform guarantees.
 
 ## The contract in one paragraph
 
-You lend the platform a machine for a period. While it holds the machine it
-will record what production is running on it, benchmark that as a control,
-stop it, run experiments, and **put production back before giving the machine
-up** — whether the lease ends on schedule, early, or abruptly. You take the
-machine back by asking; the machine is genuinely yours when its `readiness`
-reads `returnable`.
+You lend the platform a free machine for a period. While it holds the machine
+it runs campaigns on it; it never touches anything it did not launch. You take
+the machine back by asking — or by letting `due_at` pass — and it is yours
+again once its `readiness` reads `returnable`.
 
 ---
 
@@ -68,15 +66,9 @@ ask "did that one land?".
 | `gpu_count` | Cards the platform may schedule onto. |
 | `due_at` | When you want it back. Reaching it starts a polite hand-back **on its own** — a lease nobody ends still returns. Defaults to 24 h. |
 
-What happens next needs no further calls from you:
-
-```
-capture  →  benchmark production  →  stop production  →  experiments  →  restore
-```
-
-Production is stopped only after the control benchmark **passes**. A machine we
-could not measure is one we do not touch — it keeps serving, and the campaign
-reports the failure instead.
+Lend it free: nothing else should be serving on the cards it may use. From
+here no further calls are needed — campaigns pinned to the machine start their
+runs on the next worker tick.
 
 ---
 
@@ -95,14 +87,14 @@ GET /api/machines/node-24/lease
   "lease_due_at": "2026-08-05T00:00:00Z",
   "readiness": "busy",
   "returnable_at": "2026-08-04T18:41:00Z",
-  "production_status": "cleared",
   "gpus_in_use": 4,
   "gpu_count": 8,
   "live_runs": [
     {"run_id": 88, "campaign_id": 21, "status": "benching",
      "gpus": [0, 1], "started_at": "2026-08-04T16:11:00Z"}
   ],
-  "stage": {"headline": "2 run(s) in flight", "detail": "…", "step": 3, "state": "working"}
+  "stage": {"headline": "1 run(s) in flight", "detail": "…", "step": 1, "state": "working",
+            "hand_back": {"summary": "1 run(s) of ours stop (or finish, ending politely), …"}}
 }
 ```
 
@@ -112,12 +104,12 @@ scheduler has:
 | Value | Meaning |
 | --- | --- |
 | `busy` | Our runs are on it. `returnable_at` is the worst case for when they end. |
-| `idle` | Ours, nothing running — but production may still be stopped, so **not yet yours**. |
-| `returnable` | Production is back up. Take the machine whenever you like. |
+| `idle` | Ours, nothing running; work may still be queued. End the lease to take it. |
+| `returnable` | Not ours any more. Take the machine whenever you like. |
 
-`returnable_at` is a **bound, not an estimate**: each live run's own cutoff
-(`started_at + max_run_minutes`), so you can plan against it. A typical run is
-far shorter.
+`returnable_at` is each live run's start plus how long that campaign's runs
+have taken so far (with headroom), never more than its `max_run_minutes`
+cap. Before a campaign has finished any run, it is the cap.
 
 `GET /api/machines/lease` returns the same shape for every machine at once.
 
@@ -136,13 +128,12 @@ This returns immediately. It records the request; the worker carries it out.
 
 No new runs start. Runs already in flight finish normally and their
 measurements are kept. Use `returnable_at` from the status call to see the
-worst case — up to a campaign's `max_run_minutes`, typically ~20 minutes.
+expected wait — how long that campaign's runs usually take, typically ~20 minutes.
 
 ### `eager` — the machine matters more than the data
 
 Live runs are killed on the next worker tick (~10 s) and their benchmarks are
-lost. Production is still restored; eager kills the experiments, not the
-hand-back.
+lost.
 
 ### `deadline_seconds`
 
@@ -175,11 +166,7 @@ Expect roughly:
 | --- | --- | --- |
 | Runs finish (`polite`) | ~20 min | `max_run_minutes` |
 | Runs killed (`eager`) | ~10 s | one worker tick |
-| Production restored | 1–5 min | the model has to load |
-
-The restore step is why `readiness` does not flip the moment the runs stop. The
-deploy script returns in seconds; a 35 B model needs minutes to serve. `idle`
-during that period means "our work is done, yours is not ready yet".
+| Containers confirmed gone | ~1 min | the engine releases its GPUs |
 
 ---
 
@@ -194,7 +181,7 @@ during that period means "our work is done, yours is not ready yet".
                                              ▼
                                          DRAINING
                                              │  runs finished or killed,
-                                             │  production restored
+                                             │  containers gone
                                              ▼
                                          RELEASED   readiness = returnable
 ```
@@ -206,19 +193,16 @@ onto it until you lease it again.
 
 ## Guarantees
 
-1. **Production is restored before `RELEASED`.** No mode skips it. If the
-   restore does not match what was captured, the discrepancy is recorded as
-   `baseline_restored_auto_with_drift` and is visible on the Resources page.
+1. **Only the platform's own containers are stopped.** Nothing else on the
+   machine is inspected, stopped or restarted.
 2. **`due_at` is honoured without you.** A lease that lapses drains politely by
    itself, so a caller that crashes does not strand a machine.
 3. **A draining machine takes no new work**, from the moment the request lands.
-4. **Nothing is torn down that was not first recorded.** Clearing requires a
-   capture; a machine we could not inspect keeps its production service.
 
 ## What is *not* guaranteed
 
-- **Instant hand-back.** Even `eager` needs a tick to kill runs and a few
-  minutes to restore. If you need a machine in seconds, this API is the wrong
+- **Instant hand-back.** Even `eager` needs a tick to kill runs and a minute
+  for their containers to release the GPUs. If you need a machine in seconds, this API is the wrong
   tool — take it at the infrastructure layer and accept the wreckage.
 - **That experiments completed.** Ending a lease early is expected to lose
   work; the campaign simply resumes on its next window if it has one.
@@ -256,7 +240,7 @@ curl -sf -X POST "$BASE/api/machines/node-24/lease/end" \
   -H "X-API-Key: $KEY" -H 'Content-Type: application/json' \
   -d '{"mode":"polite","deadline_seconds":1800}'
 
-# wait for production to be serving again
+# wait until it is yours again
 until [ "$(curl -sf -H "X-API-Key: $KEY" \
     "$BASE/api/machines/node-24/lease" | jq -r .readiness)" = returnable ]; do
   sleep 15
@@ -269,5 +253,6 @@ done
 
 - `/api/docs` on your install — every endpoint, with schemas you can call from the browser.
 - **Campaigns** carry their own nightly window (`daily_start` / `daily_end`),
-  which is independent of the lease: a campaign stands down at 08:00 and the
-  machine goes back to production, then both resume at 23:00.
+  which is independent of the lease: a campaign stands down at 08:00 and
+  starts no more runs until 23:00, while the lease decides who holds the
+  machine.

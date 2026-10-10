@@ -25,7 +25,30 @@ create one another way.
 
 ## Where the GPUs are
 
-### This cluster
+The platform's own cluster needs no GPUs. GPUs come from the clusters and
+machines added afterwards on the Resources page.
+
+### GPU clusters
+
+Prepare each GPU cluster with its admin kubeconfig:
+
+```bash
+deploy/gpu-cluster.sh            # on the GPU cluster's context; --namespace NS
+```
+
+It creates a namespace for engine and policy pods, a ServiceAccount allowed
+only to manage those (Deployments, Services, Jobs, TuningRuns) and read their
+pods, logs and events, read-only access to nodes, and a kubeconfig carrying
+only that account's token. It never grants writing a node: no cordon, no label,
+no taint. On **Resources ▸ Add GPU cluster**, upload the kubeconfig (encrypted
+at rest with `jwtSecret`) and pick the GPU nodes to register; each becomes a
+machine pinned to its node, with the cards the node reports.
+
+The GPU cluster's API server, and its nodes' NodePorts, must be reachable from
+this cluster, and the GPU cluster must reach `publicApiUrl` for policy
+campaigns.
+
+### This cluster, by its own ServiceAccount
 
 ```yaml
 gpuCluster:
@@ -33,34 +56,17 @@ gpuCluster:
   namespace: ""          # empty = the release's own namespace
 ```
 
-The chart grants its ServiceAccount exactly what the launch driver needs in that
-namespace — create and read TuningRuns or Deployments, read pods, pod logs and
-warning events, run policy Jobs — plus read-only access to nodes, which is
-cluster-scoped and is how the platform fills in a machine's card count and type
-without being told. It never writes a node: no cordon, no label, no taint.
-
-On an empty install it also registers that cluster as a machine called
-`local-cluster`, so the Resources page has something in it. Use *Refresh
-capacity* there to fill in its GPUs, then **Lease to platform** to let campaigns
-use it. Set `gpuCluster.autoRegister=false` to skip this.
+For an install whose GPUs are in the cluster it runs in, without a kubeconfig:
+the chart grants its own ServiceAccount the same access and, on an empty
+install, registers the cluster as a machine called `local-cluster` (pinned by
+nothing: the scheduler picks the node). Set `gpuCluster.autoRegister=false` to
+skip that and add GPU nodes the usual way. `deploy/quickstart.sh` does not use
+this; the demo does.
 
 A cluster without GPUs (kind, a CPU-only test cluster) takes
 `-f deploy/helm/llm-autotune/values-demo.yaml`: runs then request no
 cards, and campaigns run the mock engine
 ([mock-engine/](../mock-engine/README.md)).
-
-### A different cluster
-
-Leave `gpuCluster.inCluster` false and add the cluster from the Resources page by
-pasting a kubeconfig. Mint a *scoped* one rather than handing over an admin
-credential:
-
-```bash
-kubectl apply -f deploy/k8s/remote-cluster/backend-rbac.yaml   # on the GPU cluster
-deploy/k8s/remote-cluster/make-scoped-kubeconfig.sh
-```
-
-The kubeconfig is encrypted at rest with `jwtSecret`.
 
 ### Bare-metal boxes over ssh
 
@@ -78,10 +84,9 @@ kubectl create secret generic autotune-worker-ssh \
   --from-file=id_ed25519=$HOME/.ssh/id_ed25519
 ```
 
-Then add each machine from the Resources page. Such a box is usually shared with
-production, so the platform captures what is already running on it, verifies it
-can put it back, clears it for the night, and restores it afterwards. It refuses
-to run experiments on a machine it could not capture.
+Then add each machine from the Resources page and lease it to the platform.
+Lease it free: the platform runs its engines next to nothing, and when the
+lease ends it stops only the containers it started.
 
 ## What measures a run
 
@@ -121,7 +126,13 @@ install and then keeps trying from the worker until it succeeds, so the order
 the two platforms are installed in does not matter; until then the worker log
 says why it could not. If that slug already exists and another account created
 it, AutoTune refuses to adopt it; choose another slug. An admin can also run
-this from the New campaign page, or with `POST /api/benchmarks/ensure`. The
+this with `POST /api/benchmarks/ensure`.
+
+A campaign usually describes its workload instead of naming a benchmark
+(synthetic prompts of a given size, or a replay of a dataset), and AutoTune
+creates the matching benchmark when the campaign is created. The slug is a hash
+of the workload, so the same workload reuses one benchmark. Everything AutoTune
+creates on LLMBench is filed under the group tag `llm-autotune`. The
 full contract between the two platforms (routes, roles, metric names, dataset
 stamping) is in llm-bench's `docs/api/for-autotune.md`.
 
@@ -195,21 +206,16 @@ the API, the worker and the migrate job:
 ```yaml
 extraEnv:
   - {name: AUTOTUNE_DEFAULT_DAILY_START, value: "23:00"}
-  - name: AUTOTUNE_GITLAB_TOKEN
-    valueFrom: {secretKeyRef: {name: autotune-gitlab, key: token}}
+  - name: AUTOTUNE_LLMBENCH_API_KEY
+    valueFrom: {secretKeyRef: {name: autotune-llmbench, key: api-key}}
 ```
 
 The ones installs usually reach for:
 
 | variable | default | what it does |
 |---|---|---|
-| `AUTOTUNE_PROMOTION_TARGET` | `manual` | `gitlab` opens a merge request for a winner instead of only rendering its config |
-| `AUTOTUNE_PROMOTION_DRY_RUN` | `true` | build and record the merge request without pushing anything |
-| `AUTOTUNE_GITLAB_BASE_URL`, `_PROJECT`, `_TOKEN` | — | the deploy repository promotion writes to; the token needs to push branches and open merge requests |
-| `AUTOTUNE_AUTO_RESTORE_PRODUCTION` | `false` | put production back on a borrowed ssh machine when the window or lease ends |
-| `AUTOTUNE_AUTO_BASELINE_LIFECYCLE` | `true` | let the worker take production down after a passing canary; `false` asks a person on the Resources page |
 | `AUTOTUNE_DEFAULT_DAILY_START`, `_END`, `AUTOTUNE_DEFAULT_SCHEDULE_TIMEZONE` | — | the window a drafted campaign gets when its author names none |
-| `AUTOTUNE_DEFAULT_MAX_RUN_MINUTES` | `150` | how long one run may take, start to verdict |
+| `AUTOTUNE_DEFAULT_MAX_RUN_MINUTES` | `240` | window a run reserves when its length can be neither measured nor estimated from its benchmark |
 | `AUTOTUNE_READY_TIMEOUT_MINUTES` | `30` | how long a started engine may take to answer `/v1/models` |
 | `AUTOTUNE_IMAGE_PULL_TIMEOUT_MINUTES` | `45` | how long a pod may spend scheduling and pulling its image |
 | `AUTOTUNE_HEALTH_PROBE_TIMEOUT_SECONDS` | `600` | how long the first chat completion may take |
@@ -218,6 +224,7 @@ The ones installs usually reach for:
 | `AUTOTUNE_K8S_ENGINE_CPU_REQUEST`, `_MEMORY_REQUEST`, `_CPU_LIMIT`, `_MEMORY_LIMIT` | — | engine container resources, for namespaces whose quota requires them |
 | `AUTOTUNE_LLMBENCH_REPLAY_MODULE` | `replay` | the name LLMBench's traffic replay module reports metrics under; change it only for a build of LLMBench that names it otherwise |
 | `AUTOTUNE_K8S_POLICY_PRIORITY_CLASS` | — | a PriorityClass for policy pods |
+| `AUTOTUNE_AGENT_API_ENABLED` | `false` | serve the agent API (`/api/agent/v1`); the Reports pages also need the frontend built with `VITE_AGENT_REPORTS=1` |
 | `AUTOTUNE_REPORT_NOISE_THRESHOLD_PCT` | `1.0` | below this, a difference from the baseline is reported as noise |
 
 ## Upgrading

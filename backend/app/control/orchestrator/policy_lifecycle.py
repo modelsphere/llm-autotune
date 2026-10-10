@@ -19,6 +19,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from typing import Any
 
+from app.control.orchestrator import timing
 from app.control.orchestrator.lifecycle import as_utc, now
 from app.core.config import get_settings
 from app.db.models import (
@@ -49,6 +50,30 @@ def heartbeat_timeout_seconds(campaign: Campaign) -> int:
     )
 
 
+# What one contender's validation is assumed to cost before any run of this
+# campaign has been measured: the old default, benchmark and startup together.
+FALLBACK_CONTENDER_MINUTES = 60
+
+
+def contender_parts(campaign: Campaign) -> tuple[int, int]:
+    """(benchmark, startup) minutes for validating one contender: what the
+    campaign pinned, else what its runs have shown, else the fallback."""
+    knobs = settings_of(campaign)
+    learned_bench, learned_startup = timing.validation_minutes(campaign)
+    bench = knobs.approx_minutes_each or learned_bench
+    startup = knobs.model_startup_minutes
+    if startup is None:
+        startup = learned_startup or 0
+    if bench is None:
+        return max(FALLBACK_CONTENDER_MINUTES - startup, 5), startup
+    return bench, startup
+
+
+def contender_minutes(campaign: Campaign) -> int:
+    bench, startup = contender_parts(campaign)
+    return bench + startup
+
+
 def hard_deadline(campaign: Campaign, machine: Machine | None) -> datetime | None:
     """The end of the night: window end, capped by the lease if that is
     sooner. None means no clock is running (a campaign with no window is not
@@ -66,7 +91,8 @@ def search_deadline(campaign: Campaign, machine: Machine | None) -> datetime | N
     hard = hard_deadline(campaign, machine)
     if hard is None:
         return None
-    return hard - timedelta(minutes=settings_of(campaign).reserve_minutes())
+    reserve = settings_of(campaign).reserve_minutes(contender_minutes(campaign))
+    return hard - timedelta(minutes=reserve)
 
 
 def deadlines(

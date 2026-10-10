@@ -20,7 +20,6 @@ from app.control.launch.ssh_docker import SshDockerDriver
 from app.control.orchestrator.supervisor import Supervisor
 from app.db.base import Base
 from app.db.models import (
-    BaselineStatus,
     Campaign,
     CampaignStatus,
     Candidate,
@@ -253,7 +252,6 @@ def _seed(factory, *, pinned_group: bool, tp_values: list[int]) -> None:
                 # interior host falls back to `host`.
                 data_host="192.168.9.1" if machine_id == 1 else "",
                 state=MachineState.AVAILABLE.value, gpu_count=8, gpu_type="A100",
-                baseline_status=BaselineStatus.CLEARED.value,
                 lease_state=LeaseState.ACTIVE.value,
             ))
         group = MachineGroup(id=1, name="pair", driver="")

@@ -3,6 +3,8 @@ import { createRouter, createWebHistory, type RouteLocationNormalized } from 'vu
 import { pluginRoutes } from '../plugins'
 import { useAuthStore } from '../stores/auth'
 
+export const AGENT_REPORTS = import.meta.env.VITE_AGENT_REPORTS === '1'
+
 export const router = createRouter({
   history: createWebHistory(),
   routes: [
@@ -13,12 +15,19 @@ export const router = createRouter({
     { path: '/campaigns/:id', component: () => import('../views/CampaignDetailView.vue') },
     { path: '/search-spaces', component: () => import('../views/SearchSpacesView.vue') },
     { path: '/objectives', component: () => import('../views/ObjectivesView.vue') },
+    { path: '/policies', component: () => import('../views/PoliciesView.vue') },
     { path: '/baselines', component: () => import('../views/BaselinesView.vue') },
     { path: '/runs', component: () => import('../views/RunsView.vue') },
     { path: '/resources', component: () => import('../views/ResourcesView.vue') },
     { path: '/api-keys', component: () => import('../views/ApiKeysView.vue') },
-    { path: '/reports', component: () => import('../views/ReportsView.vue') },
-    { path: '/reports/:id', component: () => import('../views/ReportView.vue') },
+    // Agent-written reports: off unless built with VITE_AGENT_REPORTS=1, as the
+    // backend's agent API is off unless enabled.
+    ...(AGENT_REPORTS
+      ? [
+          { path: '/reports', component: () => import('../views/ReportsView.vue') },
+          { path: '/reports/:id', component: () => import('../views/ReportView.vue') },
+        ]
+      : []),
     // Reached from the user menu, not the main nav — somewhere you go once.
     { path: '/account', component: () => import('../views/AccountView.vue') },
     // Pages installed plugins add (src/plugins), in the order they list them.

@@ -4,9 +4,8 @@ The platform already carried this shape four times under four names: a
 campaign plus its candidate config, the driver's LaunchSpec, a policy
 contender's launch_spec, and the payload a pasted `docker run` line compiles
 into. They agreed on the fields and disagreed on nothing, so naming it costs
-little and buys a single conversion point: the campaign anchor, a baseline, a
-winner and the deploy target's file all read and write THIS, never each
-other.
+little and buys a single conversion point: the campaign anchor, a baseline
+and a winner all read and write THIS, never each other.
 
 Two conventions it fixes:
 - `engine_args` is the canonical snake_case vocabulary of the flag catalog,
@@ -102,26 +101,8 @@ class LaunchConfig(BaseModel):
         ).normalized()
 
     @classmethod
-    def from_promotion_config(cls, config: dict[str, Any], gpu_type: str = "") -> LaunchConfig:
-        """The winner payload build_promotion_config produces."""
-        image = config.get("image") or {}
-        return cls(
-            engine=config.get("engine") or "sglang",
-            # The TAG the winner ran, not the digest: a deploy file names tags,
-            # and the digest travels separately as evidence.
-            image=str(image.get("tag") or image.get("ref") or ""),
-            model_path=config.get("model_path") or "",
-            served_model_name=config.get("served_model_name") or "",
-            service_port=int(config.get("port") or 0),
-            engine_args=dict(config.get("engine_args") or {}),
-            extra_env=dict(config.get("extra_env") or {}),
-            extra_volumes=dict(config.get("extra_volumes") or {}),
-            gpu_type=gpu_type or str((config.get("env_snapshot") or {}).get("card_type") or ""),
-        ).normalized()
-
-    @classmethod
     def from_parsed(cls, parsed: dict[str, Any], engine: str = "sglang") -> LaunchConfig:
-        """From parse_launch_command's dict, or a deploy-format parse result."""
+        """From parse_launch_command's dict."""
         return cls(
             engine=parsed.get("engine") or engine,
             image=parsed.get("image") or "",

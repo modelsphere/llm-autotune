@@ -15,7 +15,6 @@ from sqlalchemy.orm import sessionmaker
 from app.control.orchestrator.supervisor import Supervisor
 from app.db.base import Base
 from app.db.models import (
-    BaselineStatus,
     Campaign,
     CampaignStatus,
     Candidate,
@@ -128,7 +127,6 @@ def _occupancy_env():
             Machine(
                 id=1, name="gpu-01", host="10.0.0.1", gpu_count=4,
                 state=MachineState.RESERVED.value,
-                baseline_status=BaselineStatus.CLEARED.value,
             )
         )
         session.add(

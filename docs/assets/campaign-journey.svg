@@ -27,7 +27,7 @@
   <path d="M848 84 L882 84" fill="none" stroke="#5b6b7a" stroke-width="1.6" marker-end="url(#a-grey)"/>
   <rect x="884" y="20" width="180" height="128" rx="8" fill="#e8f6ee" stroke="#3b9a68" stroke-width="1.4"/>
   <text x="974.0" y="60.0" font-size="11" fill="#7a8794" font-weight="700" letter-spacing="0.6" text-anchor="middle">YOU</text>
-  <text x="974.0" y="79.0" font-size="15" fill="#1b2733" font-weight="700" text-anchor="middle">5 · Promote</text>
-  <text x="974.0" y="100.0" font-size="12.5" fill="#4a5a6a" text-anchor="middle">the winner as a</text>
-  <text x="974.0" y="118.0" font-size="12.5" fill="#4a5a6a" text-anchor="middle">merge request</text>
+  <text x="974.0" y="79.0" font-size="15" fill="#1b2733" font-weight="700" text-anchor="middle">5 · Roll out</text>
+  <text x="974.0" y="100.0" font-size="12.5" fill="#4a5a6a" text-anchor="middle">the winner's exact</text>
+  <text x="974.0" y="118.0" font-size="12.5" fill="#4a5a6a" text-anchor="middle">launch command</text>
 </svg>

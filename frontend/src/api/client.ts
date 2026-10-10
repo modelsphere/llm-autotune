@@ -44,17 +44,6 @@ export interface Machine {
   nccl_ifname: string
   state: 'away' | 'available' | 'reserved'
   notes: string
-  baseline: {
-    services?: {
-      container: string
-      image: string
-      port: string
-      served_model_name: string
-      endpoint_url: string
-      restore_script: string
-    }[]
-  }
-  baseline_status: 'none' | 'captured' | 'cleared' | 'restored'
   gpus_busy: number
   /** Who lent us this machine and until when. `none` = never leased. */
   lease_state: LeaseState
@@ -166,7 +155,6 @@ export interface MachineGroupMember {
   driver: string
   leased: boolean
   state: string
-  baseline_status: string
   needs_attention: boolean
   gpus_busy: number
   /** When this member's lease is promised back. */
@@ -246,7 +234,6 @@ export interface LeaseStatus {
   lease_released_at: string | null
   readiness: 'busy' | 'idle' | 'returnable'
   returnable_at: string | null
-  production_status: string
   live_runs: {
     run_id: number
     campaign_id: number
@@ -289,11 +276,8 @@ export interface CampaignSchedule {
   finished: boolean
 }
 
-/** Where a machine is in the hand-over sequence, from `/machines/lifecycle`.
- *
- *  Answered by the backend on purpose: `state` and `baseline_status` alone
- *  cannot say whether a baseline canary is still owed, and a page that guesses
- *  is how manual Capture/Clear came to look like required steps. */
+/** Where a machine is in its lease, from `/machines/lifecycle` — the same
+ *  predicates the worker acts on, so the page never guesses. */
 export interface MachineLifecycle {
   machine_id: number
   /** Index into the `steps` array the same endpoint returns. */
@@ -302,26 +286,13 @@ export interface MachineLifecycle {
   headline: string
   detail: string
   campaigns: { id: number; name: string }[]
-  /** A canary is owed and has not passed — clearing by hand destroys the very
-   *  service it exists to measure. */
-  canary_pending: boolean
   /** The same word the lease API gives an external caller, so the page and the
    *  fleet manager can never describe a machine differently. */
   readiness: 'busy' | 'idle' | 'returnable'
   /** Worst case for when a polite hand-back completes; null when idle. */
   returnable_at: string | null
-  /** What End lease actually does to production on this machine, decided by
-   *  the backend from the branch the drain will take. The card and the confirm
-   *  dialog both render `summary` rather than each writing their own sentence. */
-  hand_back: {
-    /** We start production again before the lease closes. */
-    restores: boolean
-    /** Production is down and we are NOT the ones putting it back. */
-    owed: boolean
-    /** How many captured services that verdict is about. */
-    services: number
-    summary: string
-  }
+  /** What End lease does on this machine right now, in one line. */
+  hand_back: { summary: string }
 }
 
 export interface Campaign {
@@ -368,6 +339,16 @@ export interface Campaign {
    *  platform launches, benchmarks and judges either way. */
   policy_id: number | null
   policy_settings: Record<string, unknown>
+  /** What this campaign's runs have taken so far, in minutes; null until a
+   *  run has been measured. The window is planned from these. */
+  learned_timing: {
+    startup_minutes: number | null
+    bench_minutes: number | null
+    verify_bench_minutes: number | null
+    samples: number
+    /** From the benchmark's own settings, before any run is measured. */
+    estimated_bench_minutes: number | null
+  }
   confirm_top_k: number
   confirm_repeats: number
   /** The opt-in second stage, off by default. Set both the slug and top_k > 0 to
@@ -386,14 +367,6 @@ export interface Campaign {
   dataset_sha256: string
   dataset_policy_applied: string
   dataset_pinned_at: string | null
-  /** Which release branch of the deploy repo a winner of this campaign is
-   *  proposed onto. The repo keeps one per model x card x engine, so it is a
-   *  real choice; empty = the branch the bound baseline already tracks. */
-  deploy_branch: string
-  /** Open the winner's merge request as soon as the campaign is done, instead
-   *  of waiting for someone to press Generate MR. Honours the platform's
-   *  dry-run setting exactly as the button does. */
-  auto_promote: boolean
   /** What the search space expands to. Declared, not planned: the platform only
    *  creates candidate rows once the campaign is active. */
   candidate_count: number
@@ -446,7 +419,7 @@ export interface Run {
   campaign_id: number
   candidate_id: number
   machine_id: number | null
-  kind: string // experiment | baseline (the canary against production)
+  kind: string // experiment | policy_launch | external (| baseline, before 0.2.0)
   /** screen = the cheap benchmark every candidate gets; verify = the expensive
    *  one only the shortlist gets. Their metrics share no names. */
   stage: string
@@ -550,7 +523,10 @@ export interface Redline {
 export interface DatasetProfile {
   name: string
   display_name: string
+  /** Resampled only when a campaign asks, so it holds steady in between. */
   managed: boolean
+  /** How often LLMBench resamples it on its own; 0 = only on request. */
+  schedule_hours: number
   enabled: boolean
   build_id: string
   records: number | null
@@ -637,148 +613,6 @@ export interface Baseline {
   source: string
   notes: string
   /** Where this config lives in git, when bound. */
-  binding: DeployBinding | null
-  created_at: string
-  updated_at: string | null
-}
-
-/** One difference between the platform's baseline and the deploy file, and
- *  what was decided about it. */
-export interface Divergence {
-  kind: 'field' | 'knob'
-  key: string
-  ours: unknown
-  theirs: unknown
-  owner: string
-  /** "unresolved" or the decision: adopt | equivalent | repo | ignore | platform. */
-  status: string
-  decided_by?: string
-  decided_at?: string
-}
-
-/** A baseline's deploy-repo binding: the file production is deployed from,
- *  which adapter reads it, who owns each field/knob, and what diverges. */
-export interface DeployBinding {
-  id: number
-  baseline_id: number
-  project: string
-  branch: string
-  path: string
-  format: { preset?: string; adapter?: string; options?: Record<string, unknown> }
-  policy: { fields?: Record<string, string>; knobs?: Record<string, string>; path_knobs?: string }
-  equivalences: Record<string, unknown>
-  divergences: Divergence[]
-  unresolved: number
-  commit: string
-  synced_at: string | null
-  updated_at: string | null
-}
-
-export interface DeployFormatsCatalog {
-  presets: { name: string; label: string; path: string; adapter: string }[]
-  default_preset: string
-  fields: string[]
-  default_policy: Record<string, string>
-  shortcuts: { name: string; label: string; hint: string }[]
-  default_project: string
-  gitlab_configured: boolean
-}
-
-/** One branch of the deploy repo, for the "which release branch" pickers. */
-export interface RepoBranch {
-  name: string
-  default: boolean
-  protected: boolean
-  commit: string
-  committed_at: string
-}
-
-/** GET /baselines/branches. `error` is set (and the list empty) when GitLab is
- *  unconfigured or unreachable — a picker falls back to free text, it does not
- *  fail. */
-export interface RepoBranches {
-  project: string
-  branches: RepoBranch[]
-  error: string
-}
-
-export interface BaselineSync {
-  baseline: Baseline
-  commit: string
-  adopted: Divergence[]
-  divergences: Divergence[]
-  unresolved: number
-  image: string
-  model_path: string
-  gpus: number | null
-  gpu_product: string
-  env: Record<string, string>
-  warnings: string[]
-}
-
-/** One knob-level change a merge request would make (or deliberately not). */
-export interface KnobChange {
-  key: string
-  kind: 'changed' | 'added' | 'removed'
-  flag: string
-  before: unknown
-  after: unknown
-  note: string
-}
-
-export interface ChangePlan {
-  changes: KnobChange[]
-  kept: KnobChange[]
-  reported: KnobChange[]
-  ignored: KnobChange[]
-  gpus: { before: number | null; after: number } | null
-  image_tag: { before: string; after: string } | null
-  model_path: { before: string; after: string } | null
-  warnings: string[]
-  empty: boolean
-}
-
-/** What `promote` would send to GitLab, before it does. */
-export interface MergeRequestPreview {
-  campaign_id: number
-  run_id: number
-  baseline_id: number | null
-  ready: boolean
-  reason: string
-  repo_project: string
-  /** Where the merge request goes, and the branch the baseline is synced
-   *  against. They differ when a campaign names a branch of its own. */
-  repo_branch: string
-  tracked_branch: string
-  repo_path: string
-  head_commit: string
-  synced_commit: string
-  stale: boolean
-  unresolved: number
-  drift: { key: string; kind: string; before: unknown; after: unknown }[]
-  plan: ChangePlan
-  diff: string
-  source_branch: string
-  title: string
-  description: string
-  dry_run: boolean
-  offline: boolean
-  evidence: Record<string, unknown>
-}
-
-/** A recorded promotion: which run's config was handed to which target, and
- *  where it went (an MR url, a branch, a diff). */
-export interface Promotion {
-  id: number
-  campaign_id: number
-  run_id: number
-  target: string
-  state: string
-  config: Record<string, unknown>
-  refs: Record<string, unknown>
-  detail: string
-  error: string
-  created_by: number | null
   created_at: string
   updated_at: string | null
 }
@@ -795,6 +629,8 @@ export interface Policy {
   repo_url: string
   version: string
   gpus_in_container: boolean
+  /** Mount the campaign's weights at /model. */
+  needs_model: boolean
   env: Record<string, string>
   ports: number
   created_at: string | null
@@ -822,6 +658,28 @@ export async function fetchRunLog(runId: number): Promise<string> {
 
 /** The policy container's stdout+stderr — live from the container while the
  *  session runs, the file captured at teardown once it has ended. */
+/** One policy container's night (GET /policy-sessions/{id}). */
+export interface PolicySessionDetail {
+  id: number
+  status: 'pending' | 'starting' | 'searching' | 'finalizing' | 'validating' | 'done'
+    | 'failed' | 'aborted'
+  started_at: string | null
+  first_heartbeat_at: string | null
+  last_heartbeat_at: string | null
+  policy_phase: string
+  policy_message: string
+  policy_progress: number | null
+  search_end_reason: string
+  failure_class: string
+  error: string
+  finalize_requested_at: string | null
+  abort_requested_at: string | null
+  search_deadline: string | null
+  trials: unknown[]
+  contenders: { id: number; status?: string }[]
+  waiting: string
+}
+
 export async function fetchPolicySessionLog(sessionId: number): Promise<string> {
   return (await api.get(`/policy-sessions/${sessionId}/log`, { responseType: 'text' })).data
 }

@@ -12,14 +12,16 @@ from sqlalchemy.orm import selectinload
 
 from app import plugins
 from app.campaign_spec import SPEC_KEYS, DraftRequest, draft_campaign, spec_of
+from app.control.baseline import resolve_baseline
 from app.control.launch import MachineInfo, get_driver
 from app.control.launch import preflight as pf
-from app.control.orchestrator import lifecycle
+from app.control.orchestrator import lifecycle, timing
 from app.control.orchestrator import schedule as sched
 from app.control.search.parity import missing_flags
 from app.control.search.space import candidate_count, expand, space_errors, swept_keys
 from app.control.search.validation import cards_used
 from app.core.auth import get_current_user
+from app.core.config import get_settings
 from app.datasets import pinning
 from app.datasets.profiles import DatasetProfileClient, DatasetProfileError
 from app.db.base import get_async_session
@@ -35,12 +37,15 @@ from app.db.models import (
     MachineGroupMember,
     Policy,
     PolicySession,
+    PolicySessionStatus,
     Result,
     Run,
     User,
     is_baseline_candidate,
     is_in_place_baseline,
 )
+from app.evaluation.benchmark_spec import BenchmarkSpec, ensure_spec
+from app.evaluation.benchmarks import BenchmarkRefused
 from app.evaluation.llmbench import LLMBenchClient
 from app.evaluation.ranking import leaderboard_entries
 from app.metrics_catalog import DEFAULT_VERIFY_TARGET_METRIC
@@ -52,12 +57,13 @@ from app.schemas.core import (
     CampaignScheduleUpdate,
     CampaignStatusUpdate,
     CandidateOut,
-    DeployBranchIn,
     LeaderboardEntry,
     MachineWarningOut,
     RunOut,
+    served_name_for,
 )
 from app.schemas.policy import PolicySettings
+from app.staging import SCREEN, VERIFY
 
 logger = logging.getLogger(__name__)
 
@@ -170,6 +176,8 @@ async def dataset_profiles(_: User = Depends(get_current_user)):
                 "name": profile.get("name", ""),
                 "display_name": profile.get("display_name", ""),
                 "managed": not (profile.get("schedule_interval_hours") or 0),
+                # How often LLMBench resamples it on its own; 0 = only on request.
+                "schedule_hours": profile.get("schedule_interval_hours") or 0,
                 "enabled": bool(profile.get("enabled", True)),
                 "build_id": current.get("build_id", ""),
                 "records": current.get("records"),
@@ -285,6 +293,64 @@ async def create_campaign(
     return await _campaign_out(session, campaign)
 
 
+def _spec(raw: dict | None, field: str) -> BenchmarkSpec | None:
+    if raw is None:
+        return None
+    try:
+        return BenchmarkSpec.model_validate(raw)
+    except ValidationError as exc:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY, f"{field}: {exc.errors()}"
+        ) from exc
+
+
+async def _resolve_benchmark_specs(body: CampaignCreate) -> None:
+    """Turn each described workload into its benchmark on LLMBench, so the
+    rest of creation — and every run after it — sees an ordinary slug. A
+    replay of a rolling profile also pins that profile, unless one is set."""
+    for spec_field, slug_field in (("benchmark_spec", "benchmark_slug"),
+                                   ("verify_benchmark_spec", "verify_benchmark_slug")):
+        spec = _spec(getattr(body, spec_field), spec_field)
+        if spec is None:
+            continue
+        try:
+            ensured = await anyio.to_thread.run_sync(lambda spec=spec: ensure_spec(spec))
+        except BenchmarkRefused as exc:
+            raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(
+                status.HTTP_502_BAD_GATEWAY,
+                f"could not create the benchmark on LLMBench: {exc}",
+            ) from exc
+        setattr(body, slug_field, ensured.slug)
+        if spec.kind == "replay" and spec.dataset_profile.strip() and not body.dataset_profile:
+            body.dataset_profile = spec.dataset_profile.strip()
+
+
+async def _benchmark_estimates(body: CampaignCreate) -> dict[str, float | None]:
+    """How long each stage's benchmark should take, from its own parameters on
+    LLMBench — what the window is planned from until runs are measured. Empty
+    when LLMBench is not configured or cannot say; it never fails a creation."""
+    if not get_settings().llmbench_base_url:
+        return {}
+    slugs = {SCREEN: body.benchmark_slug or get_settings().llmbench_benchmark_slug,
+             VERIFY: body.verify_benchmark_slug}
+
+    def _read() -> dict[str, float | None]:
+        client = LLMBenchClient(max_attempts=1)
+        out: dict[str, float | None] = {}
+        for stage, slug in slugs.items():
+            if slug:
+                found = client.get_benchmark(slug)
+                out[stage] = timing.estimate_benchmark_minutes(found) if found else None
+        return out
+
+    try:
+        return await anyio.to_thread.run_sync(_read)
+    except Exception:
+        return {}
+
+
 async def _create(session: AsyncSession, user: User, body: CampaignCreate) -> Campaign:
     """Validate and save a campaign. The one path every way of making one takes
     — the form, an imported spec, a clone, a posted draft — so a rule added here
@@ -311,6 +377,7 @@ async def _create(session: AsyncSession, user: User, body: CampaignCreate) -> Ca
             status.HTTP_422_UNPROCESSABLE_ENTITY,
             "confirm_top_k must be >= 0 and confirm_repeats >= 1",
         )
+    await _resolve_benchmark_specs(body)
     for message in _staging_errors(body):
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, message)
     for message in await _node_group_errors(session, body):
@@ -327,7 +394,9 @@ async def _create(session: AsyncSession, user: User, body: CampaignCreate) -> Ca
     schedule_errors = sched.errors(body.daily_start, body.daily_end, body.schedule_timezone)
     if schedule_errors:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "; ".join(schedule_errors))
-    campaign = Campaign(owner_id=user.id, **body.model_dump(exclude={"extensions"}))
+    campaign = Campaign(owner_id=user.id, **body.model_dump(
+        exclude={"extensions", "benchmark_spec", "verify_benchmark_spec"}))
+    timing.set_priors(campaign, await _benchmark_estimates(body))
     # A campaign that carries a clock starts under it, not in draft: leaving it
     # DRAFT would mean someone still has to press Start, which is exactly the
     # 23:00 keyboard visit the schedule exists to remove.
@@ -441,6 +510,7 @@ async def _campaign_out(session: AsyncSession, campaign: Campaign) -> CampaignOu
     (only while the campaign can still run — a finished one's pool is
     history), and what plugins keep about it."""
     out = CampaignOut.model_validate(campaign)
+    out.learned_timing = timing.summary(campaign)
     out.extensions = (await _extensions_of(session, [campaign]))[campaign.id]
     if campaign.status in _LIVE_CAMPAIGN_STATES:
         machines = (await session.execute(select(Machine))).scalars().all()
@@ -452,42 +522,6 @@ async def _campaign_out(session: AsyncSession, campaign: Campaign) -> CampaignOu
             )
         ]
     return out
-
-
-@router.put("/{campaign_id}/deploy-branch", response_model=CampaignOut)
-async def set_deploy_branch(
-    campaign_id: int,
-    body: DeployBranchIn,
-    user: User = Depends(get_current_user),
-    session: AsyncSession = Depends(get_async_session),
-):
-    """Where this campaign's winner is proposed — and whether it proposes
-    itself.
-
-    The repo keeps one branch per (model x card x engine), so a bound baseline
-    can face several of them and the binding's own branch is only a default.
-    Empty clears it, back to that default. Not validated against the repo here
-    — the branch list comes from GitLab in the UI, and a branch that has since
-    disappeared is reported when the merge request is previewed, which is the
-    moment it matters.
-    """
-    campaign = await session.get(Campaign, campaign_id)
-    if campaign is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "no such campaign")
-    campaign.deploy_branch = (body.branch or "").strip()
-    if body.auto_promote is not None:
-        campaign.auto_promote = body.auto_promote
-    session.add(
-        Event(
-            actor=user.username,
-            kind="campaign_deploy_branch_set",
-            campaign_id=campaign.id,
-            payload={"branch": campaign.deploy_branch, "auto_promote": campaign.auto_promote},
-        )
-    )
-    await session.commit()
-    await session.refresh(campaign)
-    return await _campaign_out(session, campaign)
 
 
 @router.put("/{campaign_id}/status", response_model=CampaignOut)
@@ -569,6 +603,36 @@ class PreflightRequest(BaseModel):
     verify_benchmark_slug: str = ""
     verify_objective: dict = Field(default_factory=dict)
     dataset_profile: str = ""
+    # Workloads not yet created on LLMBench; checked as the benchmark they
+    # will become (see _with_specs).
+    benchmark_spec: dict | None = None
+    verify_benchmark_spec: dict | None = None
+    # The search policy, whose image must reach the machine too.
+    policy_id: int | None = None
+    policy_image: str = ""
+
+
+def _with_specs(
+    body: PreflightRequest,
+    catalog: dict[str, list[str]] | None,
+    wired: dict[str, str] | None = None,
+) -> None:
+    """Check a described workload as the benchmark it will be: its slug, the
+    module it runs, and the profile it replays. Nothing is created here — that
+    waits for the campaign itself."""
+    for spec_field, slug_field in (("benchmark_spec", "benchmark_slug"),
+                                   ("verify_benchmark_spec", "verify_benchmark_slug")):
+        spec = _spec(getattr(body, spec_field), spec_field)
+        if spec is None:
+            continue
+        setattr(body, slug_field, spec.slug)
+        if catalog is not None:
+            catalog.setdefault(spec.slug, [spec.module])
+        if wired is not None:
+            replays = spec.dataset_profile.strip() if spec.kind == "replay" else ""
+            wired.setdefault(spec.slug, replays)
+        if spec.kind == "replay" and spec.dataset_profile.strip() and not body.dataset_profile:
+            body.dataset_profile = spec.dataset_profile.strip()
 
 
 def _benchmark_catalog(client: LLMBenchClient) -> dict[str, list[str]] | None:
@@ -607,6 +671,7 @@ def _dataset_wiring(client: LLMBenchClient) -> tuple[dict[str, str] | None, list
 def _benchmark_checks(
     body: PreflightRequest, catalog: dict[str, list[str]] | None, client: LLMBenchClient
 ) -> list:
+    _with_specs(body, catalog)
     checks = [
         pf.benchmark_check(
             "benchmark", "Benchmark", body.benchmark_slug, catalog,
@@ -623,6 +688,7 @@ def _benchmark_checks(
             )
         )
         wired, profiles = _dataset_wiring(client)
+        _with_specs(body, None, wired)
         checks.append(
             pf.dataset_check(
                 body.dataset_profile.strip(), body.verify_benchmark_slug, wired, profiles
@@ -639,7 +705,9 @@ def _widest_candidate(search_space: dict) -> int:
         return 0
 
 
-def _run_preflight(body: PreflightRequest, machines: list[Machine]) -> list[dict]:
+def _run_preflight(
+    body: PreflightRequest, machines: list[Machine], production: dict[str, dict | None]
+) -> list[dict]:
     """The machine-side probes, once per candidate machine.
 
     Runs in a worker thread: it is ssh, and a form that blocks the event loop
@@ -676,30 +744,34 @@ def _run_preflight(body: PreflightRequest, machines: list[Machine]) -> list[dict
         # into `driver._ssh`, which only the ssh_docker driver has; a k8s machine
         # is scheduled by the cluster, so its readiness is a cluster-side concern
         # this form cannot answer from here. Say so rather than crash or pretend.
-        driver = get_driver(machine.driver or "ssh_docker")
-        if not hasattr(driver, "_ssh"):
-            checks = [pf.Check(
-                "substrate", "Deployment substrate", pf.SKIP,
-                f"{machine.name} runs on the {driver.name} substrate; "
-                "placement and readiness are decided cluster-side",
-                "Machine-side preflight (ssh, ports, GPUs) only applies to bare-metal "
-                "hosts. The k8s driver validates against the cluster at launch time.",
-            )]
-        else:
+        driver = get_driver(machine.driver or "ssh_docker", cluster_id=machine.cluster_id)
+        policy_images = [body.policy_image] if body.policy_image else []
+        if hasattr(driver, "_ssh"):
             checks = pf.inspect(
                 driver, info,
                 image=body.image, model_path=body.model_path,
                 volumes=body.extra_volumes, port=body.service_port,
-                widest_candidate_cards=widest,
+                widest_candidate_cards=widest, policy_images=policy_images,
             )
+        elif hasattr(driver, "preflight"):
+            # A cluster machine answers through the cluster: a probe pod on its
+            # node pulls the images and mounts the model the way a run does.
+            checks = driver.preflight(
+                info, image=body.image, model_path=body.model_path,
+                policy_images=policy_images, widest_candidate_cards=widest,
+            )
+        else:
+            checks = [pf.Check(
+                "substrate", "Deployment substrate", pf.SKIP,
+                f"{machine.name} runs on the {driver.name} substrate, which has no preflight",
+            )]
         # Parity is not a machine probe but it is the same kind of finding —
         # cheap to learn, expensive to discover at 3am — so it belongs in the
         # same list rather than in a banner people close.
         base = (body.search_space or {}).get("base") or {}
         config = {**base, **dict.fromkeys(swept_keys(body.search_space or {}))}
-        missing = missing_flags(config, machine.baseline, body.served_model_name)
-        container = missing[0]["container"] if missing else ""
-        checks.append(pf.parity_check(missing, container))
+        args = production.get(machine.gpu_type or "")
+        checks.append(pf.parity_check(missing_flags(config, args), args is not None))
         checks.append(space_check)
         checks.extend(benchmark_checks)
         checks.extend(multi_node_check)
@@ -760,7 +832,19 @@ async def preflight(
                 if allowed else "no machines are registered"
             ),
         }
-    results = await anyio.to_thread.run_sync(_run_preflight, body, candidates)
+    # Production's recorded config per card type, read here on the request's
+    # session so the probes in the worker thread need no database of their own.
+    served = body.served_model_name or served_name_for(body.model_path)
+    production: dict[str, dict | None] = {}
+    for card_type in {m.gpu_type or "" for m in candidates}:
+        row = await session.run_sync(
+            lambda db, card_type=card_type: resolve_baseline(db, served, body.engine, card_type)
+        )
+        production[card_type] = dict(row.engine_args or {}) if row is not None else None
+    if body.policy_id is not None and not body.policy_image:
+        policy = await session.get(Policy, body.policy_id)
+        body.policy_image = policy.image if policy is not None else ""
+    results = await anyio.to_thread.run_sync(_run_preflight, body, candidates, production)
     return {"machines": results, "ok": all(r["ok"] for r in results), "note": ""}
 
 
@@ -794,6 +878,7 @@ async def campaign_preflight(
         verify_benchmark_slug=campaign.verify_benchmark_slug or "",
         verify_objective=campaign.verify_objective or {},
         dataset_profile=campaign.dataset_profile or "",
+        policy_id=campaign.policy_id,
     )
     return await preflight(body, _, session)
 
@@ -886,11 +971,16 @@ async def set_schedule(
     return await _campaign_out(session, campaign)
 
 
+# What "until it is done or stopped" means in a window: far beyond any search,
+# and still an end, since the loop's deadlines all read the window.
+_FORCE_START_MAX_HOURS = 720
+
+
 class ForceStartRequest(BaseModel):
-    hours: int = Field(
-        8, ge=1, le=72,
-        description="How long to run outside the schedule. Bounded because an "
-        "override with no end is how a machine stays borrowed for a week.",
+    hours: int | None = Field(
+        None, ge=1, le=_FORCE_START_MAX_HOURS,
+        description="How long to run outside the schedule. Empty: until the search "
+        "is done or someone stops it.",
     )
 
 
@@ -899,8 +989,9 @@ class ForceStartRequest(BaseModel):
     response_model=CampaignOut,
     summary="Run now, ignoring the schedule",
     description="Starts a campaign outside its nightly window and holds it open for "
-    "`hours`. Without this, setting a scheduled campaign to active is undone on the "
-    "next tick — the clock would put it straight back to sleep.",
+    "`hours`, or until it is done or stopped. Without this, setting a scheduled "
+    "campaign to active is undone on the next tick — the clock would put it straight "
+    "back to sleep.",
 )
 async def force_start(
     campaign_id: int,
@@ -913,7 +1004,7 @@ async def force_start(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "no such campaign")
 
     now = datetime.now(UTC)
-    until = now + timedelta(hours=body.hours)
+    until = now + timedelta(hours=body.hours or _FORCE_START_MAX_HOURS)
     campaign.status = CampaignStatus.ACTIVE.value
     campaign.override_until = until
     # The window the rest of the loop reads. Writing it here is what makes the
@@ -952,12 +1043,6 @@ async def force_stop(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "no such campaign")
 
     if campaign.policy_id:
-        # Stopping a policy campaign means "stop exploring NOW, still deliver
-        # the verdict": the session is told to finalize, validation runs inside
-        # what remains of the window, and the campaign stays ACTIVE until the
-        # session ends it. Pausing here would freeze the container mid-night
-        # with production down — the worst of both worlds. (To kill without a
-        # verdict, abort the session on its detail page.)
         live = (
             await session.execute(
                 select(PolicySession).where(
@@ -968,9 +1053,19 @@ async def force_stop(
                 )
             )
         ).scalars().first()
-        if live is not None:
-            if live.finalize_requested_at is None:
-                live.finalize_requested_at = datetime.now(UTC)
+        # A policy that is searching is told to finalize: it stops exploring and
+        # its finalists are still measured inside what remains of the window,
+        # and the session ends the campaign. Pausing instead would freeze the
+        # container mid-night. A policy that never started (still pending, or
+        # launched with no heartbeat yet: say its pod cannot be scheduled) has
+        # nothing to measure, and one already finalizing was asked once: both
+        # are aborted, and the campaign pauses so no new session starts.
+        searching = live is not None and live.first_heartbeat_at is not None and (
+            live.status == PolicySessionStatus.SEARCHING.value
+            and live.finalize_requested_at is None
+        )
+        if searching:
+            live.finalize_requested_at = datetime.now(UTC)
             session.add(
                 Event(
                     actor=user.username, kind="policy_session_finalize_requested",
@@ -981,7 +1076,16 @@ async def force_stop(
             await session.commit()
             await session.refresh(campaign)
             return await _campaign_out(session, campaign)
-        # No live session: fall through to the classic pause.
+        if live is not None and live.abort_requested_at is None:
+            live.abort_requested_at = datetime.now(UTC)
+            session.add(
+                Event(
+                    actor=user.username, kind="policy_session_abort_requested",
+                    campaign_id=campaign_id,
+                    payload={"session_id": live.id, "reason": "force stop"},
+                )
+            )
+        # Then the classic pause.
 
     campaign.status = CampaignStatus.PAUSED.value
     # Cleared, or the next tick would read the override and wake it again.
@@ -1168,29 +1272,27 @@ async def config_parity(
     _: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_async_session),
 ):
-    """How this campaign's config differs from the production service captured
-    on its machine — the reference that matters, since an engine default is not
-    what the baseline canary measured."""
+    """How this campaign's config differs from production's, as recorded on
+    Baselines for its model, engine and card type — the reference that
+    matters, since an engine default is not what production runs."""
     campaign = await session.get(Campaign, campaign_id)
     if campaign is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "no such campaign")
 
     machines = (await session.execute(select(Machine))).scalars().all()
     allowed = campaign.machine_names or []
-    candidates = [m for m in machines if not allowed or m.name in allowed]
-    # Only a machine we have actually inspected can answer the question.
-    machine = next((m for m in candidates if (m.baseline or {}).get("services")), None)
-    if machine is None:
-        return {"machine": "", "container": "", "missing": []}
-
+    card_type = next(
+        (m.gpu_type for m in machines if (not allowed or m.name in allowed) and m.gpu_type), ""
+    )
+    production = await session.run_sync(
+        lambda db: resolve_baseline(db, campaign.served_model_name, campaign.engine, card_type)
+    )
+    if production is None:
+        return {"baseline_id": None, "missing": []}
     base = (campaign.search_space or {}).get("base") or {}
     config = {**base, **dict.fromkeys(swept_keys(campaign.search_space or {}))}
-    missing = missing_flags(config, machine.baseline, campaign.served_model_name)
-    return {
-        "machine": machine.name,
-        "container": missing[0]["container"] if missing else "",
-        "missing": missing,
-    }
+    return {"baseline_id": production.id,
+            "missing": missing_flags(config, production.engine_args)}
 
 
 @router.get("/{campaign_id}/leaderboard", response_model=list[LeaderboardEntry])

@@ -26,7 +26,6 @@ from app.core import apikeys
 from app.db.base import Base, get_async_session
 from app.db.models import (
     ApiKey,
-    BaselineStatus,
     Campaign,
     CampaignStatus,
     ContenderStatus,
@@ -151,7 +150,6 @@ async def night(monkeypatch):
             Machine(
                 id=1, name="gpu-1", host="10.0.0.9", gpu_count=8, gpu_type="H100",
                 state=MachineState.AVAILABLE.value,
-                baseline_status=BaselineStatus.CLEARED.value,
             )
         )
         session.add(
@@ -530,6 +528,59 @@ async def test_a_graceful_exhaust_is_labelled_exhausted_not_deadline(night):
     assert row.search_end_reason == "policy_exhausted"
 
 
+async def _recurring(http) -> None:
+    """Give the campaign a daily window that is open now, so it has a next night."""
+    now = datetime.now(UTC)
+    async with http.db() as session:
+        campaign = await session.get(Campaign, 1)
+        campaign.daily_start = (now - timedelta(hours=1)).strftime("%H:%M")
+        campaign.daily_end = (now + timedelta(hours=3)).strftime("%H:%M")
+        campaign.schedule_timezone = "UTC"
+        await session.commit()
+
+
+async def _drive_to_end(supervisor, http) -> None:
+    for _ in range(10):
+        supervisor.tick()
+        if (await _session_row(http)).terminal:
+            return
+    raise AssertionError("the session did not end")
+
+
+async def test_an_exhausted_search_ends_a_recurring_campaign(night):
+    """A policy that says it has covered its space ends the campaign, even one
+    with a nightly window: the next night would only hear the same thing."""
+    supervisor, driver, http = night
+    await _recurring(http)
+    policy = await _boot(supervisor, driver, http)
+
+    assert (await policy.heartbeat(status="exhausted"))["command"] == "finalize"
+    assert (await policy.post("/session/finalized")).status_code == 204
+    await _drive_to_end(supervisor, http)
+
+    async with http.db() as session:
+        assert (await session.get(Campaign, 1)).status == CampaignStatus.DONE.value
+
+
+async def test_a_deadline_leaves_a_recurring_campaign_for_its_next_night(night):
+    """A search cut off by its deadline has more to do: the campaign stays active
+    and its policy starts again in the next window."""
+    supervisor, driver, http = night
+    await _recurring(http)
+    policy = await _boot(supervisor, driver, http)
+
+    async with http.db() as session:
+        campaign = await session.get(Campaign, 1)
+        campaign.window_end = datetime.now(UTC) + timedelta(minutes=10)
+        await session.commit()
+    assert (await policy.heartbeat())["command"] == "finalize"
+    assert (await policy.post("/session/finalized")).status_code == 204
+    await _drive_to_end(supervisor, http)
+
+    async with http.db() as session:
+        assert (await session.get(Campaign, 1)).status == CampaignStatus.ACTIVE.value
+
+
 async def test_delegated_work_after_exhausted_clears_the_signal(night):
     """The one case where a later beat *should* drop the signal: the policy
     actually resumes delegated work, proving it was not done after all."""
@@ -675,3 +726,87 @@ async def test_plan_never_touches_policy_campaigns(night):
     supervisor.tick()  # would raise ValueError without the guard
     async with http.db() as session:
         assert (await session.execute(select(PolicySession))).scalars().one() is not None
+
+
+# -- a policy that never starts, and Force stop ----------------------------------
+
+
+async def _starting(supervisor, driver, http) -> PolicySession:
+    supervisor.tick()  # reserved in the machine queue
+    supervisor.tick()  # container launched; STARTING, no heartbeat yet
+    row = await _session_row(http)
+    assert row.status == PolicySessionStatus.STARTING.value
+    return row
+
+
+async def test_a_policy_that_can_never_start_fails_at_once(night):
+    """A pod no node can ever take, or an image that will not pull, used to
+    wait out the 30-minute ready timeout with no word of why."""
+    supervisor, driver, http = night
+    await _starting(supervisor, driver, http)
+
+    driver.failure_reason = lambda handle: ("unschedulable", "0/9 nodes are available")
+    supervisor.tick()
+    assert (await _session_row(http)).status == PolicySessionStatus.STARTING.value, \
+        "a busy cluster is waited for"
+
+    driver.failure_reason = lambda handle: (
+        "image_pull", "Back-off pulling image \"policy-img:1\"")
+    supervisor.tick()
+    row = await _session_row(http)
+    assert row.failure_class == "image_pull"
+    assert "cannot start" in row.error and "policy-img:1" in row.error
+
+
+async def _force_stop(http):
+    from app.core.auth import create_token
+
+    async with http.db() as session:
+        token = create_token(await session.get(User, 1))
+    response = await http.post("/api/campaigns/1/force-stop",
+                               headers={"Authorization": f"Bearer {token}"})
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+async def test_force_stop_aborts_a_policy_that_never_started(night):
+    supervisor, driver, http = night
+    row = await _starting(supervisor, driver, http)
+    assert (await _force_stop(http))["status"] == CampaignStatus.PAUSED.value
+    supervisor.tick()
+    row = await _session_row(http)
+    assert row.status == PolicySessionStatus.ABORTED.value
+    assert row.container_name in driver.torn_down
+    supervisor.tick()
+    async with http.db() as session:
+        sessions = (await session.execute(select(func.count(PolicySession.id)))).scalar()
+    assert sessions == 1, "a paused campaign starts no new session"
+
+
+async def test_force_stop_finalizes_a_search_and_a_second_press_aborts(night):
+    supervisor, driver, http = night
+    await _boot(supervisor, driver, http)
+
+    assert (await _force_stop(http))["status"] == CampaignStatus.ACTIVE.value
+    row = await _session_row(http)
+    assert row.finalize_requested_at is not None and row.abort_requested_at is None
+
+    assert (await _force_stop(http))["status"] == CampaignStatus.PAUSED.value
+    assert (await _session_row(http)).abort_requested_at is not None
+
+
+def test_a_validation_run_takes_the_cards_its_config_uses():
+    """Not the session's whole block: a tp=2 contender on an 8-card session
+    asked the cluster for all 8 and waited forever for cards it never needed."""
+    from types import SimpleNamespace
+
+    from app.control.orchestrator.policy_session import _validation_cards
+
+    session = SimpleNamespace(gpu_indices=list(range(8)))
+    assert _validation_cards(session, {"tp_size": 2}, []) == [0, 1]
+    # Cards a dying engine still holds go last.
+    dying = [SimpleNamespace(gpu_indices=[0, 1])]
+    assert _validation_cards(session, {"tp_size": 2}, dying) == [2, 3]
+    assert _validation_cards(session, {"tp_size": 4, "dp_size": 2}, []) == list(range(8))
+    # A card-less session (a CPU-only slice) launches with none.
+    assert _validation_cards(SimpleNamespace(gpu_indices=[]), {"tp_size": 2}, []) == []

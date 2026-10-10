@@ -119,7 +119,7 @@ const summary = computed(() => {
       {{ summary.text }}
     </p>
     <p v-else-if="!start && !end" class="summary muted">
-      No window — the campaign runs only while you start it by hand.
+      No window: start it by hand.
     </p>
   </div>
 </template>

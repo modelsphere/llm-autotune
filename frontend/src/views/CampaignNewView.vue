@@ -21,10 +21,10 @@ import {
   type Policy,
   type SearchSpace,
 } from '../api/client'
-import DeployBranchSelect from '../components/DeployBranchSelect.vue'
 import InfoHint from '../components/InfoHint.vue'
 import NightlyWindow from '../components/NightlyWindow.vue'
 import SpaceMap from '../components/SpaceMap.vue'
+import WorkloadPicker from '../components/WorkloadPicker.vue'
 import {
   applyStrategy,
   describeStrategy,
@@ -35,6 +35,7 @@ import {
 } from '../plugins'
 import { campaignFromYaml } from '../utils/campaignYaml'
 import { sweptKeysOf } from '../utils/space'
+import { defaultWorkload, specOf, type BenchmarkChoice, type Workload } from '../utils/workload'
 import { fromYaml, toYaml, YamlError } from '../utils/yaml'
 
 const router = useRouter()
@@ -48,23 +49,30 @@ const groups = ref<MachineGroup[]>([])
 const searchSpaces = ref<SearchSpace[]>([])
 const objectives = ref<Objective[]>([])
 const datasetProfiles = ref<DatasetProfile[]>([])
-/** What LLMBench will run a submission against, for the two benchmark pickers.
- *  Empty when LLMBench is unreachable — the pickers still take a typed slug. */
-interface BenchmarkChoice {
-  slug: string
-  name: string
-  modules: string[]
-  replays_profile: string
-}
+/** What LLMBench will run a submission against, for "an existing benchmark".
+ *  Empty when LLMBench is unreachable — the picker still takes a typed slug. */
 const benchmarks = ref<BenchmarkChoice[]>([])
+/** What every candidate is measured with, and (two-stage) what the best few
+ *  are re-measured with. Described workloads become benchmarks on create. */
+const workload = ref<Workload>(defaultWorkload('sweep'))
+const verifyWorkload = ref<Workload>(defaultWorkload('replay'))
+/** The LLMBench module each workload runs — the prefix of its metric names,
+ *  which is what decides the objectives that can rank it. '' = unknown. */
+const screenModule = ref('')
+const verifyModule = ref('')
 /** Registered policy containers. Picking one in the Strategy select makes this
  *  a policy-as-code campaign: the container searches, the platform judges. */
 const policies = ref<Policy[]>([])
 const selectedSpaceId = ref<number | null>(null)
 const selectedObjectiveId = ref<number | null>(null)
 const verifyObjectiveId = ref<number | null>(null)
-// The two-stage split is an opt-in disclosure, collapsed until someone opens it.
-const advancedNames = ref<string[]>([])
+// The settings most campaigns never touch, one disclosure per step, collapsed
+// until opened. Separate lists: an el-collapse replaces its whole v-model, so a
+// shared one would close every other step's section.
+const advancedNames = ref<string[]>([]) // 'split' — the two-stage benchmark
+const modelAdvanced = ref<string[]>([])
+const machinesAdvanced = ref<string[]>([])
+const searchAdvanced = ref<string[]>([])
 
 const form = ref({
   name: '',
@@ -77,9 +85,11 @@ const form = ref({
   // A node group each run deploys ACROSS. '' = single-node. Setting it makes
   // the group's members the pin; the Machines select is ignored.
   node_group: '',
+  // Where the search for a free port starts; each run takes the next free one.
   service_port: 28200,
   share_machine: true,
-  max_run_minutes: 150,
+  // A safety bound only: the window plans from what runs have actually taken.
+  max_run_minutes: 720,
   benchmark_slug: '',
   // '' = no policy: the campaign tries every configuration in the space, in
   // order. `policy:<id>` = an external policy container searches it instead.
@@ -88,10 +98,11 @@ const form = ref({
   // What installed plugins keep about the campaign, by plugin name; the
   // Strategy select writes a plugin strategy into it on create.
   extensions: {} as Extensions,
-  // Only sent for a policy campaign — the budget the platform holds it to.
-  policy_max_contenders: 1,
-  policy_approx_minutes_each: 30,
-  policy_model_startup_minutes: 5,
+  // Only sent for a policy campaign: how many of its finalists the platform
+  // re-measures at the end. Their benchmark and startup time are learned.
+  policy_max_contenders: 2,
+  // Timings an imported campaign pinned, carried through untouched.
+  policy_pinned: {} as Record<string, number>,
   confirm_top_k: 0,
   confirm_repeats: 3,
   // The expensive second stage. Off by default: it is only worth turning on
@@ -105,15 +116,6 @@ const form = ref({
   // is fine for one night and not for several.
   dataset_profile: '',
   dataset_policy: 'rebuild_at_start',
-  // Which release branch of the deploy repo this campaign's winner is proposed
-  // onto. The repo keeps one per model x card x engine, so it is a choice —
-  // empty means the branch the bound baseline already tracks.
-  deploy_branch: '',
-  // Open the winner's merge request the moment the campaign finishes. Off by
-  // default: a proposal that appears while nobody is watching is only welcome
-  // when it was asked for.
-  auto_promote: false,
-  run_baseline_canary: true,
   daily_start: '23:00',
   daily_end: '08:00',
   schedule_timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
@@ -121,13 +123,23 @@ const form = ref({
 })
 
 const STEPS = [
-  { title: 'Model', hint: 'what to serve' },
-  { title: 'Machines', hint: 'where it runs' },
-  { title: 'Search', hint: 'what to try' },
-  { title: 'Goal', hint: 'the tests, and what wins' },
-  { title: 'Schedule', hint: 'when' },
-  { title: 'Check', hint: 'before committing a night' },
+  { title: 'Model' },
+  { title: 'Machines' },
+  { title: 'Search' },
+  { title: 'Benchmark' },
+  { title: 'Schedule' },
+  { title: 'Check' },
 ]
+
+/** The name a campaign gets when its author leaves it blank. */
+const defaultName = computed(() =>
+  `${servedName.value || 'model'} · ${new Date().toISOString().slice(0, 10)}`)
+
+/** What the engine serves the model as: the typed name, else the last part of
+ *  the model path — the same rule the API applies to an empty field. */
+const servedName = computed(() =>
+  form.value.served_model_name.trim() ||
+  form.value.model_path.trim().replace(/\/+$/, '').split('/').pop() || '')
 
 const selectedSpace = computed(
   () => searchSpaces.value.find((s) => s.id === selectedSpaceId.value) ?? null)
@@ -136,9 +148,50 @@ const selectedObjective = computed(
 const selectedVerifyObjective = computed(
   () => objectives.value.find((o) => o.id === verifyObjectiveId.value) ?? null)
 
-/** On only when both halves are set — the API refuses either alone. */
+/** On only when the second workload is complete — the API refuses half of it. */
 const staged = computed(
-  () => form.value.verify_enabled && form.value.verify_benchmark_slug.trim().length > 0)
+  () => form.value.verify_enabled &&
+    (verifyWorkload.value.mode !== 'existing' || verifyWorkload.value.slug.trim().length > 0))
+
+/** The objectives a module's results can be ranked by. */
+function objectivesFor(module: string): Objective[] {
+  if (!module) return objectives.value
+  return objectives.value.filter((o) => o.target_metric.startsWith(`${module}.`))
+}
+const screenObjectives = computed(() => objectivesFor(screenModule.value))
+const verifyObjectives = computed(() => objectivesFor(verifyModule.value))
+
+/** A different workload reports different metric names: move the objective
+ *  to one it can report, preferring a built-in, unless the current one fits. */
+watch(screenModule, () => {
+  const fits = screenObjectives.value
+  if (!fits.length || fits.some((o) => o.id === selectedObjectiveId.value)) return
+  selectedObjectiveId.value = (fits.find((o) => o.is_builtin) ?? fits[0]).id
+})
+watch(verifyModule, () => {
+  if (verifyObjectives.value.some((o) => o.id === verifyObjectiveId.value)) return
+  verifyObjectiveId.value = null
+})
+
+/** The rolling dataset this campaign replays, so it is pinned for its life:
+ *  a described replay names it; an existing benchmark may resolve one. */
+function replaysOf(w: Workload): string {
+  if (w.mode === 'replay') return w.dataset_profile
+  if (w.mode === 'existing') return benchmarks.value.find((b) => b.slug === w.slug)?.replays_profile ?? ''
+  return ''
+}
+const pinnedProfile = computed(() =>
+  (staged.value ? replaysOf(verifyWorkload.value) : '') || replaysOf(workload.value) ||
+  form.value.dataset_profile)
+
+/** What the summary calls a workload. */
+function describeWorkload(w: Workload): string {
+  if (w.mode === 'sweep') {
+    return `synthetic ${w.input_tokens} in / ${w.output_tokens} out at ${w.concurrencies}`
+  }
+  if (w.mode === 'replay') return `replay of ${w.dataset_profile || 'the example set'}`
+  return w.slug.trim() || 'the platform default'
+}
 
 /** The policy as a checkbox: two words beat a dropdown reading
  *  "rebuild_at_start / use_current". */
@@ -147,15 +200,6 @@ const rebuildAtStart = computed({
   set: (on: boolean) => {
     form.value.dataset_policy = on ? 'rebuild_at_start' : 'use_current'
   },
-})
-
-/** A profile on somebody else's clock. Pinning one still records what was
- *  measured, but nothing stops the build being replaced underneath the
- *  campaign — which is the whole problem the managed profile exists to solve.
- *  Unknown names (the list did not load, or it was typed) are not accused. */
-const unmanagedProfile = computed(() => {
-  const chosen = datasetProfiles.value.find((p) => p.name === form.value.dataset_profile)
-  return chosen ? !chosen.managed : false
 })
 
 /** Empty means "use the platform default", which is a replay metric. Sending
@@ -171,12 +215,15 @@ const verifyObjectivePayload = computed(() => {
   }
 })
 
-/** The screening benchmark's metrics do not exist in a replay result, so an
- *  objective built on them scores every verification run None — which reads,
- *  in the morning, as "the expensive stage measured nothing". */
+/** An objective naming metrics its workload does not report scores every run
+ *  None — which reads, in the morning, as "nothing was measured". */
+const objectiveMismatch = computed(() => {
+  const target = selectedObjective.value?.target_metric ?? ''
+  return Boolean(screenModule.value && target && !target.startsWith(`${screenModule.value}.`))
+})
 const verifyObjectiveMismatch = computed(() => {
   const target = selectedVerifyObjective.value?.target_metric ?? ''
-  return target.startsWith('perf_guidellm')
+  return Boolean(verifyModule.value && target && !target.startsWith(`${verifyModule.value}.`))
 })
 
 /** What each step still needs, in the words of the thing that is missing.
@@ -184,10 +231,8 @@ const verifyObjectiveMismatch = computed(() => {
  *  end and is told the first page was wrong. */
 const problems = computed<string[][]>(() => [
   [
-    !form.value.name.trim() && 'a name',
     !form.value.image.trim() && 'a container image',
     !form.value.model_path.trim() && 'the model path on the machine',
-    !form.value.served_model_name.trim() && 'the served model name',
   ].filter(Boolean) as string[],
   [] as string[], // machines may be left empty (= any), so nothing is required
   [!selectedSpace.value && 'a search space'].filter(Boolean) as string[],
@@ -195,8 +240,7 @@ const problems = computed<string[][]>(() => [
     !selectedObjective.value && 'an objective',
     // Ticked but blank is the quiet failure: the campaign saves, the second
     // stage never fires, and nothing anywhere says why.
-    form.value.verify_enabled && !form.value.verify_benchmark_slug.trim() &&
-      'the benchmark to re-test the best on',
+    form.value.verify_enabled && !staged.value && 'the benchmark to re-measure the best on',
   ].filter(Boolean) as string[],
   [] as string[],
   [] as string[], // the check step reports; it does not block by itself
@@ -227,6 +271,20 @@ const preflight = ref<{ machines: PreflightMachine[]; ok: boolean; note: string 
  *  missing model path is only discovered after the image pulls and the engine
  *  starts opening weights — twenty minutes in, on a box whose production
  *  service has already been torn down to make room. */
+/** The benchmark half of a campaign body: a described workload goes as a
+ *  spec (the API creates its benchmark), an existing one as its slug. */
+function benchmarkFields() {
+  const verify = staged.value ? verifyWorkload.value : null
+  return {
+    benchmark_spec: specOf(workload.value),
+    benchmark_slug: workload.value.mode === 'existing' ? workload.value.slug.trim() : '',
+    verify_benchmark_spec: verify ? specOf(verify) : null,
+    verify_benchmark_slug: verify?.mode === 'existing' ? verify.slug.trim() : '',
+    // A replay's dataset is pinned for the campaign's whole life.
+    dataset_profile: pinnedProfile.value,
+  }
+}
+
 async function runPreflight() {
   if (!selectedSpace.value) return
   checking.value = true
@@ -238,7 +296,7 @@ async function runPreflight() {
       engine: form.value.engine,
       image: form.value.image.trim(),
       model_path: form.value.model_path,
-      served_model_name: form.value.served_model_name,
+      served_model_name: servedName.value,
       machine_names: form.value.machine_names,
       node_group: form.value.node_group,
       service_port: form.value.service_port,
@@ -253,15 +311,12 @@ async function runPreflight() {
       // So the check can say whether each benchmark exists and can report what
       // its objective ranks on — a slug typo is otherwise a night spent
       // producing runs that score nothing.
-      benchmark_slug: form.value.benchmark_slug.trim(),
+      ...benchmarkFields(),
       objective: selectedObjective.value
         ? { target_metric: selectedObjective.value.target_metric }
         : {},
-      verify_benchmark_slug: staged.value ? form.value.verify_benchmark_slug.trim() : '',
       verify_objective: verifyObjectivePayload.value,
-      // The dataset pins the replay stage, which by default is the primary
-      // benchmark, so it is checked even when the split is off.
-      dataset_profile: form.value.dataset_profile.trim(),
+      policy_id: selectedPolicy.value?.id ?? null,
     })
     preflight.value = data
   } catch (error: any) {
@@ -362,30 +417,6 @@ async function load() {
   }
 }
 
-/** A verify benchmark that replays a rolling dataset names its profile; pin
- *  that one unless the author already chose. */
-watch(() => form.value.verify_benchmark_slug, (slug) => {
-  const wired = benchmarks.value.find((b) => b.slug === slug)?.replays_profile
-  if (wired && !form.value.dataset_profile) form.value.dataset_profile = wired
-})
-
-const ensuring = ref(false)
-
-/** Creates AutoTune's own screen benchmark on LLMBench (and locks it) when a
- *  fresh install has not got it yet. Admin only; idempotent. */
-async function ensureScreenBenchmark() {
-  ensuring.value = true
-  try {
-    const { data } = await api.post('/benchmarks/ensure', {})
-    ElMessage.success(data.created ? `Created ${data.slug} on LLMBench` : `${data.slug} is ready`)
-    benchmarks.value = (await api.get('/campaigns/benchmarks')).data
-  } catch (error: any) {
-    ElMessage.error(error.response?.data?.detail ?? 'Could not create the benchmark')
-  } finally {
-    ensuring.value = false
-  }
-}
-
 /** Preselect an objective rather than leaving it blank: a campaign created
  *  without one ranks on a fallback nobody chose. Prefer the platform default
  *  (what the default screen benchmark measures), then the first saved one. */
@@ -415,6 +446,7 @@ function openBuilder(path: string) {
 async function refreshLists() {
   searchSpaces.value = (await api.get('/search-spaces')).data
   objectives.value = (await api.get('/objectives')).data
+  policies.value = (await api.get('/policies')).data
   ElMessage.success('List refreshed')
 }
 
@@ -506,14 +538,10 @@ function applyImport() {
   form.value.strategy = typeof policyId === 'number'
     ? `policy:${policyId}`
     : strategyFromExtensions(form.value.extensions)
-  const settings = (parsed.fields.policy_settings ?? {}) as Record<string, number>
-  if (settings.max_contenders) form.value.policy_max_contenders = settings.max_contenders
-  if (settings.approx_minutes_each) {
-    form.value.policy_approx_minutes_each = settings.approx_minutes_each
-  }
-  if (settings.model_startup_minutes) {
-    form.value.policy_model_startup_minutes = settings.model_startup_minutes
-  }
+  const { max_contenders, ...pinned } =
+    (parsed.fields.policy_settings ?? {}) as Record<string, number>
+  if (max_contenders) form.value.policy_max_contenders = max_contenders
+  form.value.policy_pinned = pinned
   if (parsed.fields.extra_env || parsed.fields.extra_volumes) {
     form.value.extras_text = toYaml({
       env: parsed.fields.extra_env ?? {},
@@ -542,8 +570,16 @@ function applyImport() {
   // Both halves or neither — the checkbox is the wizard's own state, not a
   // field in the file. Open the split disclosure when the file actually uses it,
   // so an imported two-stage campaign is not hidden behind a collapsed panel.
-  form.value.verify_enabled = !!String(form.value.verify_benchmark_slug ?? '').trim()
+  // An imported campaign names its benchmarks, so it keeps exactly those.
+  workload.value = { ...defaultWorkload('existing'), slug: String(form.value.benchmark_slug ?? '') }
+  const verifySlug = String(form.value.verify_benchmark_slug ?? '').trim()
+  verifyWorkload.value = verifySlug
+    ? { ...defaultWorkload('existing'), slug: verifySlug }
+    : defaultWorkload('replay')
+  form.value.verify_enabled = Boolean(verifySlug)
   advancedNames.value = form.value.verify_enabled ? ['split'] : []
+  if (form.value.served_model_name || Object.keys(parsed.fields.extra_env ?? {}).length ||
+    Object.keys(parsed.fields.extra_volumes ?? {}).length) modelAdvanced.value = ['model']
 
   importOpen.value = false
   importText.value = ''
@@ -635,11 +671,11 @@ async function create() {
     const extras = fromYaml<{ env?: Record<string, string>; volumes?: Record<string, string> }>(
       form.value.extras_text, 'Launch extras')
     const { data } = await api.post('/campaigns', {
-      name: form.value.name,
+      name: form.value.name.trim() || defaultName.value,
       engine: form.value.engine,
       image: form.value.image.trim(),
       model_path: form.value.model_path,
-      served_model_name: form.value.served_model_name,
+      served_model_name: servedName.value,
       extra_env: extras.env ?? {},
       extra_volumes: extras.volumes ?? {},
       machine_names: form.value.machine_names,
@@ -647,19 +683,14 @@ async function create() {
       service_port: form.value.service_port,
       share_machine: form.value.share_machine,
       max_run_minutes: form.value.max_run_minutes,
-      benchmark_slug: form.value.benchmark_slug.trim(),
+      ...benchmarkFields(),
       policy_id: selectedPolicy.value?.id ?? null,
       extensions: applyStrategy(form.value.extensions, form.value.strategy),
       policy_settings: selectedPolicy.value
-        ? {
-            max_contenders: form.value.policy_max_contenders,
-            approx_minutes_each: form.value.policy_approx_minutes_each,
-            model_startup_minutes: form.value.policy_model_startup_minutes,
-          }
+        ? { ...form.value.policy_pinned, max_contenders: form.value.policy_max_contenders }
         : {},
       confirm_top_k: form.value.confirm_top_k,
       confirm_repeats: form.value.confirm_repeats,
-      run_baseline_canary: form.value.run_baseline_canary,
       daily_start: form.value.daily_start,
       daily_end: form.value.daily_end,
       schedule_timezone: form.value.schedule_timezone,
@@ -681,18 +712,12 @@ async function create() {
         direction: selectedObjective.value!.direction,
         redlines: selectedObjective.value!.redlines,
       },
-      // Both halves, or neither: the API refuses a slug with no top-k and a
-      // top-k with no slug, because either one silently never fires.
-      verify_benchmark_slug: staged.value ? form.value.verify_benchmark_slug.trim() : '',
+      // Both halves, or neither: the API refuses a second benchmark with no
+      // top-k and a top-k with none, because either one silently never fires.
       verify_top_k: staged.value ? form.value.verify_top_k : 0,
       verify_max_run_minutes: form.value.verify_max_run_minutes,
       verify_objective: verifyObjectivePayload.value,
-      // Always sent, not gated on the split: the default single benchmark is a
-      // replay, and a replay needs its dataset pinned to stay comparable.
-      dataset_profile: form.value.dataset_profile.trim(),
       dataset_policy: form.value.dataset_policy,
-      deploy_branch: form.value.deploy_branch.trim(),
-      auto_promote: form.value.auto_promote,
     })
     router.push(`/campaigns/${data.id}`)
   } catch (error: any) {
@@ -730,7 +755,7 @@ onMounted(async () => {
     </div>
 
     <el-steps :active="step" finish-status="success" align-center class="steps">
-      <el-step v-for="(s, i) in STEPS" :key="s.title" :title="s.title" :description="s.hint"
+      <el-step v-for="(s, i) in STEPS" :key="s.title" :title="s.title"
         :status="stepStatus(i)" class="clickable-step" @click="step = i" />
     </el-steps>
 
@@ -740,19 +765,8 @@ onMounted(async () => {
         <template v-if="step === 0">
           <el-form label-position="top">
             <el-form-item label="Campaign name">
-              <el-input v-model="form.name" placeholder="node-24 prefill sweep, week 32" />
+              <el-input v-model="form.name" :placeholder="defaultName" />
             </el-form-item>
-            <div class="grid-2">
-              <el-form-item label="Engine">
-                <el-select v-model="form.engine" style="width: 100%">
-                  <el-option label="sglang" value="sglang" />
-                  <el-option label="vllm" value="vllm" />
-                </el-select>
-              </el-form-item>
-              <el-form-item label="Served model name">
-                <el-input v-model="form.served_model_name" placeholder="glm-5" />
-              </el-form-item>
-            </div>
             <el-form-item label="Container image">
               <el-input v-model="form.image" class="mono"
                 placeholder="lmsysorg/sglang:v0.5.13.post1" />
@@ -764,16 +778,31 @@ onMounted(async () => {
               </template>
               <el-input v-model="form.model_path" class="mono" placeholder="/data/models/qwen3.6" />
             </el-form-item>
-            <el-form-item>
-              <template #label>
-                <span>Launch extras</span>
-                <InfoHint>
-                  YAML. Env vars and bind mounts every container gets — what the model needs
-                  beyond the engine flags.
-                </InfoHint>
-              </template>
-              <el-input v-model="form.extras_text" type="textarea" :rows="4" class="mono" />
-            </el-form-item>
+            <el-collapse v-model="modelAdvanced" class="advanced">
+              <el-collapse-item name="model" title="Advanced">
+                <el-form-item>
+                  <template #label>
+                    <span>Served model name</span>
+                    <InfoHint>
+                      The name the engine answers to. Only the platform and LLMBench use it,
+                      so by default it is the last part of the model path.
+                    </InfoHint>
+                  </template>
+                  <el-input v-model="form.served_model_name"
+                    :placeholder="servedName || 'from the model path'" />
+                </el-form-item>
+                <el-form-item>
+                  <template #label>
+                    <span>Launch extras</span>
+                    <InfoHint>
+                      YAML. Env vars and bind mounts every container gets — what the model
+                      needs beyond the engine flags.
+                    </InfoHint>
+                  </template>
+                  <el-input v-model="form.extras_text" type="textarea" :rows="4" class="mono" />
+                </el-form-item>
+              </el-collapse-item>
+            </el-collapse>
           </el-form>
         </template>
 
@@ -782,7 +811,7 @@ onMounted(async () => {
           <el-form label-position="top">
             <el-form-item v-if="form.engine === 'sglang' && groups.length">
               <template #label>
-                <span>Node group (multi-node)</span>
+                <span>Node group</span>
                 <InfoHint :width="430">
                   Deploy each run <b>across</b> the group's members instead of on one
                   machine. Leave empty for an ordinary single-node campaign. The group's
@@ -815,38 +844,42 @@ onMounted(async () => {
                   :label="`${m.name} (${m.gpu_count}× ${m.gpu_type || 'GPU'})`" />
               </el-select>
             </el-form-item>
-            <div class="grid-2">
-              <el-form-item>
-                <template #label>
-                  <span>Engine port</span>
-                  <InfoHint>
-                    Avoid 30000–32767 on k8s nodes: kube-proxy hijacks that range on the node
-                    IP, leaving the engine reachable only from localhost.
-                  </InfoHint>
-                </template>
-                <el-input-number v-model="form.service_port" :min="1024" :max="65535" />
-              </el-form-item>
-              <el-form-item>
-                <template #label>
-                  <span>Max minutes per run</span>
-                  <InfoHint>
-                    A run past this is killed. Also the bound the platform promises a lease
-                    holder when they ask for the machine back politely.
-                  </InfoHint>
-                </template>
-                <el-input-number v-model="form.max_run_minutes" :min="10" :max="1440" />
-              </el-form-item>
-            </div>
             <el-form-item>
-              <el-checkbox v-model="form.share_machine">
-                Run several candidates at once, each pinned to its own GPUs
-              </el-checkbox>
+              <el-checkbox v-model="form.share_machine">Parallel candidates</el-checkbox>
               <InfoHint :width="340">
-                An 8-card node running one tp=2 config leaves six cards idle. Widest
-                candidates are placed first. Turn off if a config is sensitive to
-                host-level contention.
+                Several candidates share a machine at once, each pinned to its own GPUs:
+                an 8-card node running one tp=2 config would otherwise leave six cards
+                idle. Widest candidates are placed first. Turn off if a config is
+                sensitive to host-level contention.
               </InfoHint>
             </el-form-item>
+            <el-collapse v-model="machinesAdvanced" class="advanced">
+              <el-collapse-item name="machines" title="Advanced">
+                <div class="grid-2">
+                  <el-form-item>
+                    <template #label>
+                      <span>First engine port</span>
+                      <InfoHint>
+                        Each run takes the first free port from here. 30000–32767 is
+                        skipped: on k8s nodes kube-proxy hijacks that range.
+                      </InfoHint>
+                    </template>
+                    <el-input-number v-model="form.service_port" :min="1024" :max="65535" />
+                  </el-form-item>
+                  <el-form-item>
+                    <template #label>
+                      <span>Max minutes per run</span>
+                      <InfoHint>
+                        A safety bound. The window is planned from how long this campaign's
+                        runs actually take, never more than this.
+                      </InfoHint>
+                    </template>
+                    <el-input-number v-model="form.max_run_minutes" :min="10" :max="1440"
+                      :step="60" />
+                  </el-form-item>
+                </div>
+              </el-collapse-item>
+            </el-collapse>
           </el-form>
         </template>
 
@@ -870,9 +903,6 @@ onMounted(async () => {
                   </span>
                 </el-option>
               </el-select>
-              <div v-if="!searchSpaces.length" class="warn hint">
-                None saved yet — <b>Build one</b> opens the builder in a new tab.
-              </div>
             </el-form-item>
 
             <SpaceMap v-if="selectedSpace" :space="selectedSpace" compact
@@ -889,12 +919,15 @@ onMounted(async () => {
                   that decides what to try next; the platform still launches, benchmarks
                   and judges every configuration it picks.
                 </InfoHint>
+                <el-button link type="primary" class="label-link"
+                  @click="openBuilder('/policies')">Register one</el-button>
+                <el-button link class="label-link" @click="refreshLists">Refresh</el-button>
               </template>
               <el-select v-model="form.strategy" style="width: 100%" filterable>
-                <el-option value="" label="No policy — every configuration, in order" />
-                <el-option-group v-if="policies.length" label="Policy containers">
+                <el-option value="" label="Grid (exhaustive)" />
+                <el-option-group v-if="policies.length" label="Policies">
                   <el-option v-for="p in policies" :key="p.id" :value="`policy:${p.id}`"
-                    :label="`Policy — ${p.name}`">
+                    :label="p.name">
                     <span>{{ p.name }}</span>
                     <span class="muted opt-help mono">{{ p.image }}</span>
                   </el-option>
@@ -912,153 +945,82 @@ onMounted(async () => {
 
             <el-form-item v-if="selectedPolicy" class="spaced">
               <template #label>
-                <span>Policy budget</span>
+                <span>Finalists</span>
                 <InfoHint :width="360">
-                  How much of the window the platform reserves at the end to validate
-                  the policy's contenders: each one costs about
-                  <b>approx minutes + startup minutes</b>. A policy campaign needs a
-                  window to activate — set a nightly schedule or a one-off window on the
-                  next step, or use <b>Force start</b> on the campaign page.
+                  When the window nears its end the policy names its best configs, and the
+                  platform launches and benchmarks each one itself — that measurement
+                  decides the winner. The time this needs is held back from the search,
+                  learned from how long this campaign's runs take.
                 </InfoHint>
               </template>
-              <div class="stack">
-                <div class="sentence">
-                  <span>Validate up to</span>
-                  <el-input-number v-model="form.policy_max_contenders" :min="1" :max="8"
-                    size="small" controls-position="right" class="inline-num" />
-                  <span>contenders, about</span>
-                  <el-input-number v-model="form.policy_approx_minutes_each" :min="5" :max="240"
-                    size="small" controls-position="right" class="inline-num" />
-                  <span>minutes each, plus</span>
-                  <el-input-number v-model="form.policy_model_startup_minutes" :min="0" :max="120"
-                    size="small" controls-position="right" class="inline-num" />
-                  <span>minutes of model startup.</span>
+              <el-input-number v-model="form.policy_max_contenders" :min="1" :max="8"
+                size="small" />
+            </el-form-item>
+
+            <el-collapse v-if="!selectedPolicy" v-model="searchAdvanced" class="advanced">
+              <el-collapse-item name="search" title="Advanced">
+                <div class="grid-2">
+                  <el-form-item>
+                    <template #label>
+                      <span>Confirm top-k</span>
+                      <InfoHint :width="360">
+                        One benchmark is a signal, not a decision: a config can lead by noise.
+                        Before finishing, re-run the best k configs so the winner is backed
+                        by several measurements and reports its spread. 0 turns it off.
+                      </InfoHint>
+                    </template>
+                    <el-input-number v-model="form.confirm_top_k" :min="0" :max="10" />
+                  </el-form-item>
+                  <el-form-item label="Repeats">
+                    <el-input-number v-model="form.confirm_repeats" :min="2" :max="10"
+                      :disabled="form.confirm_top_k === 0" />
+                  </el-form-item>
                 </div>
-                <div class="muted tiny mono">{{ selectedPolicy.image }}</div>
-              </div>
+              </el-collapse-item>
+            </el-collapse>
+          </el-form>
+        </template>
+
+        <!-- 4. Goal — what every candidate is measured with, and what wins.
+             The workload is described, not looked up: AutoTune creates the
+             matching benchmark on LLMBench with the campaign. Re-measuring the
+             best few on a second workload is an opt-in under Advanced. -->
+        <template v-if="step === 3">
+          <el-form label-position="top">
+            <el-form-item>
+              <template #label>
+                <span>Workload</span>
+                <InfoHint :width="380">
+                  Every candidate gets the same load from LLMBench, the benchmark platform.
+                  Describe the load and AutoTune creates a matching benchmark there, filed
+                  under <span class="mono">llm-autotune</span> and locked so it cannot change
+                  mid-campaign. The same load always maps to the same benchmark, so
+                  campaigns that share it can be compared.
+                </InfoHint>
+              </template>
+              <WorkloadPicker v-model="workload" v-model:rebuild="rebuildAtStart"
+                :profiles="datasetProfiles" :benchmarks="benchmarks"
+                @module="(m) => (screenModule = m)" />
             </el-form-item>
 
             <el-form-item>
               <template #label>
-                <span>Confirming the winner</span>
-                <InfoHint :width="360">
-                  One benchmark is a signal, not a decision. A config can be fastest on
-                  average and still miss a redline on a second run — and on this rig the
-                  run-to-run spread is about 0.25%, so a 0.5% win is not a win yet.
+                <span>Objective</span>
+                <InfoHint :width="340">
+                  The metric candidates are ranked on, and the redlines a candidate must
+                  hold to rank at all. Only objectives this workload can report are listed.
                 </InfoHint>
+                <el-button link type="primary" class="label-link"
+                  @click="openBuilder('/objectives')">Build one</el-button>
+                <el-button link class="label-link" @click="refreshLists">Refresh</el-button>
               </template>
-              <!-- The numbers sit inside the sentence they belong to. As two bare
-                   spinners under "Confirm the best N, M times" nobody could tell
-                   which box was N.
-                   Wrapped in a block: el-form-item's content is a flex ROW, so
-                   the sentence and its footnote were laid out side by side. -->
-              <div class="stack">
-                <div class="sentence">
-                  <span>Before finishing, re-run the best</span>
-                  <el-input-number v-model="form.confirm_top_k" :min="0" :max="10"
-                    size="small" controls-position="right" class="inline-num" />
-                  <span>configurations</span>
-                  <el-input-number v-model="form.confirm_repeats" :min="2" :max="10"
-                    size="small" controls-position="right" class="inline-num"
-                    :disabled="form.confirm_top_k === 0" />
-                  <span>times each.</span>
-                </div>
-                <div class="muted hint">
-                  <template v-if="form.confirm_top_k === 0">
-                    Off — whatever wins once, wins.
-                  </template>
-                  <template v-else>
-                    Adds up to {{ form.confirm_top_k * (form.confirm_repeats - 1) }} extra
-                    run(s) at the end, and reports each winner's spread instead of a single
-                    number.
-                  </template>
-                </div>
-              </div>
-            </el-form-item>
-          </el-form>
-        </template>
-
-        <!-- 4. Goal — the benchmark every candidate runs, and what wins.
-             One benchmark by default, and that benchmark is the replay. The
-             two-stage split — a cheaper screen on every candidate, the primary
-             only on the best few — is an opt-in below, off until there is a
-             reason to pay for it. -->
-        <template v-if="step === 3">
-          <el-form label-position="top">
-            <div class="stage-box">
-              <div class="stage-head">
-                <h4>Benchmark</h4>
-                <span class="muted tiny">every candidate runs this</span>
-              </div>
-
-              <div class="stage-fields stacked">
-                <div class="stage-field">
-                  <label class="muted tiny">Benchmark</label>
-                  <el-select v-model="form.benchmark_slug" size="small" clearable filterable
-                    allow-create default-first-option class="mono"
-                    placeholder="the platform default">
-                    <el-option v-for="b in benchmarks" :key="b.slug" :value="b.slug"
-                      :label="b.slug">
-                      <span class="mono">{{ b.slug }}</span>
-                      <span class="muted opt-help">{{ b.modules.join(' · ') }}</span>
-                    </el-option>
-                  </el-select>
-                  <el-button v-if="!benchmarks.some((b) => b.slug.startsWith('autotune-'))"
-                    link type="primary" size="small" :loading="ensuring"
-                    @click="ensureScreenBenchmark">
-                    Create AutoTune's screen benchmark on LLMBench
-                  </el-button>
-                </div>
-                <div class="stage-field">
-                  <label class="muted tiny">
-                    Ranked by
-                    <el-button link type="primary" class="label-link"
-                      @click="openBuilder('/objectives')">Build one</el-button>
-                    <el-button link class="label-link" @click="refreshLists">Refresh</el-button>
-                  </label>
-                  <el-select v-model="selectedObjectiveId" size="small" filterable
-                    placeholder="pick a saved objective">
-                    <el-option v-for="o in objectives" :key="o.id" :value="o.id"
-                      :label="o.name">
-                      <span>{{ o.name }}</span>
-                      <span class="muted opt-help">
-                        {{ o.direction }} {{ o.target_metric }}
-                      </span>
-                    </el-option>
-                  </el-select>
-                </div>
-                <!-- The replay is held to one pinned traffic sample for the
-                     campaign's whole life. It lives here, with the primary
-                     benchmark, because by default that benchmark IS the replay
-                     and needs it; in the split below it pins the replay stage. -->
-                <div class="stage-field">
-                  <label class="muted tiny">Dataset</label>
-                  <el-select v-model="form.dataset_profile" size="small" clearable filterable
-                    allow-create default-first-option class="mono"
-                    placeholder="not pinned — whatever the benchmark resolves">
-                    <el-option v-for="p in datasetProfiles" :key="p.name" :value="p.name"
-                      :label="p.name">
-                      <span class="mono">{{ p.name }}</span>
-                      <span class="muted opt-help">
-                        {{ p.managed ? 'managed' : 'rebuilds on its own' }}
-                      </span>
-                    </el-option>
-                  </el-select>
-                </div>
-              </div>
-
-              <template v-if="form.dataset_profile">
-                <el-checkbox v-model="rebuildAtStart" size="small">
-                  Rebuild it when the campaign starts
-                </el-checkbox>
-                <div v-if="unmanagedProfile" class="stage-warn">
-                  <b class="mono">{{ form.dataset_profile }}</b> rebuilds on its own
-                  schedule, so its build can be replaced mid-campaign. Every run after
-                  that would be measured on different traffic and flagged as not
-                  comparable.
-                </div>
-              </template>
-
+              <el-select v-model="selectedObjectiveId" filterable style="width: 100%"
+                placeholder="pick an objective">
+                <el-option v-for="o in screenObjectives" :key="o.id" :value="o.id" :label="o.name">
+                  <span>{{ o.name }}</span>
+                  <span class="muted opt-help">{{ o.direction }} {{ o.target_metric }}</span>
+                </el-option>
+              </el-select>
               <div v-if="selectedObjective" class="goal-box">
                 <div class="goal-line">
                   <span class="muted tiny lead-in">rank by</span>
@@ -1066,184 +1028,81 @@ onMounted(async () => {
                   <span class="mono">{{ selectedObjective.target_metric }}</span>
                 </div>
                 <!-- "must hold", not "reject if": a redline is the condition a run
-                     has to SATISFY. Labelled the other way round, `pass_rate >= 0.99`
-                     read as "reject the runs that pass", which is the opposite of
-                     what the ranker does with it. -->
+                     has to SATISFY. -->
                 <div v-if="selectedObjective.redlines.length" class="goal-line">
                   <span class="muted tiny lead-in">must hold</span>
-                  <span v-for="(r, i) in selectedObjective.redlines" :key="i"
-                    class="mono chip">
+                  <span v-for="(r, i) in selectedObjective.redlines" :key="i" class="mono chip">
                     {{ r.metric }} {{ r.op }} {{ r.value }}
                   </span>
                 </div>
-                <div v-else class="muted tiny">
-                  no redlines — every successful run qualifies
-                </div>
+                <div v-else class="muted tiny">no redlines</div>
               </div>
-            </div>
+              <div v-if="objectiveMismatch" class="stage-warn">
+                This workload does not report <b>{{ selectedObjective?.target_metric }}</b>.
+              </div>
+            </el-form-item>
 
-            <!-- The opt-in split, collapsed by default: screen every candidate
-                 with a cheaper benchmark first, then run a second benchmark only
-                 on the best few. Off until someone opens it. -->
             <el-collapse v-model="advancedNames" class="advanced">
               <el-collapse-item name="split">
-                <template #title>
-                  Two-stage: screen cheaply, then verify the best (optional)
-                </template>
-
+                <template #title>Advanced: verify stage</template>
                 <div class="stage-box" :class="{ off: !form.verify_enabled }">
                   <div class="stage-head">
                     <el-checkbox v-model="form.verify_enabled">
-                      <h4>Screen first, verify the best</h4>
+                      <h4>Verify the best on a second workload</h4>
                     </el-checkbox>
                     <InfoHint :width="380">
-                      A cheap benchmark (random tokens) cannot see prefix cache reuse at
-                      all. Screen every candidate with it, then run a second benchmark —
-                      a replay of recorded production, the better part of an hour per
-                      config — only on the shortlist.
+                      A replay of real traffic takes the better part of an hour per config.
+                      Screen every candidate with the workload above, then replay only the
+                      best few — and let that measurement decide the winner.
                     </InfoHint>
                   </div>
-
                   <template v-if="form.verify_enabled">
-                    <!-- With the split on, the benchmark above shifts from "the one
-                         measurement" to "the cheap screen"; say so, since the field
-                         itself does not move. -->
-                    <p class="muted tiny split-note">
-                      The benchmark above now screens every candidate; the one below is
-                      run only on the best few, and decides the winner.
-                    </p>
-                    <div class="stage-fields stacked">
-                      <div class="stage-field">
-                        <label class="muted tiny">Benchmark for the best few</label>
-                        <el-select v-model="form.verify_benchmark_slug" size="small" clearable
-                          filterable allow-create default-first-option class="mono"
-                          placeholder="a benchmark that replays real traffic">
-                          <el-option v-for="b in benchmarks" :key="b.slug" :value="b.slug"
-                            :label="b.slug">
-                            <span class="mono">{{ b.slug }}</span>
-                            <span class="muted opt-help">
-                              {{ b.replays_profile ? `replays ${b.replays_profile}` : b.modules.join(' · ') }}
-                            </span>
-                          </el-option>
-                        </el-select>
-                      </div>
-                      <div class="stage-field">
-                        <label class="muted tiny">Ranked by</label>
-                        <el-select v-model="verifyObjectiveId" size="small" clearable filterable
-                          placeholder="platform default — replay value per card">
-                          <el-option v-for="o in objectives" :key="o.id" :value="o.id"
-                            :label="o.name">
-                            <span>{{ o.name }}</span>
-                            <span class="muted opt-help">{{ o.target_metric }}</span>
-                          </el-option>
-                        </el-select>
-                      </div>
+                    <WorkloadPicker v-model="verifyWorkload" v-model:rebuild="rebuildAtStart"
+                      :profiles="datasetProfiles" :benchmarks="benchmarks" no-sweep
+                      @module="(m) => (verifyModule = m)" />
+                    <div class="grid-2 verify-fields">
+                      <label class="field">
+                        <span class="muted tiny">Top-k</span>
+                        <el-input-number v-model="form.verify_top_k" :min="1" :max="10"
+                          size="small" controls-position="right" />
+                      </label>
+                      <label class="field">
+                        <span class="muted tiny">Objective</span>
+                      <el-select v-model="verifyObjectiveId" size="small" clearable filterable
+                        placeholder="platform default">
+                        <el-option v-for="o in verifyObjectives" :key="o.id" :value="o.id"
+                          :label="o.name">
+                          <span>{{ o.name }}</span>
+                          <span class="muted opt-help">{{ o.target_metric }}</span>
+                        </el-option>
+                      </el-select>
+                      </label>
                     </div>
-
-                    <!-- Two short sentences rather than one long one: in a panel
-                         this narrow, a single sentence wrapped around both spinners
-                         and nobody could tell which number was which. -->
-                    <div class="sentence">
-                      <span>Run the best</span>
-                      <el-input-number v-model="form.verify_top_k" :min="1" :max="10"
-                        size="small" controls-position="right" class="inline-num" />
-                      <span>configurations,</span>
-                    </div>
-                    <div class="sentence">
-                      <span>allowing</span>
-                      <el-input-number v-model="form.verify_max_run_minutes" :min="10" :max="1440"
-                        :step="30" size="small" controls-position="right"
-                        class="inline-num wide-num" />
-                      <span>minutes each.</span>
-                    </div>
-
                     <div v-if="verifyObjectiveMismatch" class="stage-warn">
-                      <b>{{ selectedVerifyObjective?.target_metric }}</b> comes from the sweep,
-                      not from a replay — a replay result does not contain it, so every
-                      verified run would score nothing.
-                    </div>
-                    <div v-else class="muted tiny">
-                      Adds {{ form.verify_top_k }} run(s) at the end, roughly
-                      {{ ((form.verify_top_k * form.verify_max_run_minutes) / 60).toFixed(1) }} h.
-                      This measurement decides the winner.
+                      The verify workload does not report
+                      <b>{{ selectedVerifyObjective?.target_metric }}</b>.
                     </div>
                   </template>
-                  <div v-else class="muted tiny">
-                    Off — one benchmark, and whatever wins it wins.
-                  </div>
                 </div>
               </el-collapse-item>
             </el-collapse>
-
-            <!-- Where a winner ends up. Optional and easy to miss on purpose:
-                 it changes nothing about the run, only which release branch the
-                 merge request is opened against later. -->
-            <el-collapse class="advanced">
-              <el-collapse-item name="deploy">
-                <template #title>Where the winner is proposed (optional)</template>
-                <el-form-item label="Deploy branch">
-                  <DeployBranchSelect v-model="form.deploy_branch" />
-                  <div class="muted tiny">
-                    The deploy repo keeps one release branch per model × card × engine.
-                    Leave empty and a winner goes onto whichever branch the matching
-                    baseline is bound to; name one here when this campaign tunes for a
-                    different release line.
-                  </div>
-                </el-form-item>
-                <el-form-item>
-                  <el-checkbox v-model="form.auto_promote">
-                    Submit the winner as a merge request automatically
-                  </el-checkbox>
-                  <InfoHint :width="380">
-                    When the campaign finishes, the platform opens the merge request
-                    itself — same diff, same ownership policy, same preview you would
-                    have seen. It needs a baseline for this model bound to the deploy
-                    repo, and it will not propose a run that crossed a redline. While
-                    the platform is in dry-run it records the draft and writes nothing.
-                  </InfoHint>
-                </el-form-item>
-              </el-collapse-item>
-            </el-collapse>
-
-            <el-form-item class="spaced">
-              <el-checkbox v-model="form.run_baseline_canary">
-                Benchmark production first, before clearing it
-              </el-checkbox>
-              <InfoHint :width="340">
-                The night's control run: measures what production does today, on tonight's
-                hardware, with this campaign's benchmark. Production is only torn down once
-                this passes — a machine we could not measure is the one not to clear.
-              </InfoHint>
-            </el-form-item>
           </el-form>
         </template>
 
         <!-- 5. Schedule -->
         <template v-if="step === 4">
-          <p class="muted lead">
-            The campaign starts and stops itself. It wakes at the start time, works until
-            the end time, and picks up where it left off the following night.
-          </p>
           <NightlyWindow
             v-model:start="form.daily_start"
             v-model:end="form.daily_end"
             v-model:timezone="form.schedule_timezone"
             v-model:until="form.schedule_until" />
           <p v-if="nightsNeeded" class="estimate">{{ nightsNeeded }}</p>
-          <el-alert v-if="!form.daily_start || !form.daily_end" type="info" :closable="false"
-            show-icon class="spaced"
-            title="No window means no automatic start"
-            description="The campaign is created paused and runs only while you start it by
-              hand — and nothing puts production back on its own." />
         </template>
 
         <!-- 6. Check -->
         <template v-if="step === 5">
           <div class="check-head">
-            <p class="muted lead">
-              Asked of the machines themselves. Each of these costs seconds now and a
-              night to find out the other way.
-            </p>
+            <span />
             <!-- Offered only when it would actually do something. The button used
                  to show on an empty form, where `runPreflight` returns before
                  making a single call — a control that looks live, does nothing,
@@ -1278,12 +1137,9 @@ onMounted(async () => {
           <template v-else-if="preflight">
             <el-alert v-if="blockers.length" type="error" :closable="false" show-icon
               class="verdict"
-              :title="`${blockers.length} problem(s) would stop this campaign`"
-              description="You can still create it — but it will not run until these are
-                fixed." />
+              :title="`${blockers.length} problem(s) would stop this campaign`" />
             <el-alert v-else type="success" :closable="false" show-icon class="verdict"
-              title="Nothing is in the way"
-              description="Warnings below are worth reading; none of them block a run." />
+              title="Nothing is in the way" />
 
             <div v-for="m in preflight.machines" :key="m.machine" class="machine-checks">
               <div class="machine-name mono">{{ m.machine }}</div>
@@ -1294,8 +1150,8 @@ onMounted(async () => {
                 class="check" :class="c.status">
                 <span class="icon">{{ statusLook[c.status]?.icon ?? '?' }}</span>
                 <div class="body">
-                  <div><b>{{ c.label }}</b> — {{ c.detail }}</div>
-                  <div v-if="c.hint" class="muted tiny">{{ c.hint }}</div>
+                  <div><b>{{ c.label }}</b> — {{ c.detail }}
+                    <InfoHint v-if="c.hint">{{ c.hint }}</InfoHint></div>
                 </div>
               </div>
               <div class="passed">
@@ -1306,11 +1162,8 @@ onMounted(async () => {
           </template>
 
           <p v-else-if="!checkable" class="muted">
-            Nothing to check yet — these ask a real machine about
-            <b>{{ missingForCheck.join(', ') }}</b>. Fill that in and the checks run
-            when you come back to this step.
+            Needs <b>{{ missingForCheck.join(', ') }}</b>.
           </p>
-          <p v-else class="muted">Checks run automatically when you reach this step.</p>
         </template>
       </div>
 
@@ -1319,10 +1172,10 @@ onMounted(async () => {
         <h3>So far</h3>
         <dl>
           <dt>Name</dt>
-          <dd :class="{ empty: !form.name }">{{ form.name || 'unnamed' }}</dd>
+          <dd>{{ form.name || defaultName }}</dd>
           <dt>Serving</dt>
-          <dd :class="{ empty: !form.served_model_name }">
-            {{ form.served_model_name || '—' }} <span class="muted">on {{ form.engine }}</span>
+          <dd :class="{ empty: !servedName }">
+            {{ servedName || '—' }} <span class="muted">on {{ form.engine }}</span>
           </dd>
           <dt>Machines</dt>
           <dd v-if="form.node_group">
@@ -1343,20 +1196,16 @@ onMounted(async () => {
             </template>
             <template v-else>not chosen</template>
           </dd>
-          <dt>Benchmark</dt>
+          <dt>Measured by</dt>
+          <dd>{{ describeWorkload(workload) }}</dd>
+          <dt>Wins</dt>
           <dd :class="{ empty: !selectedObjective }">
             {{ selectedObjective?.name ?? 'no objective chosen' }}
-            <span class="muted">on
-              {{ form.benchmark_slug.trim() || 'a benchmark you name' }}</span>
           </dd>
-          <dt>Two-stage</dt>
-          <dd :class="{ empty: !staged }">
-            <template v-if="staged">
-              screen every candidate, then the best {{ form.verify_top_k }} on
-              <span class="mono">{{ form.verify_benchmark_slug }}</span>
-            </template>
-            <template v-else>off — one benchmark decides</template>
-          </dd>
+          <template v-if="staged">
+            <dt>Then</dt>
+            <dd>the best {{ form.verify_top_k }} on {{ describeWorkload(verifyWorkload) }}</dd>
+          </template>
           <dt>Window</dt>
           <dd :class="{ empty: !form.daily_start || !form.daily_end }">
             <template v-if="form.daily_start && form.daily_end">
@@ -1369,29 +1218,30 @@ onMounted(async () => {
       </aside>
     </div>
 
-    <el-dialog v-model="draftOpen" title="Start from what the platform knows" width="620px">
-      <p class="muted lead">
-        The image, model and production arguments come from the baseline; the grid is
-        sized to the machines; the dataset comes from LLMBench. Every value says where it
-        came from, and nothing is created until you press Create.
-      </p>
+    <el-dialog v-model="draftOpen" title="Start from a baseline" width="620px">
       <el-form label-position="top">
-        <el-form-item label="Baseline">
+        <el-form-item>
+          <template #label>
+            Baseline
+            <InfoHint :width="360">The image, model and arguments come from the baseline;
+              the grid is sized to the machines. Every drafted value says where it came
+              from, and nothing is created until you press Create.</InfoHint>
+          </template>
           <el-select v-model="draftForm.baseline_id" clearable filterable
             placeholder="pick one — or name a model below">
             <el-option v-for="b in baselines" :key="b.id" :value="b.id"
               :label="`#${b.id} ${b.served_model_name} · ${b.engine} · ${b.card_type || 'any card'}`" />
           </el-select>
         </el-form-item>
-        <el-form-item v-if="!draftForm.baseline_id" label="Model (finds its baseline for these cards)">
+        <el-form-item v-if="!draftForm.baseline_id" label="Served model name">
           <el-input v-model="draftForm.served_model_name" placeholder="served model name" />
         </el-form-item>
-        <el-form-item label="Node group (optional — otherwise every leased machine)">
+        <el-form-item label="Node group">
           <el-select v-model="draftForm.node_group" clearable placeholder="single-node">
             <el-option v-for="g in groups" :key="g.name" :value="g.name" :label="g.name" />
           </el-select>
         </el-form-item>
-        <el-form-item label="Verify the best few on (optional)">
+        <el-form-item label="Verify benchmark">
           <el-select v-model="draftForm.verify_benchmark_slug" clearable filterable allow-create
             default-first-option class="mono" placeholder="no second stage">
             <el-option v-for="b in benchmarks" :key="b.slug" :value="b.slug" :label="b.slug" />
@@ -1409,10 +1259,6 @@ onMounted(async () => {
     </el-dialog>
 
     <el-dialog v-model="importOpen" title="Import a campaign" width="720px">
-      <p class="muted lead">
-        Paste the YAML exported from another campaign. It fills the steps in — nothing
-        is created until you press Create, and the pre-flight checks run first.
-      </p>
       <el-input v-model="importText" type="textarea" :rows="16" class="mono"
         placeholder="name: ...&#10;engine: sglang&#10;image: ..." />
       <template #footer>
@@ -1473,10 +1319,6 @@ onMounted(async () => {
 .spaced {
   margin-top: 14px;
 }
-.lead {
-  margin: 0 0 14px;
-  line-height: 1.6;
-}
 .estimate {
   margin: 12px 0 0;
   font-size: 12.5px;
@@ -1485,10 +1327,6 @@ onMounted(async () => {
 .opt-help {
   margin-left: 10px;
   font-size: 12px;
-}
-.hint {
-  font-size: 12px;
-  margin-top: 4px;
 }
 .warn {
   color: var(--el-color-warning);
@@ -1524,15 +1362,13 @@ onMounted(async () => {
 .stack {
   width: 100%;
 }
-.sentence {
+.field {
   display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-  line-height: 1.9;
+  flex-direction: column;
+  gap: 2px;
 }
-.inline-num {
-  width: 92px;
+.verify-fields {
+  margin-top: 10px;
 }
 .wide-num {
   width: 108px;

@@ -457,17 +457,20 @@ def inspect_group(
     return out
 
 
-def parity_check(missing: list[dict], container: str) -> Check:
+def parity_check(missing: list[dict], recorded: bool = True) -> Check:
     """Flags production sets that this campaign does not.
 
     A warning, never a failure: running with engine defaults is a legitimate
     thing to test, and sometimes the point. But it is also how a config fails a
-    benchmark check the baseline canary passed minutes earlier, so it should be
-    a decision rather than a discovery.
+    benchmark check production passes, so it should be a decision rather than
+    a discovery.
     """
+    if not recorded:
+        return Check("parity", "Matches production", SKIP,
+                     "no production config recorded for this model on Baselines")
     if not missing:
         return Check("parity", "Matches production", PASS,
-                     "every flag the production service sets is set here too")
+                     "every flag production sets is set here too")
     flags = ", ".join(
         f"{m['flag']}={m['production']}" if m["production"] is not True else m["flag"]
         for m in missing[:8]
@@ -475,11 +478,9 @@ def parity_check(missing: list[dict], container: str) -> Check:
     more = f" (+{len(missing) - 8} more)" if len(missing) > 8 else ""
     return Check(
         "parity", "Matches production", WARN,
-        f"{len(missing)} flag(s) {container or 'production'} sets that this campaign does "
-        f"not: {flags}{more}",
+        f"{len(missing)} flag(s) production sets that this campaign does not: {flags}{more}",
         "Every candidate inherits the engine default for these. That is fine if it is "
-        "deliberate — and is how a config fails a check the baseline canary just passed "
-        "if it is not.",
+        "deliberate — and is how a config fails a check production passes if it is not.",
     )
 
 

@@ -19,8 +19,6 @@ from app.control.search import CandidateConfig
 from app.db.base import Base
 from app.db.models import (
     TERMINAL_RUN_STATES,
-    Baseline,
-    BaselineStatus,
     Campaign,
     CampaignStatus,
     Candidate,
@@ -31,7 +29,6 @@ from app.db.models import (
     MachineState,
     Result,
     Run,
-    RunKind,
     RunStatus,
     User,
 )
@@ -52,8 +49,6 @@ class FakeDriver(DeploymentDriver):
         # reports GONE, so the teardown-confirmation janitor can see cleanup
         # complete (and _finish's fast path release the machine at once).
         self._gone: set[str] = set()
-        self.cleared: list[str] = []
-        self.restored: list[str] = []
         self._ready: set[str] = set()
 
     def launch(self, spec: LaunchSpec):
@@ -96,20 +91,6 @@ class FakeDriver(DeploymentDriver):
 
     def exit_info(self, handle: DeploymentHandle):
         return (self.exit_code, self.oom_killed)
-
-    def capture_baseline(self, machine) -> dict:
-        return {"services": [{"container": "prod-svc", "endpoint_url": "http://x:8050"}]}
-
-    def clear_baseline(self, machine, baseline) -> list[str]:
-        self.cleared.append(machine.name)
-        return ["prod-svc"]
-
-    def restore_baseline(self, machine, baseline) -> list[str]:
-        self.restored.append(machine.name)
-        return ["prod-svc"]
-
-    def verify_baseline(self, machine, baseline) -> list[dict]:
-        return [{"port": "8050", "ok": True, "detail": "matches capture"}]
 
 
 class PassEvaluator(Evaluator):
@@ -168,10 +149,6 @@ def make_supervisor(crash: bool = False, instant_ready: bool = False, bench=None
             Machine(
                 id=1, name="gpu-01", host="10.0.0.1",
                 state=MachineState.AVAILABLE.value, gpu_count=8,
-                # Production already handed over and cleared: these tests are
-                # about run states, not the baseline lifecycle, which has its
-                # own tests below.
-                baseline_status=BaselineStatus.CLEARED.value,
             )
         )
         session.add(
@@ -266,253 +243,11 @@ def test_instantly_ready_service_skips_waiting_state():
     assert _run_status(factory) == RunStatus.BENCHING.value
 
 
-def test_baseline_canary_runs_first_and_never_tears_down_production():
-    """With a captured baseline, the first run measures production in place:
-    no container is launched, and teardown must NOT touch it."""
-    supervisor, factory = make_supervisor()
-    with factory() as session:
-        machine = session.get(Machine, 1)
-        machine.baseline = {
-            "services": [
-                {
-                    "container": "sglang-prod-p8050",
-                    "endpoint_url": "http://10.0.0.1:8050",
-                    "served_model_name": "glm-5",
-                }
-            ]
-        }
-        machine.baseline_status = BaselineStatus.CAPTURED.value
-        session.commit()
-
-    supervisor.tick()  # schedules the canary, health passes -> benching
-    with factory() as session:
-        run = session.scalars(select(Run)).first()
-        assert run.kind == RunKind.BASELINE.value
-        assert run.endpoint_url == "http://10.0.0.1:8050"
-        assert run.status == RunStatus.BENCHING.value
-    assert supervisor.driver.launched == [], "a baseline run must not launch anything"
-
-    supervisor.tick()  # bench still running
-    supervisor.tick()  # bench done -> succeeded
-    with factory() as session:
-        run = session.scalars(select(Run)).first()
-        assert run.status == RunStatus.SUCCEEDED.value
-        assert session.get(Machine, 1).state == MachineState.AVAILABLE.value
-    assert supervisor.driver.torn_down == [], "production must survive the canary"
-
-
-def test_experiments_wait_until_production_is_cleared():
-    """The scheduler gate in isolation: a captured-but-not-cleared machine
-    still hosts production, and an experiment there would fight it for GPUs.
-    (Auto-lifecycle is off here — it would legitimately clear in the same
-    tick; that path is covered by its own tests.)"""
-    supervisor, factory = make_supervisor()
-    supervisor.settings = supervisor.settings.model_copy(
-        update={"auto_baseline_lifecycle": False}
-    )
-    with factory() as session:
-        machine = session.get(Machine, 1)
-        machine.baseline = {"services": [{"container": "p", "endpoint_url": "http://10.0.0.1:8050"}]}
-        machine.baseline_status = BaselineStatus.CAPTURED.value
-        campaign = session.get(Campaign, 1)
-        campaign.run_baseline_canary = False  # no canary; only experiments pending
-        session.commit()
-
-    supervisor.tick()
-    with factory() as session:
-        assert session.scalars(select(Run)).first() is None, "must not run on a live-prod machine"
-
-    with factory() as session:  # once cleared, experiments proceed
-        session.get(Machine, 1).baseline_status = BaselineStatus.CLEARED.value
-        session.commit()
-    supervisor.tick()
-    with factory() as session:
-        run = session.scalars(select(Run)).first()
-        assert run is not None and run.kind == RunKind.EXPERIMENT.value
-
-
-def _capture_baseline_on(factory, status=BaselineStatus.CAPTURED.value):
-    with factory() as session:
-        machine = session.get(Machine, 1)
-        machine.baseline = {
-            "services": [
-                {
-                    "container": "sglang-prod-p8050",
-                    "endpoint_url": "http://10.0.0.1:8050",
-                    "served_model_name": "glm-5",
-                    "port": "8050",
-                    "cards": 2,
-                }
-            ]
-        }
-        machine.baseline_status = status
-        session.commit()
-
-
-def test_production_is_cleared_automatically_after_a_passing_canary():
-    """An unattended night cannot wait for a human to press Clear."""
-    supervisor, factory = make_supervisor()
-    _capture_baseline_on(factory)
-
-    supervisor.tick()  # canary scheduled -> health -> benching
-    supervisor.tick()  # bench poll 1
-    supervisor.tick()  # canary succeeds, machine released
-    with factory() as session:
-        assert session.scalars(select(Run)).first().status == RunStatus.SUCCEEDED.value
-
-    supervisor.tick()  # lifecycle: canary passed + work waiting -> clear
-    with factory() as session:
-        assert session.get(Machine, 1).baseline_status == BaselineStatus.CLEARED.value
-        event = session.scalars(
-            select(Event).where(Event.kind == "baseline_cleared_auto")
-        ).first()
-        assert event is not None
-
-
-def test_a_stale_canary_from_another_campaign_does_not_authorize_clearing():
-    """Regression: the lifecycle accepted ANY passed canary on the machine, so
-    an hour-old one from a finished campaign cleared production before this
-    campaign's canary had even been scheduled — the night ran with no
-    baseline."""
-    supervisor, factory = make_supervisor()
-    _capture_baseline_on(factory)
-    with factory() as session:
-        old_campaign = Campaign(
-            id=2, owner_id=1, name="yesterday", engine="sglang", image="img",
-            model_path="/m", served_model_name="m", search_space={},
-            status=CampaignStatus.DONE.value,
-        )
-        session.add(old_campaign)
-        session.flush()
-        candidate = Candidate(campaign_id=2, config={}, config_hash="old")
-        session.add(candidate)
-        session.flush()
-        session.add(
-            Run(campaign_id=2, candidate_id=candidate.id, machine_id=1,
-                kind=RunKind.BASELINE.value, status=RunStatus.SUCCEEDED.value)
-        )
-        session.commit()
-
-    supervisor.tick()
-    with factory() as session:
-        assert session.get(Machine, 1).baseline_status == BaselineStatus.CAPTURED.value, (
-            "another campaign's canary must not authorize tearing production down"
-        )
-        this_campaigns_canary = session.scalars(
-            select(Run).where(Run.campaign_id == 1, Run.kind == RunKind.BASELINE.value)
-        ).first()
-        assert this_campaigns_canary is not None, "its own canary should be scheduled"
-
-
-def test_a_failed_canary_leaves_production_alone():
-    """A suspect machine is precisely the one not to tear down."""
-    supervisor, factory = make_supervisor()
-    supervisor.health = FailingEvaluator()
-    _capture_baseline_on(factory)
-
-    supervisor.tick()  # canary scheduled, health fails
-    supervisor.tick()  # lifecycle would clear — must not
-    with factory() as session:
-        run = session.scalars(select(Run)).first()
-        assert run.status == RunStatus.FAILED.value
-        assert session.get(Machine, 1).baseline_status == BaselineStatus.CAPTURED.value
-    assert supervisor.driver.cleared == [], "production must survive a failed canary"
-
-
-def test_production_is_restored_when_the_window_closes():
-    supervisor, factory = make_supervisor()
-    supervisor.settings = supervisor.settings.model_copy(
-        update={"auto_restore_production": True}  # put-back is opt-in
-    )
-    _capture_baseline_on(factory, status=BaselineStatus.CLEARED.value)
-    with factory() as session:
-        campaign = session.get(Campaign, 1)
-        # window already over
-        campaign.window_end = datetime.now(UTC) - timedelta(minutes=1)
-        session.commit()
-
-    supervisor.tick()
-    with factory() as session:
-        assert session.get(Machine, 1).baseline_status == BaselineStatus.RESTORED.value
-
-
-def test_window_close_leaves_production_down_by_default_for_the_admin():
-    """Auto-restore is off by default: when the window closes we do NOT restart
-    production (the admin owns that). The box is handed back with production as
-    we left it, and the machine no longer claims a baseline it isn't holding."""
-    supervisor, factory = make_supervisor()  # auto_restore_production defaults off
-    _capture_baseline_on(factory, status=BaselineStatus.CLEARED.value)
-    with factory() as session:
-        machine = session.get(Machine, 1)
-        machine.lease_state = LeaseState.ACTIVE.value
-        machine.lease_due_at = datetime.now(UTC) - timedelta(minutes=1)  # lease overdue
-        session.get(Campaign, 1).window_end = datetime.now(UTC) - timedelta(minutes=1)
-        session.commit()
-
-    supervisor.tick()
-
-    with factory() as session:
-        machine = session.get(Machine, 1)
-        assert supervisor.driver.restored == [], "must not relaunch production"
-        assert machine.baseline_status != BaselineStatus.RESTORED.value, (
-            "we did not restore, so must not claim RESTORED"
-        )
-        assert session.scalars(
-            select(Event).where(Event.kind == "production_left_down")
-        ).first() is not None
-
-
-def test_no_window_means_no_automatic_restore():
-    """Without a declared hand-back time the session is supervised — never
-    yank the machine out from under someone still iterating."""
-    supervisor, factory = make_supervisor()
-    _capture_baseline_on(factory, status=BaselineStatus.CLEARED.value)
-
-    supervisor.tick()
-    with factory() as session:
-        assert session.get(Machine, 1).baseline_status == BaselineStatus.CLEARED.value
-
-
-def test_capture_keeps_a_prior_baseline_when_it_transiently_sees_nothing():
-    """Prod-priority: an empty `docker ps` on a box where we captured
-    production before means the service is restarting, not that the box became
-    ours. Overwriting the capture with the empty reading would strand
-    production — nothing left to restore it with — and mark the machine free to
-    run our containers over. The prior capture is kept and the machine stays put
-    until production is seen again."""
-    supervisor, factory = make_supervisor()
-    supervisor.driver.capture_baseline = lambda machine: {"services": []}
-    with factory() as session:
-        machine = session.get(Machine, 1)
-        machine.baseline = {
-            "services": [{"container": "prod-svc", "endpoint_url": "http://x:8050"}]
-        }
-        machine.baseline_status = BaselineStatus.RESTORED.value
-        machine.state = MachineState.AVAILABLE.value
-        session.commit()
-
-    supervisor.tick()
-
-    with factory() as session:
-        machine = session.get(Machine, 1)
-        assert machine.baseline_status == BaselineStatus.RESTORED.value, (
-            "an empty capture must not mark a box with known production as free"
-        )
-        assert (machine.baseline or {}).get("services"), "prior baseline must survive"
-        assert supervisor.driver.cleared == [], "nothing may be cleared off a kept baseline"
-        assert session.scalars(
-            select(Event).where(Event.kind == "baseline_capture_kept_prior")
-        ).first() is not None
-
-
 def test_a_paused_campaign_freezes_its_expired_lease():
     """Seen live: an operator hit Pause meaning to end a lease.
-    The lease kept its own clock, expired, and auto-drained — tearing production
-    back down and relaunching it over a service the operator had restored by
-    hand. Paused means frozen: an overdue lease held only by a paused campaign is
-    left untouched — not drained, production not restored on its own."""
+    The lease kept its own clock, expired, and auto-drained. Paused means
+    frozen: an overdue lease held only by a paused campaign is left untouched."""
     supervisor, factory = make_supervisor()
-    _capture_baseline_on(factory, status=BaselineStatus.CLEARED.value)
     with factory() as session:
         session.get(Campaign, 1).status = CampaignStatus.PAUSED.value
         machine = session.get(Machine, 1)
@@ -525,7 +260,6 @@ def test_a_paused_campaign_freezes_its_expired_lease():
     with factory() as session:
         machine = session.get(Machine, 1)
         assert machine.lease_state == LeaseState.ACTIVE.value, "a frozen lease must not drain"
-        assert machine.baseline_status == BaselineStatus.CLEARED.value, "production left as-is"
         assert not session.scalars(
             select(Event).where(Event.kind == "lease_end_requested")
         ).first(), "no auto hand-back while frozen"
@@ -766,221 +500,12 @@ def test_user_stop_request_kills_run_and_releases_machine():
     assert supervisor.driver.torn_down == ["autotune-run-1"]
 
 
-def test_a_restored_machine_is_captured_again_for_the_next_night():
-    """The lifecycle drove captured -> cleared -> restored automatically but
-    nothing moved a machine back INTO captured, so only the first night was
-    unattended: every night after it stalled behind "capture the baseline"."""
-    supervisor, factory = make_supervisor()
-    with factory() as session:
-        machine = session.get(Machine, 1)
-        machine.baseline_status = BaselineStatus.RESTORED.value  # last night put production back
-        session.commit()
-
-    supervisor.tick()
-
-    with factory() as session:
-        machine = session.get(Machine, 1)
-        assert machine.baseline_status == BaselineStatus.CAPTURED.value
-        assert machine.baseline["services"][0]["container"] == "prod-svc"
-        kinds = {e.kind for e in session.scalars(select(Event)).all()}
-        assert "baseline_captured_auto" in kinds
-
-
-def test_capture_promotes_production_to_a_first_class_baseline():
-    """A captured production service becomes a baseline row keyed by
-    (served_model_name, engine, card_type) — the reusable reference, no longer
-    trapped inside the machine's capture blob."""
-    supervisor, factory = make_supervisor()
-    supervisor.driver.capture_baseline = lambda machine: {"services": [{
-        "container": "prod", "endpoint_url": "http://x:8050",
-        "served_model_name": "glm-5",
-        "command": '["python", "-m", "sglang.launch_server", "--tp", "2", '
-                   '"--enable-cache-report", "--port", "8050"]',
-        "engine_args": {"tp": "2", "enable_cache_report": True},
-    }]}
-    with factory() as session:
-        machine = session.get(Machine, 1)
-        machine.gpu_type = "A100"
-        machine.baseline_status = BaselineStatus.RESTORED.value
-        session.commit()
-
-    supervisor.tick()
-
-    with factory() as session:
-        baseline = session.scalars(select(Baseline)).one()
-        assert (baseline.served_model_name, baseline.engine, baseline.card_type) == (
-            "glm-5", "sglang", "A100",
-        )
-        assert baseline.engine_args == {"tp": "2", "enable_cache_report": True}
-        assert baseline.source == "capture:gpu-01"
-
-
-def test_a_hand_set_baseline_is_not_overwritten_by_capture():
-    """Capture maintains only what it created; an operator's manual reference
-    survives the next hand-over rather than being silently replaced."""
-    supervisor, factory = make_supervisor()
-    supervisor.driver.capture_baseline = lambda machine: {"services": [{
-        "container": "prod", "endpoint_url": "http://x:8050",
-        "served_model_name": "glm-5",
-        "engine_args": {"tp": "8"},
-    }]}
-    with factory() as session:
-        machine = session.get(Machine, 1)
-        machine.gpu_type = "A100"
-        machine.baseline_status = BaselineStatus.RESTORED.value
-        session.add(Baseline(
-            served_model_name="glm-5", engine="sglang", card_type="A100",
-            engine_args={"tp": "2"}, source="manual",
-        ))
-        session.commit()
-
-    supervisor.tick()
-
-    with factory() as session:
-        baseline = session.scalars(select(Baseline)).one()
-        assert baseline.engine_args == {"tp": "2"}, "the manual reference stands"
-        assert baseline.source == "manual"
-
-
-def test_an_idle_machine_is_measured_free_rather_than_assumed_free():
-    """A machine we have never inspected is not the same as an empty one.
-    Capture reports nothing running -> it is ours, and now we know it."""
-    supervisor, factory = make_supervisor()
-    supervisor.driver.capture_baseline = lambda machine: {"services": []}
-    with factory() as session:
-        session.get(Machine, 1).baseline_status = BaselineStatus.NONE.value
-        session.commit()
-
-    supervisor.tick()
-
-    with factory() as session:
-        machine = session.get(Machine, 1)
-        assert machine.baseline_status == BaselineStatus.CLEARED.value
-        kinds = {e.kind for e in session.scalars(select(Event)).all()}
-        assert "baseline_capture_found_nothing" in kinds
-
-
-def test_production_running_on_a_fresh_machine_is_protected_not_ignored():
-    """Regression: NONE used to schedule experiments straight onto the machine,
-    which would have launched them alongside whatever was already serving."""
-    supervisor, factory = make_supervisor()
-    with factory() as session:
-        session.get(Machine, 1).baseline_status = BaselineStatus.NONE.value
-        session.commit()
-
-    supervisor.tick()
-
-    with factory() as session:
-        machine = session.get(Machine, 1)
-        assert machine.baseline_status == BaselineStatus.CAPTURED.value
-        run = session.scalars(select(Run)).first()
-        # The first run is the canary against production, not an experiment.
-        assert run is not None and run.kind == RunKind.BASELINE.value
-        assert supervisor.driver.launched == [], "nothing may be launched yet"
-
-
-def test_a_machine_nobody_is_waiting_for_is_left_alone():
-    """Capture only reads, but reading means sshing into someone's box — do it
-    only when a campaign actually needs the machine."""
-    supervisor, factory = make_supervisor()
-    with factory() as session:
-        session.get(Machine, 1).baseline_status = BaselineStatus.RESTORED.value
-        session.get(Campaign, 1).status = CampaignStatus.PAUSED.value
-        session.commit()
-
-    supervisor.tick()
-
-    with factory() as session:
-        assert session.get(Machine, 1).baseline_status == BaselineStatus.RESTORED.value
-
-
-def test_a_machine_marked_away_is_not_captured():
-    """`away` means production hours: it has not been handed over, and the
-    hand-over itself stays a human decision."""
-    supervisor, factory = make_supervisor()
-    with factory() as session:
-        machine = session.get(Machine, 1)
-        machine.baseline_status = BaselineStatus.RESTORED.value
-        machine.state = MachineState.AWAY.value
-        session.commit()
-
-    supervisor.tick()
-
-    with factory() as session:
-        assert session.get(Machine, 1).baseline_status == BaselineStatus.RESTORED.value
-
-
 def _request_stop(factory):
     """What POST /runs/{id}/stop records."""
     with factory() as session:
         run = session.scalars(select(Run).order_by(Run.id.desc())).first()
         session.add(Event(actor="u", kind="stop_requested", run_id=run.id, payload={}))
         session.commit()
-
-
-def test_a_failed_canary_is_retried_but_not_forever():
-    """One canary per campaign+machine, ever, deadlocked the campaign: clearing
-    production needs a canary that PASSED, and nothing scheduled another one.
-    Retry — but production that cannot be measured is a finding, not a loop."""
-    supervisor, factory = make_supervisor()
-    supervisor.health = FailingEvaluator()
-    _capture_baseline_on(factory)
-
-    for _ in range(8):
-        supervisor.tick()
-
-    with factory() as session:
-        canaries = session.scalars(select(Run).where(Run.kind == RunKind.BASELINE.value)).all()
-        assert len(canaries) == 3, "retried up to the bound, then stopped"
-        assert all(r.status == RunStatus.FAILED.value for r in canaries)
-        assert session.get(Machine, 1).baseline_status == BaselineStatus.CAPTURED.value
-    assert supervisor.driver.cleared == [], "production survives every failed canary"
-
-
-def test_a_canary_stopped_by_hand_is_not_immediately_rescheduled():
-    """Stop means stop. Re-scheduling on the next tick would undo the click."""
-    supervisor, factory = make_supervisor()
-    _capture_baseline_on(factory)
-    supervisor.tick()  # canary scheduled
-
-    _request_stop(factory)
-    supervisor.tick()  # honours the stop
-    supervisor.tick()  # must not start another
-
-    with factory() as session:
-        canaries = session.scalars(select(Run).where(Run.kind == RunKind.BASELINE.value)).all()
-        assert len(canaries) == 1
-        assert canaries[0].status == RunStatus.KILLED.value
-
-
-def test_restarting_the_campaign_re_runs_a_stopped_canary():
-    """The escape hatch from a stopped canary is the Start button — otherwise
-    the campaign is stuck behind evidence it can never obtain."""
-    supervisor, factory = make_supervisor()
-    _capture_baseline_on(factory)
-    supervisor.tick()
-    _request_stop(factory)
-    supervisor.tick()
-
-    with factory() as session:  # what the Start button records
-        session.add(
-            Event(
-                actor="u",
-                kind="campaign_status_changed",
-                campaign_id=1,
-                # Explicit, later timestamp: sqlite's CURRENT_TIMESTAMP has
-                # one-second resolution, so "after the run" needs saying.
-                ts=datetime.now(UTC) + timedelta(seconds=5),
-                payload={"status": CampaignStatus.ACTIVE.value},
-            )
-        )
-        session.commit()
-    supervisor.tick()
-
-    with factory() as session:
-        canaries = session.scalars(select(Run).where(Run.kind == RunKind.BASELINE.value)).all()
-        assert len(canaries) == 2, "a fresh start earns a fresh canary"
-        assert canaries[-1].status != RunStatus.KILLED.value
 
 
 def _grid(factory, values, gpu_count=8, share=True):
