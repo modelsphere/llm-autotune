@@ -7,6 +7,10 @@ under the `agent` tag. The [perf-report skill](../../agent_skills/perf-report)
 is a ready-made agent for Claude Code; [perf-report-prompt.md](../perf-report-prompt.md)
 is the prompt to start it with.
 
+**Off by default.** Set `AUTOTUNE_AGENT_API_ENABLED=true` to serve these
+routes, and build the frontend with `VITE_AGENT_REPORTS=1` to show the Reports
+pages; otherwise both answer 404.
+
 A report compares one **baseline** run against N **attempts**: runs the
 platform launched and measured, whether a policy proposed them or the
 campaign's search space did.

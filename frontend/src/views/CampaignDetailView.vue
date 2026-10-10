@@ -981,15 +981,13 @@ onMounted(() => {
          every answer is about a machine the campaign is no longer using —
          findings that look like problems and are not. -->
     <div v-if="preflightUseful" class="preflight-bar">
-      <span v-if="!preflight" class="muted">
-        Checks not run yet — worth doing before a start; the machine may have changed.
-      </span>
+      <span v-if="!preflight" class="muted">Pre-flight checks not run</span>
       <span v-else class="muted counts">
         <b v-if="preflightCounts.fail" class="fail-text">
           {{ preflightCounts.fail }} blocking
         </b>
         <b v-if="preflightCounts.warn" class="warn-text">
-          {{ preflightCounts.warn }} worth reading
+          {{ preflightCounts.warn }} warning(s)
         </b>
         <b class="ok-text">{{ preflightCounts.pass }} passed</b>
       </span>
@@ -1006,8 +1004,8 @@ onMounted(() => {
           <div>
             <span class="mono muted">{{ c.machine }}</span>
             <b> {{ c.label }}</b> — {{ c.detail }}
+            <InfoHint v-if="c.hint">{{ c.hint }}</InfoHint>
           </div>
-          <div v-if="c.hint" class="muted tiny">{{ c.hint }}</div>
         </div>
       </div>
       <!-- Passes as chips: present, countable, and not competing for attention
@@ -1129,9 +1127,8 @@ onMounted(() => {
           </template>
         </p>
         <p v-if="staged && !verifiedBoard.length" class="muted tiny pending-note">
-          The best {{ campaign?.verify_top_k }} of these get replayed against
-          <span class="mono">{{ campaign?.verify_benchmark_slug }}</span> once screening
-          finishes — that measurement decides the winner.
+          Top {{ campaign?.verify_top_k }} → verify on
+          <span class="mono">{{ campaign?.verify_benchmark_slug }}</span>
         </p>
         <ScoreBars :rows="screenBoard" :swept-keys="sweptKeys"
           :label="objective.label" :unit="objective.unit"
@@ -1235,7 +1232,7 @@ onMounted(() => {
       <el-tab-pane :label="t('campaign.tabs.configuration')">
         <div class="config-head">
           <span class="muted">
-            A snapshot, taken when the campaign was created.
+            Snapshot at creation
             <InfoHint>
               Editing the search space or objective this was copied from does not change
               what ran here — a campaign always matches the config it was created with.
@@ -1247,8 +1244,7 @@ onMounted(() => {
         <el-table :data="configRows" size="small" class="config-table">
           <el-table-column label="Setting" width="230">
             <template #default="{ row }">
-              <div>{{ row.label }}</div>
-              <div v-if="row.hint" class="muted tiny">{{ row.hint }}</div>
+              <div>{{ row.label }} <InfoHint v-if="row.hint">{{ row.hint }}</InfoHint></div>
             </template>
           </el-table-column>
           <el-table-column label="Value" min-width="320">
@@ -1265,9 +1261,7 @@ onMounted(() => {
 
         <div class="block-head">
           <h3>Launch extras</h3>
-          <span class="muted tiny">
-            env vars and bind mounts every container in this campaign gets
-          </span>
+          <InfoHint>Env vars and bind mounts every container in this campaign gets.</InfoHint>
           <span class="spacer" />
           <el-button size="small" text type="primary"
             @click="copyText(extrasYaml, 'Launch extras copied')">Copy YAML</el-button>
@@ -1276,14 +1270,12 @@ onMounted(() => {
 
         <div class="block-head">
           <h3>Difference from production</h3>
-          <span class="muted tiny">
-            flags production's recorded baseline sets that this campaign never sets
-          </span>
+          <InfoHint>Flags production's recorded baseline sets that this campaign never
+            sets.</InfoHint>
         </div>
         <pre class="mono block">{{ parity?.missing?.length
           ? parity.missing.map((m) => `${m.flag}: ${m.production}`).join('\n')
-          : (parity?.baseline_id ? 'none — every flag production sets is set here too'
-                                 : 'no baseline recorded for this model on Baselines') }}</pre>
+          : (parity?.baseline_id ? 'none' : 'no baseline recorded for this model') }}</pre>
 
         <div class="block-head">
           <h3>Search space</h3>
@@ -1338,10 +1330,6 @@ onMounted(() => {
     </el-tabs>
 
     <el-dialog v-model="editingSchedule" title="Nightly window" width="560px">
-      <p class="muted lead">
-        The campaign wakes at the start time and stands down at the end, picking up where
-        it left off the next night. Clearing both times puts it back under manual control.
-      </p>
       <NightlyWindow v-model:start="draft.start" v-model:end="draft.end"
         v-model:timezone="draft.timezone" v-model:until="draft.until" />
       <template #footer>
@@ -1359,9 +1347,6 @@ onMounted(() => {
     </el-dialog>
 
     <el-dialog v-model="exportOpen" :title="t('campaign.exportTitle')" width="760px">
-      <p class="muted tiny">
-        {{ t('campaign.exportNote') }}
-      </p>
       <pre class="mono block report">{{ exportYaml }}</pre>
       <template #footer>
         <el-button @click="downloadYaml">{{ t('common.download') }}</el-button>

@@ -123,12 +123,12 @@ const form = ref({
 })
 
 const STEPS = [
-  { title: 'Model', hint: 'what to serve' },
-  { title: 'Machines', hint: 'where it runs' },
-  { title: 'Search', hint: 'what to try' },
-  { title: 'Goal', hint: 'the tests, and what wins' },
-  { title: 'Schedule', hint: 'when' },
-  { title: 'Check', hint: 'before committing a night' },
+  { title: 'Model' },
+  { title: 'Machines' },
+  { title: 'Search' },
+  { title: 'Benchmark' },
+  { title: 'Schedule' },
+  { title: 'Check' },
 ]
 
 /** The name a campaign gets when its author leaves it blank. */
@@ -754,7 +754,7 @@ onMounted(async () => {
     </div>
 
     <el-steps :active="step" finish-status="success" align-center class="steps">
-      <el-step v-for="(s, i) in STEPS" :key="s.title" :title="s.title" :description="s.hint"
+      <el-step v-for="(s, i) in STEPS" :key="s.title" :title="s.title"
         :status="stepStatus(i)" class="clickable-step" @click="step = i" />
     </el-steps>
 
@@ -810,7 +810,7 @@ onMounted(async () => {
           <el-form label-position="top">
             <el-form-item v-if="form.engine === 'sglang' && groups.length">
               <template #label>
-                <span>Node group (multi-node)</span>
+                <span>Node group</span>
                 <InfoHint :width="430">
                   Deploy each run <b>across</b> the group's members instead of on one
                   machine. Leave empty for an ordinary single-node campaign. The group's
@@ -844,7 +844,7 @@ onMounted(async () => {
               </el-select>
             </el-form-item>
             <el-form-item>
-              <el-checkbox v-model="form.share_machine">Run candidates in parallel</el-checkbox>
+              <el-checkbox v-model="form.share_machine">Parallel candidates</el-checkbox>
               <InfoHint :width="340">
                 Several candidates share a machine at once, each pinned to its own GPUs:
                 an 8-card node running one tp=2 config would otherwise leave six cards
@@ -902,9 +902,6 @@ onMounted(async () => {
                   </span>
                 </el-option>
               </el-select>
-              <div v-if="!searchSpaces.length" class="warn hint">
-                None saved yet — <b>Build one</b> opens the builder in a new tab.
-              </div>
             </el-form-item>
 
             <SpaceMap v-if="selectedSpace" :space="selectedSpace" compact
@@ -926,10 +923,10 @@ onMounted(async () => {
                 <el-button link class="label-link" @click="refreshLists">Refresh</el-button>
               </template>
               <el-select v-model="form.strategy" style="width: 100%" filterable>
-                <el-option value="" label="No policy — every configuration, in order" />
-                <el-option-group v-if="policies.length" label="Policy containers">
+                <el-option value="" label="Grid (exhaustive)" />
+                <el-option-group v-if="policies.length" label="Policies">
                   <el-option v-for="p in policies" :key="p.id" :value="`policy:${p.id}`"
-                    :label="`Policy — ${p.name}`">
+                    :label="p.name">
                     <span>{{ p.name }}</span>
                     <span class="muted opt-help mono">{{ p.image }}</span>
                   </el-option>
@@ -947,7 +944,7 @@ onMounted(async () => {
 
             <el-form-item v-if="selectedPolicy" class="spaced">
               <template #label>
-                <span>Finalists to re-measure</span>
+                <span>Finalists</span>
                 <InfoHint :width="360">
                   When the window nears its end the policy names its best configs, and the
                   platform launches and benchmarks each one itself — that measurement
@@ -961,26 +958,23 @@ onMounted(async () => {
 
             <el-collapse v-if="!selectedPolicy" v-model="searchAdvanced" class="advanced">
               <el-collapse-item name="search" title="Advanced">
-                <el-form-item>
-                  <template #label>
-                    <span>Re-run the best</span>
-                    <InfoHint :width="360">
-                      One benchmark is a signal, not a decision: a config can lead by noise.
-                      Before finishing, re-run the best few configs so the winner is backed
-                      by several measurements and reports its spread.
-                    </InfoHint>
-                  </template>
-                  <div class="sentence">
-                    <el-input-number v-model="form.confirm_top_k" :min="0" :max="10"
-                      size="small" controls-position="right" class="inline-num" />
-                    <span>configs,</span>
+                <div class="grid-2">
+                  <el-form-item>
+                    <template #label>
+                      <span>Confirm top-k</span>
+                      <InfoHint :width="360">
+                        One benchmark is a signal, not a decision: a config can lead by noise.
+                        Before finishing, re-run the best k configs so the winner is backed
+                        by several measurements and reports its spread. 0 turns it off.
+                      </InfoHint>
+                    </template>
+                    <el-input-number v-model="form.confirm_top_k" :min="0" :max="10" />
+                  </el-form-item>
+                  <el-form-item label="Repeats">
                     <el-input-number v-model="form.confirm_repeats" :min="2" :max="10"
-                      size="small" controls-position="right" class="inline-num"
                       :disabled="form.confirm_top_k === 0" />
-                    <span>times each</span>
-                    <span class="muted tiny">{{ form.confirm_top_k === 0 ? '(off)' : '' }}</span>
-                  </div>
-                </el-form-item>
+                  </el-form-item>
+                </div>
               </el-collapse-item>
             </el-collapse>
           </el-form>
@@ -994,7 +988,7 @@ onMounted(async () => {
           <el-form label-position="top">
             <el-form-item>
               <template #label>
-                <span>How each candidate is measured</span>
+                <span>Workload</span>
                 <InfoHint :width="380">
                   Every candidate gets the same load from LLMBench, the benchmark platform.
                   Describe the load and AutoTune creates a matching benchmark there, filed
@@ -1010,7 +1004,7 @@ onMounted(async () => {
 
             <el-form-item>
               <template #label>
-                <span>What wins</span>
+                <span>Objective</span>
                 <InfoHint :width="340">
                   The metric candidates are ranked on, and the redlines a candidate must
                   hold to rank at all. Only objectives this workload can report are listed.
@@ -1040,21 +1034,20 @@ onMounted(async () => {
                     {{ r.metric }} {{ r.op }} {{ r.value }}
                   </span>
                 </div>
-                <div v-else class="muted tiny">no redlines — every successful run qualifies</div>
+                <div v-else class="muted tiny">no redlines</div>
               </div>
               <div v-if="objectiveMismatch" class="stage-warn">
-                <b>{{ selectedObjective?.target_metric }}</b> is not something this workload
-                reports, so every run would score nothing. Pick one from the list.
+                This workload does not report <b>{{ selectedObjective?.target_metric }}</b>.
               </div>
             </el-form-item>
 
             <el-collapse v-model="advancedNames" class="advanced">
               <el-collapse-item name="split">
-                <template #title>Advanced: re-measure the best on a second workload</template>
+                <template #title>Advanced: verify stage</template>
                 <div class="stage-box" :class="{ off: !form.verify_enabled }">
                   <div class="stage-head">
                     <el-checkbox v-model="form.verify_enabled">
-                      <h4>Screen everything, then re-measure the best</h4>
+                      <h4>Verify the best on a second workload</h4>
                     </el-checkbox>
                     <InfoHint :width="380">
                       A replay of real traffic takes the better part of an hour per config.
@@ -1066,26 +1059,29 @@ onMounted(async () => {
                     <WorkloadPicker v-model="verifyWorkload" v-model:rebuild="rebuildAtStart"
                       :profiles="datasetProfiles" :benchmarks="benchmarks" no-sweep
                       @module="(m) => (verifyModule = m)" />
-                    <div class="sentence">
-                      <span>Re-measure the best</span>
-                      <el-input-number v-model="form.verify_top_k" :min="1" :max="10"
-                        size="small" controls-position="right" class="inline-num" />
-                      <span>, ranked by</span>
+                    <div class="grid-2 verify-fields">
+                      <label class="field">
+                        <span class="muted tiny">Top-k</span>
+                        <el-input-number v-model="form.verify_top_k" :min="1" :max="10"
+                          size="small" controls-position="right" />
+                      </label>
+                      <label class="field">
+                        <span class="muted tiny">Objective</span>
                       <el-select v-model="verifyObjectiveId" size="small" clearable filterable
-                        class="verify-objective" placeholder="the platform default">
+                        placeholder="platform default">
                         <el-option v-for="o in verifyObjectives" :key="o.id" :value="o.id"
                           :label="o.name">
                           <span>{{ o.name }}</span>
                           <span class="muted opt-help">{{ o.target_metric }}</span>
                         </el-option>
                       </el-select>
+                      </label>
                     </div>
                     <div v-if="verifyObjectiveMismatch" class="stage-warn">
-                      <b>{{ selectedVerifyObjective?.target_metric }}</b> is not something the
-                      second workload reports, so every re-measured run would score nothing.
+                      The verify workload does not report
+                      <b>{{ selectedVerifyObjective?.target_metric }}</b>.
                     </div>
                   </template>
-                  <div v-else class="muted tiny">Off — the workload above decides the winner.</div>
                 </div>
               </el-collapse-item>
             </el-collapse>
@@ -1094,30 +1090,18 @@ onMounted(async () => {
 
         <!-- 5. Schedule -->
         <template v-if="step === 4">
-          <p class="muted lead">
-            The campaign starts and stops itself. It wakes at the start time, works until
-            the end time, and picks up where it left off the following night.
-          </p>
           <NightlyWindow
             v-model:start="form.daily_start"
             v-model:end="form.daily_end"
             v-model:timezone="form.schedule_timezone"
             v-model:until="form.schedule_until" />
           <p v-if="nightsNeeded" class="estimate">{{ nightsNeeded }}</p>
-          <el-alert v-if="!form.daily_start || !form.daily_end" type="info" :closable="false"
-            show-icon class="spaced"
-            title="No window means no automatic start"
-            description="The campaign is created paused and runs only while you start it by
-              hand." />
         </template>
 
         <!-- 6. Check -->
         <template v-if="step === 5">
           <div class="check-head">
-            <p class="muted lead">
-              Asked of the machines themselves. Each of these costs seconds now and a
-              night to find out the other way.
-            </p>
+            <span />
             <!-- Offered only when it would actually do something. The button used
                  to show on an empty form, where `runPreflight` returns before
                  making a single call — a control that looks live, does nothing,
@@ -1152,12 +1136,9 @@ onMounted(async () => {
           <template v-else-if="preflight">
             <el-alert v-if="blockers.length" type="error" :closable="false" show-icon
               class="verdict"
-              :title="`${blockers.length} problem(s) would stop this campaign`"
-              description="You can still create it — but it will not run until these are
-                fixed." />
+              :title="`${blockers.length} problem(s) would stop this campaign`" />
             <el-alert v-else type="success" :closable="false" show-icon class="verdict"
-              title="Nothing is in the way"
-              description="Warnings below are worth reading; none of them block a run." />
+              title="Nothing is in the way" />
 
             <div v-for="m in preflight.machines" :key="m.machine" class="machine-checks">
               <div class="machine-name mono">{{ m.machine }}</div>
@@ -1168,8 +1149,8 @@ onMounted(async () => {
                 class="check" :class="c.status">
                 <span class="icon">{{ statusLook[c.status]?.icon ?? '?' }}</span>
                 <div class="body">
-                  <div><b>{{ c.label }}</b> — {{ c.detail }}</div>
-                  <div v-if="c.hint" class="muted tiny">{{ c.hint }}</div>
+                  <div><b>{{ c.label }}</b> — {{ c.detail }}
+                    <InfoHint v-if="c.hint">{{ c.hint }}</InfoHint></div>
                 </div>
               </div>
               <div class="passed">
@@ -1180,11 +1161,8 @@ onMounted(async () => {
           </template>
 
           <p v-else-if="!checkable" class="muted">
-            Nothing to check yet — these ask a real machine about
-            <b>{{ missingForCheck.join(', ') }}</b>. Fill that in and the checks run
-            when you come back to this step.
+            Needs <b>{{ missingForCheck.join(', ') }}</b>.
           </p>
-          <p v-else class="muted">Checks run automatically when you reach this step.</p>
         </template>
       </div>
 
@@ -1239,29 +1217,30 @@ onMounted(async () => {
       </aside>
     </div>
 
-    <el-dialog v-model="draftOpen" title="Start from what the platform knows" width="620px">
-      <p class="muted lead">
-        The image, model and production arguments come from the baseline; the grid is
-        sized to the machines; the dataset comes from LLMBench. Every value says where it
-        came from, and nothing is created until you press Create.
-      </p>
+    <el-dialog v-model="draftOpen" title="Start from a baseline" width="620px">
       <el-form label-position="top">
-        <el-form-item label="Baseline">
+        <el-form-item>
+          <template #label>
+            Baseline
+            <InfoHint :width="360">The image, model and arguments come from the baseline;
+              the grid is sized to the machines. Every drafted value says where it came
+              from, and nothing is created until you press Create.</InfoHint>
+          </template>
           <el-select v-model="draftForm.baseline_id" clearable filterable
             placeholder="pick one — or name a model below">
             <el-option v-for="b in baselines" :key="b.id" :value="b.id"
               :label="`#${b.id} ${b.served_model_name} · ${b.engine} · ${b.card_type || 'any card'}`" />
           </el-select>
         </el-form-item>
-        <el-form-item v-if="!draftForm.baseline_id" label="Model (finds its baseline for these cards)">
+        <el-form-item v-if="!draftForm.baseline_id" label="Served model name">
           <el-input v-model="draftForm.served_model_name" placeholder="served model name" />
         </el-form-item>
-        <el-form-item label="Node group (optional — otherwise every leased machine)">
+        <el-form-item label="Node group">
           <el-select v-model="draftForm.node_group" clearable placeholder="single-node">
             <el-option v-for="g in groups" :key="g.name" :value="g.name" :label="g.name" />
           </el-select>
         </el-form-item>
-        <el-form-item label="Verify the best few on (optional)">
+        <el-form-item label="Verify benchmark">
           <el-select v-model="draftForm.verify_benchmark_slug" clearable filterable allow-create
             default-first-option class="mono" placeholder="no second stage">
             <el-option v-for="b in benchmarks" :key="b.slug" :value="b.slug" :label="b.slug" />
@@ -1279,10 +1258,6 @@ onMounted(async () => {
     </el-dialog>
 
     <el-dialog v-model="importOpen" title="Import a campaign" width="720px">
-      <p class="muted lead">
-        Paste the YAML exported from another campaign. It fills the steps in — nothing
-        is created until you press Create, and the pre-flight checks run first.
-      </p>
       <el-input v-model="importText" type="textarea" :rows="16" class="mono"
         placeholder="name: ...&#10;engine: sglang&#10;image: ..." />
       <template #footer>
@@ -1343,10 +1318,6 @@ onMounted(async () => {
 .spaced {
   margin-top: 14px;
 }
-.lead {
-  margin: 0 0 14px;
-  line-height: 1.6;
-}
 .estimate {
   margin: 12px 0 0;
   font-size: 12.5px;
@@ -1355,10 +1326,6 @@ onMounted(async () => {
 .opt-help {
   margin-left: 10px;
   font-size: 12px;
-}
-.hint {
-  font-size: 12px;
-  margin-top: 4px;
 }
 .warn {
   color: var(--el-color-warning);
@@ -1394,18 +1361,13 @@ onMounted(async () => {
 .stack {
   width: 100%;
 }
-.sentence {
+.field {
   display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-  line-height: 1.9;
+  flex-direction: column;
+  gap: 2px;
 }
-.verify-objective {
-  width: 220px;
-}
-.inline-num {
-  width: 92px;
+.verify-fields {
+  margin-top: 10px;
 }
 .wide-num {
   width: 108px;

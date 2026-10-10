@@ -59,129 +59,116 @@ const chosenProfile = computed(
   () => props.profiles.find((p) => p.name === w.value.dataset_profile) ?? null)
 
 function profileNote(p: DatasetProfile): string {
-  const size = p.records != null ? `${p.records} requests` : 'no sample yet'
-  return p.managed
-    ? `${size} · resampled only when a campaign asks`
-    : `${size} · LLMBench resamples it every ${p.schedule_hours} h`
+  const size = p.records != null ? `${p.records} requests` : 'empty'
+  return p.managed ? size : `${size} · resampled every ${p.schedule_hours} h`
 }
 </script>
 
 <template>
   <div class="workload">
     <el-radio-group v-model="w.mode" size="small" class="modes">
-      <el-radio-button v-if="!noSweep" value="sweep">Synthetic load</el-radio-button>
-      <el-radio-button value="replay">Replay real traffic</el-radio-button>
-      <el-radio-button value="existing">An existing benchmark</el-radio-button>
+      <el-radio-button v-if="!noSweep" value="sweep">Synthetic sweep</el-radio-button>
+      <el-radio-button value="replay">Replay</el-radio-button>
+      <el-radio-button value="existing">Existing benchmark</el-radio-button>
     </el-radio-group>
 
-    <template v-if="w.mode === 'sweep'">
-      <p class="muted tiny lead">
-        Random prompts of a fixed size, at each concurrency level in turn. Quick and the
-        same every night — but blind to prefix-cache reuse, which only a replay shows.
-      </p>
-      <div class="sentence">
-        <span>Prompts of</span>
+    <div v-if="w.mode === 'sweep'" class="grid">
+      <label class="field">
+        <span class="muted tiny">Input tokens
+          <InfoHint>Length of each random prompt. A sweep is fast and repeatable, but blind
+            to prefix-cache reuse — only a replay shows that.</InfoHint></span>
         <el-input-number v-model="w.input_tokens" :min="1" :max="1000000" :step="512"
-          size="small" controls-position="right" class="num" />
-        <span>tokens, answers of</span>
+          size="small" controls-position="right" />
+      </label>
+      <label class="field">
+        <span class="muted tiny">Output tokens
+          <InfoHint>Tokens generated per request.</InfoHint></span>
         <el-input-number v-model="w.output_tokens" :min="1" :max="100000" :step="128"
-          size="small" controls-position="right" class="num" />
-        <span>tokens,</span>
-      </div>
-      <div class="sentence">
-        <span>at concurrency</span>
-        <el-input v-model="w.concurrencies" size="small" class="levels mono"
-          placeholder="1, 4, 16, 64" />
-        <span>,</span>
+          size="small" controls-position="right" />
+      </label>
+      <label class="field">
+        <span class="muted tiny">Concurrency
+          <InfoHint>Concurrent requests, one level after another, comma-separated.</InfoHint></span>
+        <el-input v-model="w.concurrencies" size="small" class="mono" placeholder="1, 4, 16, 64" />
+      </label>
+      <label class="field">
+        <span class="muted tiny">Duration / level (s)
+          <InfoHint>How long each concurrency level runs.</InfoHint></span>
         <el-input-number v-model="w.seconds_per_level" :min="10" :max="3600" :step="30"
-          size="small" controls-position="right" class="num" />
-        <span>seconds each.</span>
-      </div>
-    </template>
+          size="small" controls-position="right" />
+      </label>
+    </div>
 
     <template v-else-if="w.mode === 'replay'">
-      <p class="muted tiny lead">
-        Requests recorded from real traffic, sent again. Slower, and the only measurement
-        that sees real prompt lengths and prefix-cache reuse.
-      </p>
-      <div class="field">
-        <label class="muted tiny">
-          Dataset
+      <label class="field">
+        <span class="muted tiny">Dataset
           <InfoHint :width="380">
-            A dataset is a sample of your production requests that LLMBench collects from
-            your logs, set up on LLMBench under <b>Replay datasets</b>. A campaign keeps the
-            sample it started with for its whole life, so every candidate sees the same
-            requests.
-          </InfoHint>
-        </label>
-        <el-select v-model="w.dataset_profile" size="small" filterable style="width: 100%">
-          <el-option value="" label="LLMBench's example set (20 requests)">
-            <span>LLMBench's example set</span>
-            <span class="muted opt-help">20 requests — proves the pipeline, measures nothing</span>
-          </el-option>
+            Recorded production requests, sent again: the only measurement that sees real
+            prompt lengths and prefix-cache reuse. Datasets are set up on LLMBench under
+            <b>Replay datasets</b>; without one, the 20-request example set is used, which
+            proves the pipeline but measures nothing. A campaign keeps the sample it
+            started with, so every candidate sees the same requests.
+          </InfoHint></span>
+        <el-select v-model="w.dataset_profile" size="small" filterable>
+          <el-option value="" label="Example set (20 requests)" />
           <el-option v-for="p in profiles" :key="p.name" :value="p.name"
             :label="p.display_name || p.name">
             <span>{{ p.display_name || p.name }}</span>
             <span class="muted opt-help">{{ profileNote(p) }}</span>
           </el-option>
         </el-select>
-        <div v-if="!profiles.length" class="muted tiny">
-          No datasets on LLMBench yet — until one is set up there, a replay uses the example
-          set.
-        </div>
+      </label>
+      <div class="grid">
+        <label class="field">
+          <span class="muted tiny">Requests
+            <InfoHint>How many requests to replay; 0 replays the whole sample.</InfoHint></span>
+          <el-input-number v-model="w.requests" :min="0" :max="1000000" :step="100"
+            size="small" controls-position="right" />
+        </label>
+        <label class="field">
+          <span class="muted tiny">Concurrency
+            <InfoHint>Requests in flight at once.</InfoHint></span>
+          <el-input-number v-model="w.concurrency" :min="1" :max="4096"
+            size="small" controls-position="right" />
+        </label>
       </div>
-      <div class="sentence">
-        <span>Replay</span>
-        <el-input-number v-model="w.requests" :min="0" :max="1000000" :step="100"
-          size="small" controls-position="right" class="num" />
-        <span>requests ({{ w.requests ? 'a sample' : 'all of them' }}),</span>
-        <el-input-number v-model="w.concurrency" :min="1" :max="4096"
-          size="small" controls-position="right" class="num" />
-        <span>at a time.</span>
-      </div>
-      <template v-if="chosenProfile">
-        <el-checkbox v-model="rebuild" size="small">
-          Take a fresh sample when the campaign starts
-        </el-checkbox>
-        <div v-if="!chosenProfile.managed" class="muted tiny warn-line">
-          LLMBench resamples this dataset every {{ chosenProfile.schedule_hours }} h on its
-          own, so a campaign running longer may see it change; runs measured on a different
-          sample are marked as not comparable. A dataset resampled only on request avoids
-          that.
-        </div>
-      </template>
+      <el-checkbox v-if="chosenProfile" v-model="rebuild" size="small">
+        Resample at start
+        <InfoHint :width="340">
+          Take a fresh sample when the campaign starts.
+          <template v-if="!chosenProfile.managed">
+            LLMBench also resamples this dataset every {{ chosenProfile.schedule_hours }} h on
+            its own, so a long campaign may see it change; runs measured on a different sample
+            are marked not comparable.
+          </template>
+        </InfoHint>
+      </el-checkbox>
     </template>
 
-    <template v-else>
-      <p class="muted tiny lead">A benchmark already on LLMBench, used as it is.</p>
-      <el-select v-model="w.slug" size="small" filterable allow-create default-first-option
-        class="mono" style="width: 100%" placeholder="the platform default">
-        <el-option v-for="b in benchmarks" :key="b.slug" :value="b.slug" :label="b.slug">
-          <span class="mono">{{ b.slug }}</span>
-          <span class="muted opt-help">
-            {{ b.replays_profile ? `replays ${b.replays_profile}` : b.modules.join(' · ') }}
-          </span>
-        </el-option>
-      </el-select>
-    </template>
+    <el-select v-else v-model="w.slug" size="small" filterable allow-create default-first-option
+      class="mono" placeholder="Benchmark slug">
+      <el-option v-for="b in benchmarks" :key="b.slug" :value="b.slug" :label="b.slug">
+        <span class="mono">{{ b.slug }}</span>
+        <span class="muted opt-help">
+          {{ b.replays_profile ? `replays ${b.replays_profile}` : b.modules.join(' · ') }}
+        </span>
+      </el-option>
+    </el-select>
 
-    <div v-if="resolved" class="muted tiny becomes">
-      On LLMBench: <span class="mono">{{ resolved.slug }}</span>
-      <template v-if="resolved.exists">— already there, reused</template>
-      <template v-else>— created with the campaign, under llm-autotune</template>
+    <div v-if="resolved" class="muted tiny">
+      LLMBench benchmark <span class="mono">{{ resolved.slug }}</span>
+      ({{ resolved.exists ? 'reused' : 'new' }})
+      <InfoHint>The platform creates this benchmark on LLMBench with the campaign, grouped
+        under <span class="mono">llm-autotune</span>. The same workload always maps to the
+        same benchmark.</InfoHint>
     </div>
   </div>
 </template>
 
 <style scoped>
 .workload { display: flex; flex-direction: column; gap: 8px; }
-.modes { margin-bottom: 2px; }
-.lead { margin: 0; }
-.sentence { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
-.num { width: 110px; }
-.levels { width: 140px; }
-.field { display: flex; flex-direction: column; gap: 4px; }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px 12px; }
+.field { display: flex; flex-direction: column; gap: 2px; }
+.field :deep(.el-input-number) { width: 100%; }
 .opt-help { margin-left: 8px; font-size: 12px; }
-.becomes { margin-top: 2px; }
-.warn-line { color: var(--el-color-warning-dark-2, #b88230); }
 </style>

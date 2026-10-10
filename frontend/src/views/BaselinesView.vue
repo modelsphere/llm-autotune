@@ -200,10 +200,7 @@ onMounted(async () => {
   <div class="page">
     <div class="header-row">
       <div>
-        <h1 class="page-title">Baselines</h1>
-        <span class="muted">
-          What production runs, per model + engine + card type — the reference a campaign
-          compares its candidates against, and the file a winner is proposed into.
+        <h1 class="page-title">Baselines
           <InfoHint :width="400">
             A baseline is the production config for a (served model, engine, card type): the
             whole launch config — image, weights path, knobs, env, volumes. A campaign tuning
@@ -211,7 +208,7 @@ onMounted(async () => {
             as a multiple of it, so <b>×1.15 of production</b> keeps its meaning across nights.
             {{ capturedNote }}
           </InfoHint>
-        </span>
+        </h1>
       </div>
       <div>
         <el-button type="primary" @click="openNew">New baseline</el-button>
@@ -301,7 +298,7 @@ onMounted(async () => {
 
         <el-form-item>
           <template #label>
-            <span>Paste production's command</span>
+            <span>Launch command</span>
             <InfoHint>
               A whole `docker run …` line or the bare serve command. It is compiled into every
               field below: image, weights path, port, env, volumes and the engine knobs.
@@ -319,7 +316,7 @@ onMounted(async () => {
           <el-form-item label="Image">
             <el-input v-model="form.image" class="mono" placeholder="repository:tag" />
           </el-form-item>
-          <el-form-item label="Weights path (on the machine)">
+          <el-form-item label="Model path">
             <el-input v-model="form.model_path" class="mono" />
           </el-form-item>
           <el-form-item label="Port">
@@ -331,7 +328,12 @@ onMounted(async () => {
           <el-input v-model="form.argsText" type="textarea" :rows="8" class="mono" />
         </el-form-item>
 
-        <el-form-item label="Env and volumes (YAML: env: {NAME: value}, volumes: {host: container})">
+        <el-form-item>
+          <template #label>
+            Env and volumes (YAML)
+            <InfoHint><span class="mono">env: {NAME: value}</span>,
+              <span class="mono">volumes: {host: container}</span></InfoHint>
+          </template>
           <el-input v-model="form.extrasText" type="textarea" :rows="3" class="mono" />
         </el-form-item>
 

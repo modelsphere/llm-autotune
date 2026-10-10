@@ -177,8 +177,7 @@ const zh: typeof en = {
     noResults: '还没有结果。',
     error: '错误',
     capturedLog: '捕获的日志',
-    logWhileLive: '引擎日志在容器销毁时捕获；run 运行期间这里只显示目前已捕获的内容（可能为空）。'
-      + '点刷新重新读取。',
+    logWhileLive: 'run 仍在运行：目前已捕获的日志。',
     yes: '是',
     no: '否',
   },
@@ -222,7 +221,7 @@ const zh: typeof en = {
     noRuns: '还没有成功的 benchmark 结果。',
     run: 'Run',
     sweptParameters: '搜索参数',
-    notPlanned: '尚未展开 —— campaign 第一次运行时，平台才会写出这 {n} 个配置。',
+    notPlanned: '{n} 个配置，首次运行时展开。',
     editSchedule: '修改定时',
     addSchedule: '添加定时',
     exportTitle: 'Campaign YAML',

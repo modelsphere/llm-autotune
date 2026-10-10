@@ -581,9 +581,7 @@ onMounted(async () => {
   <div class="page">
     <div class="header-row">
       <div>
-        <h1 class="page-title">Resources</h1>
-        <span class="muted">
-          Lease a machine, schedule a campaign — the platform does the rest.
+        <h1 class="page-title">Resources
           <InfoHint :width="400">
             Leasing hands a machine to the platform, free: campaigns run on it until the
             lease ends, and ending it stops only the platform's own runs.
@@ -591,7 +589,7 @@ onMounted(async () => {
             The same lease can be started and ended by an external fleet manager over the
             API — these buttons call exactly those endpoints.
           </InfoHint>
-        </span>
+        </h1>
       </div>
       <div>
         <el-button @click="openDocs">API</el-button>
@@ -660,11 +658,7 @@ onMounted(async () => {
       </div>
     </div>
 
-    <div v-if="!machines.length" class="empty muted">
-      No machines registered yet. The platform has to be able to reach one first —
-      over ssh with its key, or through a Kubernetes cluster's kubeconfig;
-      <b>Add machine</b> says what each needs.
-    </div>
+    <div v-if="!machines.length" class="empty muted">No machines.</div>
 
     <div v-for="m in machines" :key="m.id" class="card">
       <div class="top">
@@ -715,19 +709,13 @@ onMounted(async () => {
             <el-button size="small" text :loading="busyMachine === m.id">More ▾</el-button>
             <template #dropdown>
               <el-dropdown-menu>
-                <el-dropdown-item command="edit">
-                  Edit — change fields / node selector
-                </el-dropdown-item>
-                <el-dropdown-item command="remove" class="risky">
-                  Remove — delete this machine
-                </el-dropdown-item>
-                <el-dropdown-item command="probe" divided>
-                  Refresh capacity — re-read its GPUs
-                </el-dropdown-item>
+                <el-dropdown-item command="edit">Edit</el-dropdown-item>
+                <el-dropdown-item command="remove" class="risky">Remove</el-dropdown-item>
+                <el-dropdown-item command="probe" divided>Re-read GPUs</el-dropdown-item>
                 <el-dropdown-item command="end-eager"
                   :disabled="m.lease_state === 'none'
                   || m.lease_state === 'released'" class="risky">
-                  End lease now — stop runs immediately
+                  End lease now (stops runs)
                 </el-dropdown-item>
               </el-dropdown-menu>
             </template>
@@ -755,13 +743,13 @@ onMounted(async () => {
       <div class="say">
         <span class="dot" :class="dotClass[stageOf(m)?.state ?? 'waiting']" />
         <b>{{ stageOf(m)?.headline ?? '…' }}</b>
-        <span class="muted">{{ stageOf(m)?.detail }}</span>
-      </div>
-
-      <div v-if="(m.lease_state === 'active' || m.lease_state === 'draining')
-        && stageOf(m)?.hand_back?.summary" class="handback">
-        <span class="muted tiny label">On hand-back</span>
-        <span class="tiny">{{ stageOf(m)!.hand_back.summary }}</span>
+        <InfoHint v-if="stageOf(m)?.detail || stageOf(m)?.hand_back?.summary" :width="340">
+          {{ stageOf(m)?.detail }}
+          <template v-if="(m.lease_state === 'active' || m.lease_state === 'draining')
+            && stageOf(m)?.hand_back?.summary">
+            <br /><br /><b>On hand-back:</b> {{ stageOf(m)!.hand_back.summary }}
+          </template>
+        </InfoHint>
       </div>
 
       <div v-if="stageOf(m)?.campaigns?.length" class="for">
@@ -778,25 +766,29 @@ onMounted(async () => {
       width="480px">
       <el-form label-position="top">
         <el-form-item label="Name"><el-input v-model="form.name" /></el-form-item>
-        <el-form-item label="Driver">
+        <el-form-item>
+          <template #label>
+            Driver
+            <!-- What has to be true before this machine can be reached at all,
+                 set up outside this page. -->
+            <InfoHint :width="380">
+              <template v-if="form.driver === 'k8s'">
+                Needs a cluster the platform can reach: one added under <b>Clusters</b>
+                with its kubeconfig, or the default cluster set at install.
+              </template>
+              <template v-else>
+                Needs ssh access: put the public half of the worker's ssh key (set at
+                install, <span class="mono">worker.ssh</span>) in the user's
+                <span class="mono">~/.ssh/authorized_keys</span> on the machine, which
+                needs Docker and the NVIDIA container toolkit.
+              </template>
+              <a :href="setupDocs" target="_blank" rel="noopener">Setup guide</a>
+            </InfoHint>
+          </template>
           <el-select v-model="form.driver" style="width: 100%">
-            <el-option label="SSH + Docker (bare-metal machine)" value="" />
-            <el-option label="Kubernetes (a slice of the GPU cluster)" value="k8s" />
+            <el-option label="SSH + Docker" value="" />
+            <el-option label="Kubernetes" value="k8s" />
           </el-select>
-          <!-- What has to be true before this machine can be reached at all —
-               set up outside this page, so it is said here, where it is needed. -->
-          <div v-if="form.driver === 'k8s'" class="muted tiny setup">
-            Needs a cluster the platform can reach: one added under <b>Clusters</b> with
-            its kubeconfig, or the default cluster set at install.
-            <a :href="setupDocs" target="_blank" rel="noopener">How</a>
-          </div>
-          <div v-else class="muted tiny setup">
-            Needs ssh access: put the public half of the worker's ssh key (set at install,
-            <span class="mono">worker.ssh</span>) in the user's
-            <span class="mono">~/.ssh/authorized_keys</span> on the machine, which needs
-            Docker and the NVIDIA container toolkit.
-            <a :href="setupDocs" target="_blank" rel="noopener">How</a>
-          </div>
         </el-form-item>
         <el-form-item v-if="form.driver === 'k8s'" label="Cluster">
           <el-select v-model="form.cluster_id" clearable placeholder="platform default"
@@ -804,22 +796,19 @@ onMounted(async () => {
             <el-option v-for="c in clusters" :key="c.id"
               :label="`${c.name} · ${c.namespace} · ${c.workload_kind}`" :value="c.id" />
           </el-select>
-          <div class="muted tiny">Add one under <strong>Clusters</strong>.</div>
         </el-form-item>
         <el-form-item v-if="form.driver !== 'k8s'" label="Host">
           <el-input v-model="form.host" class="mono" placeholder="10.0.0.24" />
         </el-form-item>
-        <el-form-item v-if="form.driver === 'k8s'" label="Node selector">
-          <el-input v-model="form.node_selector" class="mono"
-            placeholder="empty: any node with free GPUs" />
-          <div class="muted tiny">
-            Which nodes its pods may land on, as <span class="mono">label=value</span>
-            pairs — for a model whose weights live on only some nodes.
-          </div>
+        <el-form-item v-if="form.driver === 'k8s'">
+          <template #label>
+            Node selector
+            <InfoHint>Which nodes its pods may land on, as
+              <span class="mono">label=value</span> pairs — for a model whose weights live
+              on only some nodes. Empty: any node with free GPUs.</InfoHint>
+          </template>
+          <el-input v-model="form.node_selector" class="mono" placeholder="label=value" />
         </el-form-item>
-        <div class="muted tiny detected">
-          GPU count and type are read from the machine when you save.
-        </div>
         <el-collapse v-model="addAdvanced" class="dialog-advanced">
           <el-collapse-item name="advanced" title="Advanced">
         <div v-if="form.driver !== 'k8s'" class="grid-2">
@@ -829,7 +818,11 @@ onMounted(async () => {
           </el-form-item>
         </div>
         <div class="grid-2">
-          <el-form-item label="GPU count (if it cannot be read)">
+          <el-form-item>
+            <template #label>
+              GPU count
+              <InfoHint>Read from the machine on save; set it only if it cannot be read.</InfoHint>
+            </template>
             <el-input-number v-model="form.gpu_count" :min="1" :max="64" />
           </el-form-item>
           <el-form-item label="GPU type">
@@ -840,21 +833,23 @@ onMounted(async () => {
           </el-form-item>
         </div>
         <template v-if="form.driver !== 'k8s'">
-          <el-form-item label="Interior address (multi-node)">
+          <el-form-item>
+            <template #label>
+              Interior address
+              <InfoHint :width="360">Where the engine reaches this machine for inter-node
+                traffic (NCCL / dist-init). Leave empty unless its rail NIC differs from the
+                management address — which ssh and LLMBench use. Only matters inside a node
+                group.</InfoHint>
+            </template>
             <el-input v-model="form.data_host" class="mono" placeholder="(same as host)" />
-            <div class="muted tiny">
-              Where the <strong>engine</strong> reaches this machine for inter-node
-              traffic (NCCL / dist-init). Leave empty unless its rail NIC differs from the
-              management address above — which is also the address LLMBench is given and
-              the one ssh uses. Only matters inside a node group.
-            </div>
           </el-form-item>
-          <el-form-item label="NCCL interface">
+          <el-form-item>
+            <template #label>
+              NCCL interface
+              <InfoHint><span class="mono">NCCL_SOCKET_IFNAME</span>, when the routable IP and
+                the InfiniBand/RoCE rail differ. Usually set on the group instead.</InfoHint>
+            </template>
             <el-input v-model="form.nccl_ifname" class="mono" placeholder="(engine default)" />
-            <div class="muted tiny">
-              <span class="mono">NCCL_SOCKET_IFNAME</span>, when the routable IP and the
-              InfiniBand/RoCE rail differ. Usually set on the group instead.
-            </div>
           </el-form-item>
         </template>
         <el-form-item label="Notes"><el-input v-model="form.notes" /></el-form-item>
@@ -875,20 +870,18 @@ onMounted(async () => {
         <el-form-item label="Name">
           <el-input v-model="groupForm.name" :disabled="editingGroupId !== null"
             placeholder="e.g. nv-pair-a" />
-          <div v-if="editingGroupId !== null" class="muted tiny">
-            A name is permanent — campaigns pin the group by it.
-          </div>
         </el-form-item>
-        <el-form-item label="Members — selection order is the rank order, first is master">
-          <el-select v-model="groupForm.members" multiple style="width: 100%"
-            placeholder="Pick the machines this group may deploy across">
+        <el-form-item>
+          <template #label>
+            Members
+            <InfoHint :width="340">Selection order is the rank order; the first is the
+              master. All members must share a substrate, a GPU type and a card count. A
+              machine already in another group is greyed out.</InfoHint>
+          </template>
+          <el-select v-model="groupForm.members" multiple style="width: 100%">
             <el-option v-for="c in memberChoices" :key="c.name" :label="c.label"
               :value="c.name" :disabled="c.disabled" />
           </el-select>
-          <div class="muted tiny">
-            All members must share a substrate, a GPU type and a card count. A machine
-            already in another group is greyed out.
-          </div>
         </el-form-item>
         <div class="grid-2">
           <el-form-item label="Substrate">
@@ -898,18 +891,22 @@ onMounted(async () => {
               <el-option label="Kubernetes" value="k8s" />
             </el-select>
           </el-form-item>
-          <el-form-item label="Rendezvous port">
+          <el-form-item>
+            <template #label>
+              Rendezvous port
+              <InfoHint>0 picks a free port per run on the master.</InfoHint>
+            </template>
             <el-input-number v-model="groupForm.dist_port" :min="0" :max="65535" />
-            <div class="muted tiny">0 = pick a free port per run on the master.</div>
           </el-form-item>
         </div>
-        <el-form-item label="NCCL environment">
+        <el-form-item>
+          <template #label>
+            NCCL environment
+            <InfoHint>One <span class="mono">KEY=VALUE</span> per line, applied to every
+              rank's container.</InfoHint>
+          </template>
           <el-input v-model="groupForm.ncclEnvText" type="textarea" :rows="3" class="mono"
             placeholder="NCCL_SOCKET_IFNAME=ib0" />
-          <div class="muted tiny">
-            One <span class="mono">KEY=VALUE</span> per line, applied to every rank's
-            container — one fact about one fabric.
-          </div>
         </el-form-item>
         <el-form-item label="Notes"><el-input v-model="groupForm.notes" /></el-form-item>
       </el-form>
@@ -923,20 +920,15 @@ onMounted(async () => {
     </el-dialog>
 
     <el-dialog v-model="showGroupPreflight" :title="`Preflight · ${preflightGroup}`" width="640px">
-      <div v-if="!groupPreflight" class="muted">
-        Probing every member and the interior links between them…
-      </div>
+      <div v-if="!groupPreflight" class="muted">Probing…</div>
       <template v-else>
         <el-alert v-if="groupPreflight.note" type="info" :closable="false"
           :title="groupPreflight.note" style="margin-bottom: 12px" />
         <el-alert v-if="groupPreflight.ok" type="success" :closable="false" show-icon
           title="Every member is ready and can reach the master"
-          description="Advisory only: the scheduler re-checks at launch."
           style="margin-bottom: 12px" />
         <el-alert v-else-if="!groupPreflight.note" type="error" :closable="false" show-icon
-          title="Something would stop this group deploying"
-          description="These are cheap checks for expensive failures — fix them before a run
-            spends its window discovering them." style="margin-bottom: 12px" />
+          title="Something would stop this group deploying" style="margin-bottom: 12px" />
         <div v-for="row in groupPreflight.machines" :key="row.machine" class="pf-row">
           <div class="pf-head">
             <span class="mono">{{ row.machine }}</span>
@@ -960,19 +952,15 @@ onMounted(async () => {
 
     <el-dialog v-model="showSmoke" :title="`Smoke test · ${smoke.machine?.name ?? ''}`" width="640px">
       <div v-if="smoke.running" class="muted">
-        {{ smoke.pod
-          ? 'Checking the path a launch takes, then placing a probe pod (up to ~40 s)…'
-          : 'Checking the path a launch takes…' }}
+        {{ smoke.pod ? 'Checking (up to ~40 s)…' : 'Checking…' }}
       </div>
       <el-alert v-else-if="smoke.error" type="error" :closable="false" :title="smoke.error" />
       <template v-else-if="smoke.result">
         <el-alert v-if="smoke.result.ok" type="success" :closable="false" show-icon
           title="The platform can reach this machine"
-          description="Reachability only — a campaign's preflight still checks the model, image and ports."
           style="margin-bottom: 12px" />
         <el-alert v-else type="error" :closable="false" show-icon
           title="A launch on this machine would fail"
-          description="The first failed step is the one to fix; later steps were not tried."
           style="margin-bottom: 12px" />
         <div v-for="c in smoke.result.checks" :key="c.name" class="pf-check">
           <el-tag size="small" :type="(checkTag[c.status] as any)" effect="plain">
@@ -985,7 +973,9 @@ onMounted(async () => {
       <template #footer>
         <el-checkbox v-if="smoke.machine?.driver === 'k8s'" v-model="smoke.pod"
           :disabled="smoke.running" style="margin-right: 12px">
-          Also place a probe pod on the node (created and deleted; asks for no GPUs)
+          Probe pod
+          <InfoHint>Also place a pod on the node — created and deleted, asking for no
+            GPUs.</InfoHint>
         </el-checkbox>
         <el-button :loading="smoke.running" @click="runSmoke">Run again</el-button>
         <el-button @click="showSmoke = false">Close</el-button>
@@ -993,10 +983,6 @@ onMounted(async () => {
     </el-dialog>
 
     <el-dialog v-model="showClusters" title="Kubernetes clusters" width="680px">
-      <p class="muted tiny" style="margin-top: -6px">
-        A k8s machine lands in one of these. The kubeconfig is stored encrypted
-        and never shown again — leave the box empty when editing to keep it.
-      </p>
       <div v-for="c in clusters" :key="c.id" class="card" style="margin-bottom: 8px">
         <div class="top">
           <div class="who">
@@ -1036,10 +1022,7 @@ onMounted(async () => {
           probed {{ relativeTime(c.last_probe_at) }}
         </div>
       </div>
-      <div v-if="!clusters.length" class="empty muted">
-        No clusters yet — the platform-default cluster is still served from
-        <span class="mono">AUTOTUNE_K8S_*</span>.
-      </div>
+      <div v-if="!clusters.length" class="empty muted">No clusters.</div>
 
       <el-divider />
       <h3 class="muted">
@@ -1069,7 +1052,12 @@ onMounted(async () => {
             </el-select>
           </el-form-item>
         </div>
-        <el-form-item label="Kubeconfig (scoped, never an admin one)">
+        <el-form-item>
+          <template #label>
+            Kubeconfig
+            <InfoHint>A scoped one, never an admin one. Stored encrypted and never shown
+              again; leave empty when editing to keep it.</InfoHint>
+          </template>
           <el-input v-model="clusterForm.kubeconfig" type="textarea" :rows="5" class="mono"
             :placeholder="editingClusterId === null
               ? 'paste the kubeconfig YAML'
@@ -1094,16 +1082,17 @@ onMounted(async () => {
         <el-form-item label="Default node selector">
           <el-input v-model="clusterForm.node_selector" class="mono" placeholder="(none)" />
         </el-form-item>
-        <el-form-item label="Extra tolerations">
+        <el-form-item>
+          <template #label>
+            Extra tolerations
+            <InfoHint :width="360">Comma-separated
+              <span class="mono">key[=value][:effect]</span>. Needed for a cordoned pool: a
+              pod that tolerates <span class="mono">node.kubernetes.io/unschedulable</span>
+              still schedules onto it. The GPU taint is handled when “tolerate GPU taint”
+              is on.</InfoHint>
+          </template>
           <el-input v-model="clusterForm.tolerations" class="mono"
-            placeholder="e.g. node.kubernetes.io/unschedulable" />
-          <div class="muted tiny">
-            Comma-separated <span class="mono">key[=value][:effect]</span>. Needed for a
-            <strong>cordoned</strong> pool: a pod that tolerates
-            <span class="mono">node.kubernetes.io/unschedulable</span> still schedules
-            onto it, where one that does not sits Pending forever. The GPU taint is
-            handled automatically when “tolerate GPU taint” is on.
-          </div>
+            placeholder="node.kubernetes.io/unschedulable" />
         </el-form-item>
         <el-form-item label="Image pull secrets">
           <el-input v-model="clusterForm.image_pull_secrets" class="mono"
@@ -1140,13 +1129,6 @@ onMounted(async () => {
 </template>
 
 <style scoped>
-.setup {
-  margin-top: 4px;
-  line-height: 1.5;
-}
-.detected {
-  margin: -6px 0 8px;
-}
 .dialog-advanced {
   border-top: none;
 }
@@ -1343,21 +1325,6 @@ onMounted(async () => {
 }
 .dot-done {
   background: var(--el-color-success);
-}
-.handback {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  margin-top: 6px;
-  padding: 5px 8px;
-  border-left: 2px solid var(--el-border-color);
-  background: var(--el-fill-color-lighter);
-  border-radius: 0 3px 3px 0;
-}
-.handback .label {
-  flex: none;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
 }
 .for {
   display: flex;

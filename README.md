@@ -26,7 +26,7 @@ configs to try; the platform launches each one, benchmarks it with
 - **Reproducible.** Every run records its launch command, engine version, card
   type and dataset.
 - **From result to rollout.** A winner comes with its exact launch command
-  and image; an agent API feeds LLM-written reports.
+  and image.
 - **Restart-safe.** All state is in Postgres; a restart mid-run loses nothing.
 - **Extensible.** Plugins add pages, API routes, scheduled steps and search
   strategies ([plugins](docs/plugins.md)).
@@ -91,7 +91,7 @@ nothing about performance. `deploy/demo.sh down --kind` removes it.
 | **Baseline** | The configuration production runs today, measured the same way. |
 | **Machine / cluster** | Where runs land: a node pool in a Kubernetes cluster, or a bare-metal box reached over ssh. |
 | **Policy** | A container that decides what to try next. |
-| **Report** | A written comparison of a baseline against attempts. |
+| **Report** | A written comparison of a baseline against attempts (agent API, off by default). |
 
 ## Repository layout
 
@@ -128,6 +128,7 @@ docs/        architecture, the API contracts, deployment
 - [Machine lease API](docs/api/machine-lease.md) — handing machines to the platform
   from another system
 - [Agent API](docs/api/agent-api.md) — the read models reports are written from
+  (off by default)
 
 ## Contributing
 

@@ -21,7 +21,8 @@ Building on it:
   [policy-contract.md](api/policy-contract.md).
 - [Machine lease API](api/machine-lease.md): lending GPU machines from
   another system, and taking them back.
-- [Agent API](api/agent-api.md): what an LLM writes performance reports from.
+- [Agent API](api/agent-api.md): what an LLM writes performance reports from
+  (off by default).
   [Prompting the report agent](perf-report-prompt.md).
 - [Plugins](plugins.md): routes, worker steps, tables, planners and pages from
   a separately installed package.

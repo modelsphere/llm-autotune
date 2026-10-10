@@ -24,10 +24,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `llm-autotune` (`llm-autotune/sweep`, `llm-autotune/replay`); benchmarks it
   created earlier are filed the next time it ensures them.
 - Built-in objectives for replay workloads ("Replay: throughput per GPU", and
-  the same under a 10s TTFT SLO). The Goal step lists only the objectives the
+  the same under a 10s TTFT SLO). The Benchmark step lists only the objectives the
   chosen workload can report.
-- The Add machine dialog says what the platform needs before it can reach a
-  machine: the worker's ssh key on the box, or a cluster's kubeconfig.
+- The Add machine dialog says, behind its Driver label's `?`, what the
+  platform needs before it can reach a machine: the worker's ssh key on the
+  box, or a cluster's kubeconfig.
 
 - `AUTOTUNE_LLMBENCH_REPLAY_MODULE` (default `replay`): the name LLMBench's
   traffic replay module reports its metrics under. The metric catalog, the
@@ -79,9 +80,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The agent API (`/api/agent/v1`) and the Reports pages are off by default:
+  they have not been proven on tuning campaigns yet. Set
+  `AUTOTUNE_AGENT_API_ENABLED=true`, and build the frontend with
+  `VITE_AGENT_REPORTS=1`, to turn them on.
+- Quieter pages: explanations moved from paragraphs under fields into `?`
+  tooltips, page subtitles folded into the title's tooltip, menu items named
+  by their action alone. A workload is entered as labelled fields (input
+  tokens, output tokens, concurrency, duration per level; requests and
+  concurrency for a replay) instead of a sentence with blanks.
+
 - A bare-metal machine's GPU count and card type are read with `nvidia-smi`
   when it is saved, as a Kubernetes slice's already were from its nodes;
-  **Refresh capacity** works for both. The Add machine dialog asks for a name
+  **Re-read GPUs** works for both. The Add machine dialog asks for a name
   and an address (or a node selector), with the rest under Advanced.
 - New campaign: the engine follows the chosen search space instead of being
   asked for, and a campaign left unnamed is named after its model and date.

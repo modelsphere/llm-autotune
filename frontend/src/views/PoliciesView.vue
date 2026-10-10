@@ -117,9 +117,7 @@ onMounted(load)
   <div class="page">
     <div class="header-row">
       <div>
-        <h1 class="page-title">Policies</h1>
-        <span class="muted">
-          Search algorithms a campaign can run, each a container image.
+        <h1 class="page-title">Policies
           <InfoHint :width="380">
             A policy decides which config to try next; the platform launches and benchmarks
             each one and decides the winner itself. Pick one on a campaign's <b>Search</b>
@@ -130,7 +128,7 @@ onMounted(load)
             your own against the
             <a :href="CONTRACT_DOC" target="_blank" rel="noopener">policy contract</a>.
           </InfoHint>
-        </span>
+        </h1>
       </div>
       <el-button type="primary" @click="openNew">Register policy</el-button>
     </div>
@@ -160,10 +158,8 @@ onMounted(load)
       </el-table-column>
       <template #empty>
         <div class="empty muted">
-          No policies yet. Without one, a campaign tries every config in its search space.
-          To search smarter, build a policy image from the
-          <a :href="POLICIES_REPO" target="_blank" rel="noopener">policies repo</a> and
-          register it here.
+          No policies.
+          <a :href="POLICIES_REPO" target="_blank" rel="noopener">Policies repo</a>
         </div>
       </template>
     </el-table>
@@ -174,16 +170,17 @@ onMounted(load)
         <el-form-item label="Name">
           <el-input v-model="form.name" placeholder="random-search" />
         </el-form-item>
-        <el-form-item label="Image">
+        <el-form-item>
+          <template #label>
+            Image
+            <InfoHint>Use a version tag, not <span class="mono">latest</span>, so a campaign
+              re-runs the same search.</InfoHint>
+          </template>
           <el-input v-model="form.image" class="mono"
             placeholder="registry.example.com/llm-autotune-policy-random-search:0.1.0" />
-          <div class="muted tiny">
-            Use a version tag, not <span class="mono">latest</span>, so a campaign re-runs
-            the same search.
-          </div>
         </el-form-item>
         <el-form-item label="Description">
-          <el-input v-model="form.description" placeholder="what it searches, and how" />
+          <el-input v-model="form.description" placeholder="optional" />
         </el-form-item>
         <el-collapse v-model="advanced" class="advanced">
           <el-collapse-item name="advanced" title="Advanced">

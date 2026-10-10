@@ -218,6 +218,7 @@ The ones installs usually reach for:
 | `AUTOTUNE_K8S_ENGINE_CPU_REQUEST`, `_MEMORY_REQUEST`, `_CPU_LIMIT`, `_MEMORY_LIMIT` | — | engine container resources, for namespaces whose quota requires them |
 | `AUTOTUNE_LLMBENCH_REPLAY_MODULE` | `replay` | the name LLMBench's traffic replay module reports metrics under; change it only for a build of LLMBench that names it otherwise |
 | `AUTOTUNE_K8S_POLICY_PRIORITY_CLASS` | — | a PriorityClass for policy pods |
+| `AUTOTUNE_AGENT_API_ENABLED` | `false` | serve the agent API (`/api/agent/v1`); the Reports pages also need the frontend built with `VITE_AGENT_REPORTS=1` |
 | `AUTOTUNE_REPORT_NOISE_THRESHOLD_PCT` | `1.0` | below this, a difference from the baseline is reported as noise |
 
 ## Upgrading

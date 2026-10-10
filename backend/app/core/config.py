@@ -85,6 +85,9 @@ class Settings(BaseSettings):
     # of the same config spanned 0.24%, so 1% is ~4x the observed noise.
     # Raise it for shorter/noisier benchmarks.
     report_noise_threshold_pct: float = 1.0
+    # The agent API (/api/agent/v1) and the Reports pages. Off by default: not
+    # yet proven on tuning campaigns.
+    agent_api_enabled: bool = False
 
     worker_tick_seconds: int = 10
     run_log_dir: str = "./runs"

@@ -391,9 +391,7 @@ onMounted(() => {
   <div class="page">
     <div class="header-row">
       <div>
-        <h1 class="page-title">Search spaces</h1>
-        <span class="muted">
-          Reusable parameter grids — build one here, pick it when creating a campaign.
+        <h1 class="page-title">Search spaces
           <InfoHint :width="380">
             A campaign <b>copies</b> the space it names, so editing one here never changes a
             campaign that already ran.
@@ -402,7 +400,7 @@ onMounted(() => {
             tp=4 but not at tp=1 — can be <b>tied</b>, so they move in step instead of being
             crossed.
           </InfoHint>
-        </span>
+        </h1>
       </div>
       <el-button type="primary" @click="openNew">New search space</el-button>
     </div>
@@ -480,8 +478,8 @@ onMounted(() => {
         <el-table :data="form.rows" size="small" empty-text="No parameters yet">
           <el-table-column label="Parameter" min-width="200">
             <template #default="{ row }">
-              <div class="mono">{{ row.name }}</div>
-              <div class="muted tiny">{{ spec(row.name)?.help ?? 'custom parameter' }}</div>
+              <span class="mono">{{ row.name }}</span>
+              <InfoHint v-if="spec(row.name)?.help">{{ spec(row.name)!.help }}</InfoHint>
             </template>
           </el-table-column>
           <el-table-column label="Mode" width="250">
@@ -514,11 +512,12 @@ onMounted(() => {
               </template>
               <template v-else-if="row.mode === 'range'">
                 <div class="range-row">
-                  <el-input v-model="row.min" class="mono" size="small" placeholder="min" />
-                  <span class="muted tiny">to</span>
-                  <el-input v-model="row.max" class="mono" size="small" placeholder="max" />
-                  <span class="muted tiny">step</span>
-                  <el-input v-model="row.step" class="mono" size="small" placeholder="step" />
+                  <el-input v-model="row.min" class="mono" size="small">
+                    <template #prepend>min</template></el-input>
+                  <el-input v-model="row.max" class="mono" size="small">
+                    <template #prepend>max</template></el-input>
+                  <el-input v-model="row.step" class="mono" size="small">
+                    <template #prepend>step</template></el-input>
                 </div>
                 <div class="muted tiny">
                   {{ rangeSummary(row) }}
@@ -526,15 +525,13 @@ onMounted(() => {
               </template>
               <el-select v-else v-model="row.values" multiple filterable allow-create
                 :reserve-keyword="false" style="width: 100%"
-                :placeholder="row.mode === 'tied'
-                  ? 'one value per row of the group, in order'
-                  : 'type a value and press Enter, once per point'">
+                :placeholder="row.mode === 'tied' ? 'values, in group order' : 'values (Enter after each)'">
                 <el-option v-for="c in spec(row.name)?.choices ?? []" :key="String(c)"
                   :label="String(c)" :value="String(c)" />
               </el-select>
 
               <div class="when-row">
-                <span class="muted tiny">only when</span>
+                <span class="muted tiny">when</span>
                 <el-select v-model="row.whenName" size="small" clearable placeholder="always"
                   style="width: 190px">
                   <el-option v-for="g in gateChoices(row)" :key="g" :value="g" :label="g" />
@@ -556,11 +553,7 @@ onMounted(() => {
         </el-table>
 
         <div class="preview-head">
-          <h4>What this sweeps</h4>
-          <span v-if="candidateCount !== null" class="muted tiny">
-            ≈ {{ Math.round((candidateCount * 17) / 6) / 10 }} h one at a time, at ~17 min
-            per run
-          </span>
+          <h4>Preview</h4>
         </div>
         <SpaceMap :space="draftSpace" compact :candidates="candidateCount" />
 
@@ -579,11 +572,11 @@ onMounted(() => {
           <div v-for="(bad, i) in preview.invalid.slice(0, 4)" :key="i">
             <span class="mono">{{ JSON.stringify(bad.config) }}</span> — {{ bad.error }}
           </div>
-          <div>(against the largest registered machine: {{ preview.gpu_count_used }} GPUs)</div>
+          <div>(checked against {{ preview.gpu_count_used }} GPUs, the largest machine)</div>
         </div>
 
         <el-collapse class="raw">
-          <el-collapse-item title="As YAML — what the campaign receives">
+          <el-collapse-item title="YAML">
             <pre class="mono block">{{ toYaml({
               base: draftSpace.base,
               grid: draftSpace.grid,
@@ -604,11 +597,6 @@ onMounted(() => {
     </el-dialog>
 
     <el-dialog v-model="ioOpen" title="Search space as YAML" width="640px">
-      <p class="muted" style="margin-top: 0">
-        Edit or paste a space here — <b>Import</b> loads it back into the editor.
-        Accepts a full export or just <span class="mono">base:</span> /
-        <span class="mono">grid:</span> / <span class="mono">tied:</span>.
-      </p>
       <el-input v-model="ioText" type="textarea" :rows="16" class="mono" />
       <template #footer>
         <el-button @click="copyIo">Copy</el-button>

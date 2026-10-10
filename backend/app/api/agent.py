@@ -32,6 +32,7 @@ from app.agent.parts import (
     results_part,
 )
 from app.core.auth import Principal, get_principal
+from app.core.config import get_settings
 from app.db.base import get_async_session
 from app.db.models import AgentReport, Campaign, Run
 from app.objective import target_metric
@@ -55,7 +56,15 @@ from app.schemas.agent import (
     ScenarioLabel,
 )
 
-router = APIRouter(prefix="/agent/v1", tags=["agent"])
+
+def _enabled() -> None:
+    """Off unless AUTOTUNE_AGENT_API_ENABLED: the report pages and their read
+    models have not been proven on tuning campaigns yet."""
+    if not get_settings().agent_api_enabled:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "The agent API is not enabled.")
+
+
+router = APIRouter(prefix="/agent/v1", tags=["agent"], dependencies=[Depends(_enabled)])
 
 _MAX_ASSET_BYTES = 8 * 1024 * 1024  # all assets of one report, decoded
 

@@ -68,16 +68,13 @@ onMounted(load)
   <div class="page">
     <div class="header-row">
       <div>
-        <h1 class="page-title">API keys</h1>
-        <span class="muted">
-          Credentials for systems, not people — a fleet manager leasing machines to the
-          platform.
+        <h1 class="page-title">API keys
           <InfoHint :width="380">
             A key acts with the authority of whoever minted it, and appears in the audit
             trail as <span class="mono">key:&lt;name&gt;</span> — never the key itself.
             Only the hash is stored, so a lost key is replaced, not recovered.
           </InfoHint>
-        </span>
+        </h1>
       </div>
       <div>
         <el-button @click="openDocs">API docs</el-button>
@@ -122,10 +119,6 @@ onMounted(load)
       <el-form label-position="top">
         <el-form-item label="Name">
           <el-input v-model="name" placeholder="fleet-manager" @keyup.enter="create" />
-          <div class="muted hint">
-            Name it after the system that will hold it — that is how you will know what
-            you are revoking later.
-          </div>
         </el-form-item>
       </el-form>
       <template #footer>
@@ -137,13 +130,12 @@ onMounted(load)
     <el-dialog :model-value="!!minted" title="Copy this key now" width="640px"
       :close-on-click-modal="false" @update:model-value="minted = null">
       <el-alert type="warning" :closable="false" show-icon
-        title="Shown once and never again"
-        description="Only a hash is stored. If you lose this, revoke it and mint another." />
+        title="Shown once and never again" />
       <div class="secret mono">{{ minted?.secret }}</div>
       <el-button size="small" type="primary" plain
         @click="copyText(minted?.secret ?? '', 'Key copied')">Copy key</el-button>
 
-      <p class="muted example-head">Leasing a machine with it:</p>
+      <p class="muted example-head">Example: lease a machine</p>
       <pre class="mono block">{{ curlExample(minted?.secret ?? '') }}</pre>
 
       <template #footer>

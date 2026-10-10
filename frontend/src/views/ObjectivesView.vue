@@ -181,15 +181,13 @@ onMounted(() => {
   <div class="page">
     <div class="header-row">
       <div>
-        <h1 class="page-title">Objectives</h1>
-        <span class="muted">
-          What "better" means: one metric to optimise, plus the limits to stay inside.
+        <h1 class="page-title">Objectives
           <InfoHint :width="360">
             A config that crosses a <b>redline</b> is rejected however fast it was.
             A campaign copies the objective it was created with, so editing one here never
             rewrites a night that already ran.
           </InfoHint>
-        </span>
+        </h1>
       </div>
       <el-button type="primary" @click="openNew">New objective</el-button>
     </div>
@@ -240,14 +238,21 @@ onMounted(() => {
       <el-form label-position="top">
         <div class="grid-2">
           <el-form-item label="Name">
-            <el-input v-model="form.name" placeholder="e.g. throughput under a 3s TTFT SLO" />
+            <el-input v-model="form.name" placeholder="throughput @ TTFT p95 ≤ 3 s" />
           </el-form-item>
           <el-form-item label="Notes">
             <el-input v-model="form.description" placeholder="optional" />
           </el-form-item>
         </div>
 
-        <el-form-item label="Objective — optimise this metric">
+        <el-form-item>
+          <template #label>
+            <span>Target metric</span>
+            <InfoHint v-if="spec(form.target_metric)">
+              {{ spec(form.target_metric)!.help }}
+              <span v-if="spec(form.target_metric)!.unit"> ({{ spec(form.target_metric)!.unit }})</span>
+            </InfoHint>
+          </template>
           <el-select v-model="form.target_metric" filterable style="width: 100%">
             <el-option-group v-for="g in grouped" :key="g.name" :label="g.name">
               <el-option v-for="m in g.metrics" :key="m.key" :value="m.key" :label="m.label">
@@ -256,10 +261,6 @@ onMounted(() => {
               </el-option>
             </el-option-group>
           </el-select>
-          <div v-if="spec(form.target_metric)" class="muted tiny help">
-            {{ spec(form.target_metric)!.help }}
-            <span v-if="spec(form.target_metric)!.unit"> ({{ spec(form.target_metric)!.unit }})</span>
-          </div>
         </el-form-item>
 
         <el-form-item>
@@ -288,7 +289,7 @@ onMounted(() => {
             </InfoHint>
           </template>
           <el-table :data="form.redlines" size="small" style="width: 100%"
-            empty-text="No redlines — every successful run qualifies">
+            empty-text="No redlines">
             <el-table-column label="Metric" min-width="240">
               <template #default="{ row }">
                 <el-select v-model="row.metric" filterable style="width: 100%">

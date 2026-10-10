@@ -177,8 +177,7 @@ export default {
     noResults: 'No result yet.',
     error: 'Error',
     capturedLog: 'Captured log',
-    logWhileLive: 'The engine log is captured when the container is torn down; while the run is '
-      + 'live this shows what has been captured so far, if anything. Refresh to re-read.',
+    logWhileLive: 'Run still live: the log so far.',
     yes: 'yes',
     no: 'no',
   },
@@ -226,9 +225,7 @@ export default {
     noRuns: 'No successful benchmarked runs yet.',
     run: 'Run',
     sweptParameters: 'Swept parameters',
-    notPlanned:
-      'Not expanded yet — the platform writes these {n} configurations out when the '
-      + 'campaign first runs.',
+    notPlanned: '{n} configurations, expanded on the first run.',
     editSchedule: 'Edit schedule',
     addSchedule: 'Add a schedule',
     exportTitle: 'Campaign as YAML',
