@@ -301,6 +301,10 @@ fi
 
 if [ "$action" = policy ]; then
   need docker "to build the policy image"
+  # Policy pods run on the GPU clusters, not on this one: only the demo, whose
+  # mock runs live here, can load the image into the cluster directly.
+  [ "$MODE" = demo ] || [ -n "$registry" ] ||
+    die "pass --registry REPO: a registry you can push to and your GPU clusters' nodes pull from"
   dir=$(cd "$policy_dir" 2>/dev/null && pwd) || die "no such directory: $policy_dir"
   if [ ! -f "$dir/Dockerfile" ] && [ "${dir#"$REPO/policies"}" != "$dir" ]; then
     say "Fetching the policies submodule"
@@ -776,7 +780,7 @@ EOF
 fi
 cat <<EOF
 
-Search policies: $SCRIPT policy policies/random-search
+Search policies: $SCRIPT policy policies/random-search$([ "$MODE" = demo ] || echo " --registry <registry your GPU nodes pull from>")
 Your own values go in ${STATE#"$REPO/"}/llm-autotune.custom.yaml and
 ${STATE#"$REPO/"}/llm-bench.custom.yaml; run $SCRIPT again to apply them.
 More in docs/after-installing.md.

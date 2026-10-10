@@ -37,11 +37,11 @@ stores.
 
 A campaign with no policy tries every configuration in its search space. A
 policy is a container that decides what to try next instead. Policies are built
-from source, not pulled; the script builds one, loads it into the cluster and
-registers it:
+from source, not pulled; the script builds one, pushes it to a registry your
+GPU clusters' nodes pull from, and registers it:
 
 ```bash
-deploy/quickstart.sh policy policies/random-search
+deploy/quickstart.sh policy policies/random-search --registry registry.example.com/team
 ```
 
 Then, in **New campaign ▸ Search ▸ Strategy**, pick it. A policy campaign also
@@ -59,9 +59,10 @@ the policy builds a new image and points the registration at it.
   and run `deploy/quickstart.sh policy path/to/it`. The contract it speaks is
   [policy-contract.md](api/policy-contract.md). A policy that starts engines
   itself, instead of asking the platform to, registers with `--gpus --needs-model`.
-- **The image goes through a registry**: add `--registry <repo>` (one you can
-  push to and the nodes can pull from) the first time; the script remembers it.
-  Local clusters (kind, minikube, k3d, Docker Desktop, OrbStack) need none.
+- **The image goes through a registry**, because policies run on the GPU
+  clusters: `--registry` is needed the first time, and the script remembers
+  it. Only `deploy/demo.sh`, whose runs share its own cluster, loads the image
+  straight into a local one (kind, minikube, k3d, Docker Desktop, OrbStack).
 - **Without the script**, register an image with the API, using a key from the
   **API Keys** page:
 
@@ -72,10 +73,10 @@ the policy builds a new image and points the registration at it.
       "gpus_in_container": false, "needs_model": false}'
   ```
 
-A policy runs as a Job next to the runs and calls the platform back at
-`publicApiUrl`. By default that is the API's in-cluster address, which works
-for runs in the same cluster; when they land elsewhere (below), set
-`publicApiUrl` to an address reachable from there.
+A policy runs as a Job on a GPU cluster, next to the runs, and calls the
+platform back at `publicApiUrl`, which the quickstart sets to the UI's address.
+If the GPU clusters reach the platform by another address, set `publicApiUrl`
+to it in `llm-autotune.custom.yaml`.
 
 ## GPUs
 

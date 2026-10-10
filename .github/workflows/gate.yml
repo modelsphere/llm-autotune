@@ -56,6 +56,9 @@ jobs:
           helm template t deploy/helm/llm-autotune \
             --set jwtSecret=ci --set adminPassword=ci --set gpuCluster.inCluster=true > /dev/null
           helm template t deploy/helm/llm-autotune \
+            --set jwtSecret=ci --set adminPassword=ci \
+            --set frontend.service.type=NodePort --set frontend.service.nodePort=30080 > /dev/null
+          helm template t deploy/helm/llm-autotune \
             -f deploy/helm/llm-autotune/values-demo.yaml \
             --set jwtSecret=ci --set adminPassword=ci > /dev/null
           helm template t deploy/helm/llm-autotune \
@@ -63,4 +66,4 @@ jobs:
             -f deploy/helm/llm-autotune/values-mock.yaml \
             --set jwtSecret=ci --set adminPassword=ci > /dev/null
       - name: The install scripts pass shellcheck
-        run: shellcheck -x deploy/quickstart.sh deploy/demo.sh deploy/lib/platforms.sh
+        run: shellcheck -x deploy/quickstart.sh deploy/demo.sh deploy/lib/platforms.sh deploy/gpu-cluster.sh

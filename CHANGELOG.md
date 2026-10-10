@@ -109,6 +109,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `deploy/quickstart.sh policy` needs `--registry` outside the demo: policy
+  pods run on the GPU clusters, which cannot see an image loaded into the
+  platform's cluster. The install's closing note and docs/after-installing.md
+  say so.
 - The campaign page's run control is one group with icons: the way forward
   (Start, Run now, Resume schedule) first, Pause, then Stop. **Force start**
   is now **Run now**, and runs until the search is done or you stop it
