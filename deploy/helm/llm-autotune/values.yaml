@@ -91,6 +91,11 @@ worker:
 frontend:
   replicas: 1
   resources: {}
+  # How the UI is reached without an ingress: NodePort opens it on every
+  # node's address. nodePort empty lets Kubernetes pick a free one.
+  service:
+    type: ClusterIP
+    nodePort: ""
 
 # Engine logs: the worker writes them, the API serves them. Two pods, one
 # volume, so it wants ReadWriteMany. Without an RWX class, set enabled=false —

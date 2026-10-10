@@ -3,7 +3,7 @@
 # kubectl points at and wired by a shared service key: a deployment you keep.
 #
 #   deploy/quickstart.sh                install, or upgrade the same install
-#   deploy/quickstart.sh ui             port-forward both UIs
+#   deploy/quickstart.sh ui             print both UIs' addresses (or port-forward them)
 #   deploy/quickstart.sh policy DIR     build a search policy, deliver it to the cluster, register it
 #   deploy/quickstart.sh down           uninstall both and delete their data
 #
@@ -15,7 +15,9 @@
 # Options:
 #   --registry REPO   push images built here (policies) to REPO for the cluster to pull
 #   --context NAME    the kubectl context to install into (default: the current one)
-#   --no-ui           finish without port-forwarding the UIs (CI, remote shells)
+#   --no-ui           finish without port-forwarding the UIs (CI)
+#   --port-forward    reach the UIs through kubectl port-forward instead of a
+#                     NodePort (the default only on a cluster on this machine)
 #   --yes             do not ask before installing into a cluster that does not
 #                     look local, or one with no GPU nodes
 #   policy DIR [--name NAME] [--env KEY=VALUE]... [--gpus] [--needs-model]
@@ -26,7 +28,8 @@
 # Environment:
 #   HF_ENDPOINT     a Hugging Face mirror, passed to LLMBench
 #   LLMBENCH_CHART  a local llm-bench chart directory instead of the pinned release
-#   AUTOTUNE_PORT, LLMBENCH_PORT   local ports for the two UIs (8080, 8081)
+#   AUTOTUNE_PORT, LLMBENCH_PORT   local ports for the two UIs when port-forwarded (8080, 8081)
+#   NODE_HOST       the node address to print for the NodePorts (default: the first Ready node)
 #
 # State lives in .quickstart/ (git-ignored): the generated passwords and keys,
 # so running it again upgrades the same install, and two values files of your

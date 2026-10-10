@@ -53,13 +53,16 @@ deploy/quickstart.sh
 
 It installs LLM AutoTune and LLMBench into the cluster kubectl points at
 (`--context` to pick another), connects them with a generated service key, and
-registers the cluster as a machine pool. Then it prints the logins and
-port-forwards both UIs:
+registers the cluster as a machine pool. Then it prints both UIs' addresses
+and logins: each UI is opened on a NodePort, at `http://<node address>:<port>`
+(on a cluster on your own machine, such as kind or Docker Desktop, it
+port-forwards them to <http://localhost:8080> and <http://localhost:8081>
+instead).
 
-| | | sign in as |
-|---|---|---|
-| LLM AutoTune | <http://localhost:8080> | `admin` and the printed password |
-| LLMBench | <http://localhost:8081> | `admin@example.com` and the printed password |
+| | sign in as |
+|---|---|
+| LLM AutoTune | `admin` and the printed password |
+| LLMBench | `admin@example.com` and the printed password |
 
 On **Resources**, lease `local-cluster` to the platform; then create a search
 space and a campaign. Running the script again upgrades the same install.

@@ -80,6 +80,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `deploy/quickstart.sh` and `deploy/demo.sh` open both UIs on a NodePort on
+  a remote cluster and print `http://<node>:<port>` addresses, so a remote
+  install needs no tunnel; each UI's links point at the other's address.
+  Port-forward stays the default on a cluster on your own machine, and
+  `--port-forward` asks for it anywhere; an ingress set in your values is left
+  alone. The chart takes `frontend.service.type` and `.nodePort`.
 - The agent API (`/api/agent/v1`) and the Reports pages are off by default:
   they have not been proven on tuning campaigns yet. Set
   `AUTOTUNE_AGENT_API_ENABLED=true`, and build the frontend with

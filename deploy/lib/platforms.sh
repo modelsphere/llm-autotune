@@ -23,7 +23,7 @@ say() { printf '\n==> %s\n' "$*"; }
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
 need() { command -v "$1" >/dev/null 2>&1 || die "$1 is required ($2)"; }
 
-action=up ui=1 yes=0 kind=0 context="" registry="" policy_dir="" policy_name="" gpus=0 needs_model=0
+action=up ui=1 forward=0 yes=0 kind=0 context="" registry="" policy_dir="" policy_name="" gpus=0 needs_model=0
 policy_env=""
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -45,6 +45,7 @@ while [ $# -gt 0 ]; do
       [ "$MODE" = demo ] || die "--kind is for deploy/demo.sh: a kind cluster has no GPUs"
       kind=1 ;;
     --no-ui) ui=0 ;;
+    --port-forward) forward=1 ;;
     --yes|-y) yes=1 ;;
     -h|--help) sed -n '2,/^$/p' "$0" | sed '$d'; exit 0 ;;
     *) die "unknown argument: $1 (see --help)" ;;
@@ -202,7 +203,7 @@ if [ "$action" = down ]; then
   # The namespaces take the databases' volumes with them: a new install then
   # starts clean, with new secrets. Your *.custom.yaml files are kept.
   k delete namespace "$TUNE_NS" "$BENCH_NS" --ignore-not-found --wait
-  rm -f "$STATE/secrets.env" "$STATE/context" "$STATE/server" "$STATE"/*.values.yaml
+  rm -f "$STATE/secrets.env" "$STATE/context" "$STATE/server" "$STATE/ui.env" "$STATE"/*.values.yaml
   if [ "$kind" = 1 ] && kind get clusters 2>/dev/null | grep -qx "$KIND_CLUSTER"; then
     kind delete cluster --name "$KIND_CLUSTER"
   fi
@@ -215,16 +216,72 @@ fi
 
 # -- ui ------------------------------------------------------------------------
 
+# How a person reaches the two UIs. An ingress of your own (publicUiUrl in the
+# custom values) is used as it is. A cluster on this machine (kind, Docker
+# Desktop, ...) is reached by port-forward, as is any cluster with
+# --port-forward. Any other cluster opens both UIs on a NodePort: every node
+# answers on it, so the UIs are reachable without a tunnel from wherever the
+# nodes are. The address and ports are kept in ui.env, so later runs reuse them.
+ui_access() {
+  if [ "$forward" = 1 ]; then echo port-forward
+  elif grep -qs '^publicUiUrl:' "$STATE/llm-autotune.custom.yaml"; then echo ingress
+  else
+    case "$CTX" in
+      kind-*|k3d-*|minikube|docker-desktop|rancher-desktop|orbstack|colima*) echo port-forward ;;
+      *) echo nodeport ;;
+    esac
+  fi
+}
+ACCESS=$(ui_access)
+node_host_env=${NODE_HOST:-}
+NODE_HOST="" AUTOTUNE_NODEPORT="" LLMBENCH_NODEPORT=""
+# shellcheck disable=SC1091
+[ ! -f "$STATE/ui.env" ] || . "$STATE/ui.env"
+[ -z "$node_host_env" ] || NODE_HOST=$node_host_env
+
+# The address of the first Ready node; NODE_HOST names another.
+pick_node_host() {
+  k get nodes -o jsonpath='{range .items[*]}{range .status.conditions[?(@.type=="Ready")]}{.status}{end} {range .status.addresses[?(@.type=="InternalIP")]}{.address}{end}{"\n"}{end}' |
+    awk '$1 == "True" && $2 != "" {print $2; exit}'
+}
+
+# AUTOTUNE_URL and LLMBENCH_URL: where a browser opens each UI. Empty while a
+# NodePort is not assigned yet.
+ui_urls() {
+  AUTOTUNE_URL="" LLMBENCH_URL=""
+  case "$ACCESS" in
+    port-forward)
+      AUTOTUNE_URL="http://localhost:$AUTOTUNE_PORT" LLMBENCH_URL="http://localhost:$LLMBENCH_PORT" ;;
+    nodeport)
+      if [ -n "$NODE_HOST" ] && [ -n "$AUTOTUNE_NODEPORT" ]; then AUTOTUNE_URL="http://$NODE_HOST:$AUTOTUNE_NODEPORT"; fi
+      if [ -n "$NODE_HOST" ] && [ -n "$LLMBENCH_NODEPORT" ]; then LLMBENCH_URL="http://$NODE_HOST:$LLMBENCH_NODEPORT"; fi ;;
+    ingress)
+      AUTOTUNE_URL=$(sed -n 's/^publicUiUrl: *"\{0,1\}\([^"]*\)"\{0,1\} *$/\1/p' "$STATE/llm-autotune.custom.yaml")
+      LLMBENCH_URL=$(sed -n 's/^ *webUrl: *"\{0,1\}\([^"]*\)"\{0,1\} *$/\1/p' "$STATE/llm-autotune.custom.yaml" | head -1) ;;
+  esac
+}
+
 open_ui() {
   # shellcheck disable=SC1091
   . "$STATE/secrets.env"
+  ui_urls
   cat <<EOF
 
-  LLM AutoTune   http://localhost:$AUTOTUNE_PORT   admin / $AUTOTUNE_ADMIN_PASSWORD
-  LLMBench       http://localhost:$LLMBENCH_PORT   $LLMBENCH_ADMIN_EMAIL / $LLMBENCH_ADMIN_PASSWORD
-
-Port-forwarding both UIs; Ctrl-C stops it ($SCRIPT ui starts it again).
+  LLM AutoTune   ${AUTOTUNE_URL:-(see your ingress)}   admin / $AUTOTUNE_ADMIN_PASSWORD
+  LLMBench       ${LLMBENCH_URL:-(see your ingress)}   $LLMBENCH_ADMIN_EMAIL / $LLMBENCH_ADMIN_PASSWORD
 EOF
+  case "$ACCESS" in
+    nodeport)
+      cat <<EOF
+
+Both UIs are open on these ports on every node; $NODE_HOST is one of them
+(NODE_HOST=<address> $SCRIPT names another). --port-forward reaches them through
+kubectl instead.
+EOF
+      return ;;
+    ingress) return ;;
+  esac
+  printf '\nPort-forwarding both UIs; Ctrl-C stops it (%s ui starts it again).\n' "$SCRIPT"
   k -n "$TUNE_NS" port-forward svc/llm-autotune-frontend "$AUTOTUNE_PORT:80" >/dev/null &
   k -n "$BENCH_NS" port-forward svc/llm-bench-frontend "$LLMBENCH_PORT:80" >/dev/null &
   trap 'kill $(jobs -p) 2>/dev/null' EXIT INT TERM
@@ -424,10 +481,13 @@ if [ "$MODE" = demo ]; then
   mock_image=$(deliver_image "llm-autotune-mock-engine:$app_version" "$REPO/mock-engine")
 fi
 
-# Values files hold the secrets, so they stay out of the process list.
-umask 077
-{
-  cat <<EOF
+# Values files hold the secrets, so they stay out of the process list. Written
+# again once the UIs' NodePorts are known, so each UI's links point at the other.
+write_values() {
+  ui_urls
+  umask 077
+  {
+    cat <<EOF
 secrets:
   secretKey: "$LLMBENCH_SECRET_KEY"
   platformSecretKey: "$LLMBENCH_PLATFORM_SECRET_KEY"
@@ -439,30 +499,40 @@ secrets:
 postgres:
   password: "$LLMBENCH_POSTGRES_PASSWORD"
 EOF
-  if [ -n "${HF_ENDPOINT:-}" ]; then
-    printf 'app:\n  extraEnv:\n    - name: HF_ENDPOINT\n      value: "%s"\n' "$HF_ENDPOINT"
-  fi
-} > "$STATE/llm-bench.values.yaml"
-{
-  cat <<EOF
+    if [ -n "${HF_ENDPOINT:-}" ]; then
+      printf 'app:\n  extraEnv:\n    - name: HF_ENDPOINT\n      value: "%s"\n' "$HF_ENDPOINT"
+    fi
+    if [ "$ACCESS" = nodeport ]; then
+      printf 'service:\n  frontend:\n    type: NodePort\n'
+      [ -z "$LLMBENCH_NODEPORT" ] || printf '    nodePort: %s\n' "$LLMBENCH_NODEPORT"
+    fi
+  } > "$STATE/llm-bench.values.yaml"
+  {
+    cat <<EOF
 jwtSecret: "$AUTOTUNE_JWT_SECRET"
 adminPassword: "$AUTOTUNE_ADMIN_PASSWORD"
-publicUiUrl: "http://localhost:$AUTOTUNE_PORT"
+publicUiUrl: "$AUTOTUNE_URL"
 postgresql:
   password: "$AUTOTUNE_POSTGRES_PASSWORD"
 llmbench:
   url: http://llm-bench-backend.$BENCH_NS:8000
-  webUrl: "http://localhost:$LLMBENCH_PORT"
+  webUrl: "$LLMBENCH_URL"
   apiKey: "$SERVICE_API_KEY"
 EOF
-  if [ "$MODE" = demo ]; then
-    printf 'mockModel:\n  image: "%s"\n' "$mock_image"
-  else
-    # Runs land on this cluster's GPU nodes. Engine logs need a ReadWriteMany
-    # volume, which a cluster may not have: off until the custom values say.
-    printf 'gpuCluster:\n  inCluster: true\n  runtimeClass: "%s"\nrunLogs:\n  enabled: false\n' "$gpu_runtime"
-  fi
-} > "$STATE/llm-autotune.values.yaml"
+    if [ "$MODE" = demo ]; then
+      printf 'mockModel:\n  image: "%s"\n' "$mock_image"
+    else
+      # Runs land on this cluster's GPU nodes. Engine logs need a ReadWriteMany
+      # volume, which a cluster may not have: off until the custom values say.
+      printf 'gpuCluster:\n  inCluster: true\n  runtimeClass: "%s"\nrunLogs:\n  enabled: false\n' "$gpu_runtime"
+    fi
+    if [ "$ACCESS" = nodeport ]; then
+      printf 'frontend:\n  service:\n    type: NodePort\n'
+      [ -z "$AUTOTUNE_NODEPORT" ] || printf '    nodePort: %s\n' "$AUTOTUNE_NODEPORT"
+    fi
+  } > "$STATE/llm-autotune.values.yaml"
+}
+write_values
 
 # First pulls of the images can take a while on a slow connection; nothing
 # here fails before this budget runs out.
@@ -567,14 +637,35 @@ done
 say "Installing LLM AutoTune into namespace $TUNE_NS"
 demo_values=()
 if [ "$MODE" = demo ]; then demo_values=(-f "$CHART/values-demo.yaml"); fi
+install_autotune() {
+  watching "$TUNE_NS" h upgrade --install llm-autotune "$CHART" -n "$TUNE_NS" --create-namespace \
+    --timeout "$WAIT" ${demo_values[@]+"${demo_values[@]}"} -f "$STATE/llm-autotune.values.yaml" \
+    -f "$STATE/llm-autotune.custom.yaml"
+  watching "$TUNE_NS" k -n "$TUNE_NS" rollout status statefulset/llm-autotune-postgresql --timeout="$WAIT"
+  for d in api worker frontend; do
+    watching "$TUNE_NS" k -n "$TUNE_NS" rollout status "deploy/llm-autotune-$d" --timeout="$WAIT"
+  done
+}
 recover_release llm-autotune "$TUNE_NS"
-watching "$TUNE_NS" h upgrade --install llm-autotune "$CHART" -n "$TUNE_NS" --create-namespace \
-  --timeout "$WAIT" ${demo_values[@]+"${demo_values[@]}"} -f "$STATE/llm-autotune.values.yaml" \
-  -f "$STATE/llm-autotune.custom.yaml"
-watching "$TUNE_NS" k -n "$TUNE_NS" rollout status statefulset/llm-autotune-postgresql --timeout="$WAIT"
-for d in api worker frontend; do
-  watching "$TUNE_NS" k -n "$TUNE_NS" rollout status "deploy/llm-autotune-$d" --timeout="$WAIT"
-done
+install_autotune
+
+# With NodePorts, the ports are only known now. Keep them (so later runs ask
+# for the same ones) and point each UI's links at the other's address.
+if [ "$ACCESS" = nodeport ]; then
+  [ -n "$NODE_HOST" ] || NODE_HOST=$(pick_node_host)
+  [ -n "$NODE_HOST" ] || die "no Ready node with an InternalIP to reach the UIs on; set NODE_HOST=<address>"
+  old_urls="$AUTOTUNE_NODEPORT $LLMBENCH_NODEPORT"
+  AUTOTUNE_NODEPORT=$(k -n "$TUNE_NS" get svc llm-autotune-frontend -o jsonpath='{.spec.ports[0].nodePort}')
+  LLMBENCH_NODEPORT=$(k -n "$BENCH_NS" get svc llm-bench-frontend -o jsonpath='{.spec.ports[0].nodePort}')
+  printf 'NODE_HOST=%s\nAUTOTUNE_NODEPORT=%s\nLLMBENCH_NODEPORT=%s\n' \
+    "$NODE_HOST" "$AUTOTUNE_NODEPORT" "$LLMBENCH_NODEPORT" > "$STATE/ui.env"
+  if [ "$old_urls" != "$AUTOTUNE_NODEPORT $LLMBENCH_NODEPORT" ] ||
+      ! grep -q "publicUiUrl: \"http://$NODE_HOST:$AUTOTUNE_NODEPORT\"" "$STATE/llm-autotune.values.yaml"; then
+    say "Pointing the UIs' links at http://$NODE_HOST"
+    write_values
+    install_autotune
+  fi
+fi
 if k -n "$TUNE_NS" get ds/llm-autotune-mock-model >/dev/null 2>&1; then
   watching "$TUNE_NS" k -n "$TUNE_NS" rollout status ds/llm-autotune-mock-model --timeout="$WAIT"
 fi
@@ -692,7 +783,7 @@ Your own values go in ${STATE#"$REPO/"}/llm-autotune.custom.yaml and
 ${STATE#"$REPO/"}/llm-bench.custom.yaml; run $SCRIPT again to apply them.
 More in docs/after-installing.md.
 EOF
-if [ "$ui" = 1 ] && [ -t 1 ]; then
+if [ "$ACCESS" != port-forward ] || { [ "$ui" = 1 ] && [ -t 1 ]; }; then
   open_ui
 else
   # shellcheck disable=SC1091

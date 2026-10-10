@@ -165,7 +165,13 @@ gets (synthetic prompts, or a replay of recorded traffic) and AutoTune creates
 the benchmark on LLMBench. Keep prompts short and concurrency low against the
 mock engine, as the demo's `autotune-quickstart-v1` does.
 
-## Reaching the UIs without port-forward
+## Reaching the UIs
+
+On a remote cluster the script opens both UIs on a NodePort, on every node,
+and prints one node's address (`NODE_HOST=<address>` picks another). With
+`--port-forward` it forwards them to localhost instead, as it does on a
+cluster on your own machine. For a name and TLS, put them behind an ingress:
+once `publicUiUrl` is in your values, the script leaves the UIs to it.
 
 ```yaml
 # .quickstart/llm-autotune.custom.yaml
