@@ -25,7 +25,30 @@ create one another way.
 
 ## Where the GPUs are
 
-### This cluster
+The platform's own cluster needs no GPUs. GPUs come from the clusters and
+machines added afterwards on the Resources page.
+
+### GPU clusters
+
+Prepare each GPU cluster with its admin kubeconfig:
+
+```bash
+deploy/gpu-cluster.sh            # on the GPU cluster's context; --namespace NS
+```
+
+It creates a namespace for engine and policy pods, a ServiceAccount allowed
+only to manage those (Deployments, Services, Jobs, TuningRuns) and read their
+pods, logs and events, read-only access to nodes, and a kubeconfig carrying
+only that account's token. It never grants writing a node: no cordon, no label,
+no taint. On **Resources ▸ Add GPU cluster**, upload the kubeconfig (encrypted
+at rest with `jwtSecret`) and pick the GPU nodes to register; each becomes a
+machine pinned to its node, with the cards the node reports.
+
+The GPU cluster's API server, and its nodes' NodePorts, must be reachable from
+this cluster, and the GPU cluster must reach `publicApiUrl` for policy
+campaigns.
+
+### This cluster, by its own ServiceAccount
 
 ```yaml
 gpuCluster:
@@ -33,34 +56,17 @@ gpuCluster:
   namespace: ""          # empty = the release's own namespace
 ```
 
-The chart grants its ServiceAccount exactly what the launch driver needs in that
-namespace — create and read TuningRuns or Deployments, read pods, pod logs and
-warning events, run policy Jobs — plus read-only access to nodes, which is
-cluster-scoped and is how the platform fills in a machine's card count and type
-without being told. It never writes a node: no cordon, no label, no taint.
-
-On an empty install it also registers that cluster as a machine called
-`local-cluster`, so the Resources page has something in it. Use *More > Re-read
-GPUs* there to fill in its GPUs, then **Lease to platform** to let campaigns
-use it. Set `gpuCluster.autoRegister=false` to skip this.
+For an install whose GPUs are in the cluster it runs in, without a kubeconfig:
+the chart grants its own ServiceAccount the same access and, on an empty
+install, registers the cluster as a machine called `local-cluster` (pinned by
+nothing: the scheduler picks the node). Set `gpuCluster.autoRegister=false` to
+skip that and add GPU nodes the usual way. `deploy/quickstart.sh` does not use
+this; the demo does.
 
 A cluster without GPUs (kind, a CPU-only test cluster) takes
 `-f deploy/helm/llm-autotune/values-demo.yaml`: runs then request no
 cards, and campaigns run the mock engine
 ([mock-engine/](../mock-engine/README.md)).
-
-### A different cluster
-
-Leave `gpuCluster.inCluster` false and add the cluster from the Resources page by
-pasting a kubeconfig. Mint a *scoped* one rather than handing over an admin
-credential:
-
-```bash
-kubectl apply -f deploy/k8s/remote-cluster/backend-rbac.yaml   # on the GPU cluster
-deploy/k8s/remote-cluster/make-scoped-kubeconfig.sh
-```
-
-The kubeconfig is encrypted at rest with `jwtSecret`.
 
 ### Bare-metal boxes over ssh
 

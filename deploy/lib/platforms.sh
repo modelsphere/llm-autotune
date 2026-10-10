@@ -246,17 +246,21 @@ pick_node_host() {
 }
 
 # AUTOTUNE_URL and LLMBENCH_URL: where a browser opens each UI. Empty while a
-# NodePort is not assigned yet.
+# NodePort is not assigned yet. PUBLIC_API_URL: where a policy container on a
+# GPU cluster calls the platform back, the UI's own address (its nginx serves
+# /api); empty when that is only localhost, which no GPU cluster can reach.
 ui_urls() {
-  AUTOTUNE_URL="" LLMBENCH_URL=""
+  AUTOTUNE_URL="" LLMBENCH_URL="" PUBLIC_API_URL=""
   case "$ACCESS" in
     port-forward)
       AUTOTUNE_URL="http://localhost:$AUTOTUNE_PORT" LLMBENCH_URL="http://localhost:$LLMBENCH_PORT" ;;
     nodeport)
       if [ -n "$NODE_HOST" ] && [ -n "$AUTOTUNE_NODEPORT" ]; then AUTOTUNE_URL="http://$NODE_HOST:$AUTOTUNE_NODEPORT"; fi
-      if [ -n "$NODE_HOST" ] && [ -n "$LLMBENCH_NODEPORT" ]; then LLMBENCH_URL="http://$NODE_HOST:$LLMBENCH_NODEPORT"; fi ;;
+      if [ -n "$NODE_HOST" ] && [ -n "$LLMBENCH_NODEPORT" ]; then LLMBENCH_URL="http://$NODE_HOST:$LLMBENCH_NODEPORT"; fi
+      PUBLIC_API_URL=$AUTOTUNE_URL ;;
     ingress)
       AUTOTUNE_URL=$(sed -n 's/^publicUiUrl: *"\{0,1\}\([^"]*\)"\{0,1\} *$/\1/p' "$STATE/llm-autotune.custom.yaml")
+      PUBLIC_API_URL=$AUTOTUNE_URL
       LLMBENCH_URL=$(sed -n 's/^ *webUrl: *"\{0,1\}\([^"]*\)"\{0,1\} *$/\1/p' "$STATE/llm-autotune.custom.yaml" | head -1) ;;
   esac
 }
@@ -354,25 +358,9 @@ fi
 
 confirm_context "Install"
 
-# A deployment you keep runs engines on GPUs: say so now if there are none.
-gpu_nodes=0
-gpu_runtime=""
-if [ "$MODE" = install ]; then
-  gpu_nodes=$(k get nodes -o jsonpath='{range .items[*]}{.status.allocatable.nvidia\.com/gpu}{"\n"}{end}' |
-    awk '$1 > 0 {n++} END {print n + 0}')
-  if k get runtimeclass nvidia >/dev/null 2>&1; then gpu_runtime=nvidia; fi
-  if [ "$gpu_nodes" = 0 ]; then
-    printf '\nNo node in %s offers nvidia.com/gpu, so runs here would wait for cards.\n' "$CTX"
-    printf 'GPUs can also come from another cluster or from ssh machines (docs/after-installing.md);\n'
-    printf 'to try the platform without GPUs, use deploy/demo.sh instead.\n'
-    if [ "$yes" != 1 ]; then
-      [ -t 0 ] || die "no GPU nodes in $CTX; pass --yes to install anyway"
-      printf 'Install anyway? [y/N] '
-      read -r reply
-      case "$reply" in y|Y|yes) ;; *) die "aborted" ;; esac
-    fi
-  fi
-fi
+# The platform itself needs no GPUs: GPU clusters are added afterwards, from
+# the Resources page, with a kubeconfig deploy/gpu-cluster.sh writes for each.
+# Only the demo runs its mock engine on this same cluster (values-demo.yaml).
 
 mkdir -p "$STATE"
 chmod 700 "$STATE"
@@ -512,6 +500,7 @@ EOF
 jwtSecret: "$AUTOTUNE_JWT_SECRET"
 adminPassword: "$AUTOTUNE_ADMIN_PASSWORD"
 publicUiUrl: "$AUTOTUNE_URL"
+publicApiUrl: "$PUBLIC_API_URL"
 postgresql:
   password: "$AUTOTUNE_POSTGRES_PASSWORD"
 llmbench:
@@ -522,9 +511,9 @@ EOF
     if [ "$MODE" = demo ]; then
       printf 'mockModel:\n  image: "%s"\n' "$mock_image"
     else
-      # Runs land on this cluster's GPU nodes. Engine logs need a ReadWriteMany
-      # volume, which a cluster may not have: off until the custom values say.
-      printf 'gpuCluster:\n  inCluster: true\n  runtimeClass: "%s"\nrunLogs:\n  enabled: false\n' "$gpu_runtime"
+      # Engine logs need a ReadWriteMany volume, which a cluster may not have:
+      # off until the custom values say.
+      printf 'runLogs:\n  enabled: false\n'
     fi
     if [ "$ACCESS" = nodeport ]; then
       printf 'frontend:\n  service:\n    type: NodePort\n'
@@ -775,8 +764,14 @@ ranks the faster configuration first. Each run is also a submission on LLMBench.
 EOF
 else
   cat <<EOF
-GPU nodes found: $gpu_nodes. In LLM AutoTune, on Resources, use More > Re-read GPUs on
-local-cluster and then Lease to platform; then add a search space and a campaign.
+Next, give the platform GPUs. For each GPU cluster, with that cluster's admin
+kubeconfig:
+
+  deploy/gpu-cluster.sh            # writes llm-autotune-runs.kubeconfig
+
+then in LLM AutoTune open Resources > Add GPU cluster, upload the file, and
+pick the GPU nodes to register. Lease them to the platform, then add a search
+space and a campaign. Bare-metal boxes over ssh: Resources > Add machine.
 EOF
 fi
 cat <<EOF

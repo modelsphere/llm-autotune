@@ -148,7 +148,7 @@ gpuCluster:
   # true = the cluster this release is installed into. The chart then grants
   # its ServiceAccount the RBAC the launch driver needs and the platform talks
   # to the local API server. false = register clusters from the Resources page
-  # by pasting a scoped kubeconfig (see deploy/k8s/remote-cluster/).
+  # by uploading the scoped kubeconfig deploy/gpu-cluster.sh writes.
   inCluster: false
   # Where engine pods go. Empty = this release's namespace.
   namespace: ""

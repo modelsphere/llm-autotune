@@ -79,31 +79,42 @@ for runs in the same cluster; when they land elsewhere (below), set
 
 ## GPUs
 
-`local-cluster` is the cluster the platform is installed in. On **Resources**,
-**Re-read GPUs** (under **More**) reads its card count and type from the nodes, and **Lease
-to platform** lets campaigns use it. One install can also use other clusters
-and ssh machines.
+The platforms run no engines themselves: GPUs come from the clusters and
+machines you add on **Resources**.
 
-### This cluster
+### A GPU cluster
 
-The script runs engines on nodes that offer `nvidia.com/gpu`, with the
-`nvidia` RuntimeClass when the cluster has one. To pin runs to some nodes, or
-change either:
+On the GPU cluster, with its admin kubeconfig:
 
-```yaml
-# .quickstart/llm-autotune.custom.yaml
-gpuCluster:
-  nodeSelector: "nvidia.com/gpu.product=NVIDIA-H100-80GB-HBM3"
-  # gpuResource: nvidia.com/gpu
-  # runtimeClass: nvidia
+```bash
+deploy/gpu-cluster.sh                 # --namespace NS to choose the namespace
 ```
 
-A run mounts its model weights from the node, as a hostPath at the campaign's
-model path, so the nodes it can land on must hold the weights there. To serve
-weights from one shared volume instead, set `gpuCluster.modelPvc` to a
-ReadOnlyMany/ReadWriteMany claim and `gpuCluster.modelPvcRoot` to the path the
-campaigns' model paths are relative to. Engine images that need credentials
-take a pull secret through `extraEnv` (`AUTOTUNE_K8S_IMAGE_PULL_SECRETS`).
+It creates the namespace engine pods run in (`llm-autotune-runs`) and an
+account allowed only what the platform needs there, plus read-only access to
+nodes, and writes `llm-autotune-runs.kubeconfig` holding only that account's
+token. Every name derives from the namespace, so two platforms can share a GPU
+cluster with two namespaces. `deploy/gpu-cluster.sh remove` revokes the account.
+
+On **Resources**, **Add GPU cluster**: upload the file, **Connect**, and tick
+the GPU nodes to register. Each becomes a machine pinned to its node, with the
+card count and type the node reports; **Lease to platform** on a machine lets
+campaigns use it. Under **Clusters**, a cluster's **Nodes** registers nodes added
+since and lists registered ones that left.
+
+Three things must reach across:
+
+- AutoTune's pods reach the cluster's API server.
+- LLMBench reaches the runs: an engine is a NodePort Service, reached on a
+  node's address.
+- A search policy running there reaches the platform at `publicApiUrl`. The
+  install script sets it to the UI's address, which serves the API too.
+
+A run mounts its model weights from its node, as a hostPath at the campaign's
+model path, so a campaign pins the machines (nodes) that hold them. Engine
+images that need credentials take the cluster's **Image pull secrets**, and
+nodes with extra taints its **Extra tolerations** (both under **Advanced**
+when adding it, or **Clusters ▸ Edit**).
 
 Engine logs are off by default, because they need a ReadWriteMany volume. With
 such a storage class:
@@ -114,21 +125,6 @@ runLogs:
   enabled: true
   storageClass: nfs-client
 ```
-
-### Another cluster
-
-On the GPU cluster, create a namespace, a ServiceAccount allowed only what the
-platform needs, and a kubeconfig for it:
-
-```bash
-kubectl apply -f deploy/k8s/remote-cluster/backend-rbac.yaml
-deploy/k8s/remote-cluster/make-scoped-kubeconfig.sh
-```
-
-On **Resources ▸ Clusters**, add the cluster with that kubeconfig, then
-**Add machine** on it. Three things must reach across: AutoTune's pods reach that cluster's API
-server; LLMBench reaches the runs there (a NodePort on a node's address, which
-the cluster form lets you set); and a policy there reaches `publicApiUrl`.
 
 ### Bare-metal machines over ssh
 

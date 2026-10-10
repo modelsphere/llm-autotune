@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Add GPU cluster** on Resources: upload a kubeconfig, and the platform lists
+  the cluster's GPU nodes and registers the ones you pick, each as a machine
+  pinned to its node with the cards it reports (`GET` and `POST
+  /api/clusters/{id}/nodes`). A cluster's **Nodes** registers nodes added
+  later and lists registered ones that left. The namespace is read from the
+  kubeconfig.
+- `deploy/gpu-cluster.sh` prepares a GPU cluster: a namespace for engine pods,
+  an account allowed only what the platform needs there plus reading nodes,
+  and the kubeconfig to upload. Every name derives from the namespace, so two
+  platforms can share a GPU cluster; `remove` revokes the account.
 - A **Policies** page under Automatic Tuning: register a policy image by name,
   edit it, and remove one no campaign uses. The New campaign form links to it
   from its Strategy picker.
@@ -80,6 +90,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `deploy/quickstart.sh` installs the two platforms only, on a cluster that
+  needs no GPUs: it no longer grants itself the cluster it runs in or
+  registers it as `local-cluster`, and no longer asks about GPU nodes. GPU
+  clusters are added afterwards (above). It sets `publicApiUrl` to the UI's
+  address, which serves the API, so policies on a GPU cluster can call back.
 - `deploy/quickstart.sh` and `deploy/demo.sh` open both UIs on a NodePort on
   a remote cluster and print `http://<node>:<port>` addresses, so a remote
   install needs no tunnel; each UI's links point at the other's address.
@@ -201,6 +216,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- `deploy/k8s/remote-cluster/` (`backend-rbac.yaml`,
+  `make-scoped-kubeconfig.sh`): replaced by `deploy/gpu-cluster.sh`. Its fixed
+  names let a second platform's install take over the first's account on a
+  shared GPU cluster.
 - The GitLab merge-request path: the `gitlab` promotion target and client,
   the deploy-repo file formats, the baselines' bindings to a repo file
   (`/baselines/{formats,branches,import}`, `/baselines/{id}/binding/*`), a

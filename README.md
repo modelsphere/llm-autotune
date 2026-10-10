@@ -42,8 +42,9 @@ verdict. More in [platform architecture](docs/api/platform-architecture.md).
 
 ## Install
 
-You need a Kubernetes cluster with NVIDIA GPU nodes (the device plugin
-installed), and `kubectl`, `helm`, `git` and `openssl` on your machine.
+You need a Kubernetes cluster for the platforms (no GPUs needed), one or more
+GPU clusters (NVIDIA device plugin installed) or ssh-reachable GPU boxes, and
+`kubectl`, `helm`, `git` and `openssl` on your machine.
 
 ```bash
 git clone https://github.com/modelsphere/llm-autotune
@@ -52,8 +53,8 @@ deploy/quickstart.sh
 ```
 
 It installs LLM AutoTune and LLMBench into the cluster kubectl points at
-(`--context` to pick another), connects them with a generated service key, and
-registers the cluster as a machine pool. Then it prints both UIs' addresses
+(`--context` to pick another) and connects them with a generated service key.
+Then it prints both UIs' addresses
 and logins: each UI is opened on a NodePort, at `http://<node address>:<port>`
 (on a cluster on your own machine, such as kind or Docker Desktop, it
 port-forwards them to <http://localhost:8080> and <http://localhost:8081>
@@ -64,8 +65,12 @@ instead).
 | LLM AutoTune | `admin` and the printed password |
 | LLMBench | `admin@example.com` and the printed password |
 
-On **Resources**, lease `local-cluster` to the platform; then create a search
-space and a campaign. Running the script again upgrades the same install.
+Then give it GPUs. On each GPU cluster, with its admin kubeconfig, run
+`deploy/gpu-cluster.sh`: it creates a namespace and an account limited to it,
+and writes a kubeconfig for that account. On **Resources ▸ Add GPU cluster**,
+upload the file and pick the GPU nodes to register; lease them to the
+platform, then create a search space and a campaign. Running the install
+script again upgrades the same install.
 
 - [After installing](docs/after-installing.md): your own values, search
   policies, more GPUs (another cluster, ssh machines), ingress, datasets.

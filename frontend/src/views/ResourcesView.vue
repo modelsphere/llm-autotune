@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { api, type Cluster, type Machine, type MachineGroup, type MachineGroupPreflight, type MachineLifecycle } from '../api/client'
 import InfoHint from '../components/InfoHint.vue'
 import LinkButton from '../components/LinkButton.vue'
@@ -76,7 +76,7 @@ const emptyClusterForm = () => ({
   name: '',
   api_mode: 'client',
   kubeconfig: '',
-  namespace: 'autotune',
+  namespace: '',
   workload_kind: 'deployment',
   node_host: '',
   gpu_resource: 'nvidia.com/gpu',
@@ -93,6 +93,125 @@ const emptyClusterForm = () => ({
 })
 const clusterForm = ref(emptyClusterForm())
 const probingCluster = ref<number | null>(null)
+
+/** -- adding a GPU cluster ---------------------------------------------------
+ *
+ * Upload the kubeconfig deploy/gpu-cluster.sh wrote (it names its namespace),
+ * then pick which of the cluster's GPU nodes to register: each becomes a
+ * machine pinned to that node. The node step also re-opens from a cluster's
+ * Nodes button, to register nodes added since or see ones that left.
+ */
+interface GpuNode {
+  node: string
+  hostname: string
+  gpu_count: number
+  gpu_type: string
+  gpu_product: string
+  ready: boolean
+  schedulable: boolean
+  machine: { id: number; name: string } | null
+}
+interface NodesView {
+  cluster: string
+  namespace: string
+  nodes: GpuNode[]
+  gone: { id: number; name: string; hostname: string }[]
+}
+const showAddCluster = ref(false)
+const addStep = ref<'connect' | 'nodes'>('connect')
+const clusterAdvanced = ref<string[]>([])
+const newCluster = ref({
+  name: '', kubeconfig: '', namespace: '', workload_kind: 'deployment',
+  runtime_class: 'nvidia', gpu_resource: 'nvidia.com/gpu', tolerations: '',
+  image_pull_secrets: '',
+})
+const nodesCluster = ref<{ id: number; name: string } | null>(null)
+const nodesView = ref<NodesView | null>(null)
+const nodesError = ref('')
+const pickedNodes = ref<string[]>([])
+const kubeconfigFile = ref<HTMLInputElement | null>(null)
+
+/** A name for the cluster from its API server's host, until one is typed. */
+function nameFromKubeconfig(text: string): string {
+  const host = /server:\s*https?:\/\/([^:/\s]+)/.exec(text)?.[1] ?? ''
+  return host.split('.')[0].toLowerCase().replace(/[^a-z0-9-]/g, '-').slice(0, 64)
+}
+watch(() => newCluster.value.kubeconfig, (text, before) => {
+  const derived = nameFromKubeconfig(text)
+  if (!newCluster.value.name || newCluster.value.name === nameFromKubeconfig(before ?? '')) {
+    newCluster.value.name = derived
+  }
+})
+
+function openAddCluster() {
+  newCluster.value = {
+    name: '', kubeconfig: '', namespace: '', workload_kind: 'deployment',
+    runtime_class: 'nvidia', gpu_resource: 'nvidia.com/gpu', tolerations: '',
+    image_pull_secrets: '',
+  }
+  clusterAdvanced.value = []
+  addStep.value = 'connect'
+  nodesView.value = null
+  nodesError.value = ''
+  showAddCluster.value = true
+}
+
+async function readKubeconfigFile(event: Event) {
+  const file = (event.target as HTMLInputElement).files?.[0]
+  if (file) newCluster.value.kubeconfig = await file.text()
+  ;(event.target as HTMLInputElement).value = ''
+}
+
+async function loadNodes(cluster: { id: number; name: string }) {
+  nodesCluster.value = cluster
+  nodesView.value = null
+  nodesError.value = ''
+  try {
+    nodesView.value = (await api.get(`/clusters/${cluster.id}/nodes`)).data
+    pickedNodes.value = nodesView.value!.nodes
+      .filter((n) => !n.machine && n.ready && n.schedulable).map((n) => n.hostname)
+  } catch (error: any) {
+    nodesError.value = error.response?.data?.detail ?? 'Could not read the cluster\'s nodes'
+  }
+}
+
+async function connectCluster() {
+  busy.value = true
+  try {
+    const { data } = await api.post('/clusters', newCluster.value)
+    await load()
+    addStep.value = 'nodes'
+    await loadNodes(data)
+  } catch (error: any) {
+    ElMessage.error(error.response?.data?.detail ?? 'Could not add the cluster')
+  } finally {
+    busy.value = false
+  }
+}
+
+function openNodes(c: Cluster) {
+  showClusters.value = false
+  addStep.value = 'nodes'
+  showAddCluster.value = true
+  loadNodes(c)
+}
+
+async function registerNodes() {
+  if (!nodesCluster.value) return
+  busy.value = true
+  try {
+    const { data } = await api.post(`/clusters/${nodesCluster.value.id}/nodes`,
+      { nodes: pickedNodes.value })
+    ElMessage.success(data.registered.length
+      ? `Registered ${data.registered.join(', ')}` : 'Nothing new to register')
+    showAddCluster.value = false
+    await load()
+  } catch (error: any) {
+    ElMessage.error(error.response?.data?.detail ?? 'Could not register the nodes')
+  } finally {
+    busy.value = false
+  }
+}
 
 /** Group preflight: the per-machine probes plus the interconnect a gang adds —
  *  boxes can each be perfect and still be unable to reach each other, which no
@@ -595,7 +714,8 @@ onMounted(async () => {
         <el-button @click="openDocs">API</el-button>
         <el-button @click="openClusters">Clusters</el-button>
         <el-button @click="openAddGroup">Group machines</el-button>
-        <el-button type="primary" @click="openAdd">Add machine</el-button>
+        <el-button @click="openAdd">Add machine</el-button>
+        <el-button type="primary" @click="openAddCluster">Add GPU cluster</el-button>
       </div>
     </div>
 
@@ -658,7 +778,10 @@ onMounted(async () => {
       </div>
     </div>
 
-    <div v-if="!machines.length" class="empty muted">No machines.</div>
+    <div v-if="!machines.length" class="empty muted">
+      No machines.
+      <el-button link type="primary" @click="openAddCluster">Add a GPU cluster</el-button>
+    </div>
 
     <div v-for="m in machines" :key="m.id" class="card">
       <div class="top">
@@ -773,8 +896,8 @@ onMounted(async () => {
                  set up outside this page. -->
             <InfoHint :width="380">
               <template v-if="form.driver === 'k8s'">
-                Needs a cluster the platform can reach: one added under <b>Clusters</b>
-                with its kubeconfig, or the default cluster set at install.
+                A slice of a cluster added with <b>Add GPU cluster</b>, which already
+                registers each GPU node; add one here only for a custom node selector.
               </template>
               <template v-else>
                 Needs ssh access: put the public half of the worker's ssh key (set at
@@ -982,6 +1105,123 @@ onMounted(async () => {
       </template>
     </el-dialog>
 
+    <el-dialog v-model="showAddCluster" width="680px"
+      :title="addStep === 'connect' ? 'Add GPU cluster' : `GPU nodes · ${nodesCluster?.name ?? ''}`">
+      <el-form v-if="addStep === 'connect'" label-position="top">
+        <el-form-item>
+          <template #label>
+            Kubeconfig
+            <InfoHint :width="380">
+              A scoped kubeconfig for the GPU cluster. Write one with
+              <span class="mono">deploy/gpu-cluster.sh</span>, run with that cluster's admin
+              kubeconfig: it creates a namespace for engine pods and an account limited to
+              it. Stored encrypted; never shown again.
+              <a :href="setupDocs" target="_blank" rel="noopener">Setup guide</a>
+            </InfoHint>
+            <el-button link type="primary" class="label-link"
+              @click="kubeconfigFile?.click()">Upload file</el-button>
+          </template>
+          <input ref="kubeconfigFile" type="file" hidden @change="readKubeconfigFile" />
+          <el-input v-model="newCluster.kubeconfig" type="textarea" :rows="6" class="mono"
+            placeholder="paste or upload the kubeconfig" />
+        </el-form-item>
+        <el-form-item label="Name">
+          <el-input v-model="newCluster.name" placeholder="gpu-cluster-a" />
+        </el-form-item>
+        <el-collapse v-model="clusterAdvanced" class="dialog-advanced">
+          <el-collapse-item name="advanced" title="Advanced">
+            <div class="grid-2">
+              <el-form-item label="Namespace">
+                <el-input v-model="newCluster.namespace" class="mono"
+                  placeholder="from the kubeconfig" />
+              </el-form-item>
+              <el-form-item label="Workload kind">
+                <el-select v-model="newCluster.workload_kind" style="width: 100%">
+                  <el-option label="deployment (no operator)" value="deployment" />
+                  <el-option label="custom (TuningRun CRD)" value="custom" />
+                </el-select>
+              </el-form-item>
+              <el-form-item label="RuntimeClass">
+                <el-input v-model="newCluster.runtime_class" class="mono" />
+              </el-form-item>
+              <el-form-item label="GPU resource">
+                <el-input v-model="newCluster.gpu_resource" class="mono" />
+              </el-form-item>
+              <el-form-item label="Extra tolerations">
+                <el-input v-model="newCluster.tolerations" class="mono"
+                  placeholder="key=value:NoSchedule" />
+              </el-form-item>
+              <el-form-item label="Image pull secrets">
+                <el-input v-model="newCluster.image_pull_secrets" class="mono" placeholder="(none)" />
+              </el-form-item>
+            </div>
+          </el-collapse-item>
+        </el-collapse>
+      </el-form>
+
+      <template v-else>
+        <div v-if="nodesError" class="pf-check">
+          <el-alert type="error" :closable="false" show-icon :title="nodesError" />
+        </div>
+        <div v-else-if="!nodesView" class="muted">Reading the cluster's nodes…</div>
+        <template v-else>
+          <div class="muted tiny nodes-head">
+            Namespace <span class="mono">{{ nodesView.namespace }}</span>
+            · {{ nodesView.nodes.length }} GPU node(s)
+          </div>
+          <el-table :data="nodesView.nodes" size="small" row-key="hostname"
+            empty-text="No GPU nodes visible to this kubeconfig">
+            <el-table-column width="48">
+              <template #default="{ row }">
+                <el-checkbox v-if="!row.machine" :model-value="pickedNodes.includes(row.hostname)"
+                  @update:model-value="(on: any) => pickedNodes = on
+                    ? [...pickedNodes, row.hostname]
+                    : pickedNodes.filter((h) => h !== row.hostname)" />
+              </template>
+            </el-table-column>
+            <el-table-column label="Node" min-width="160">
+              <template #default="{ row }"><span class="mono">{{ row.node }}</span></template>
+            </el-table-column>
+            <el-table-column label="GPUs" min-width="150">
+              <template #default="{ row }">
+                {{ row.gpu_count }}× {{ row.gpu_type || row.gpu_product || 'GPU' }}
+              </template>
+            </el-table-column>
+            <el-table-column label="Status" min-width="170">
+              <template #default="{ row }">
+                <el-tag v-if="row.machine" size="small" type="success" effect="plain">
+                  registered as {{ row.machine.name }}
+                </el-tag>
+                <el-tag v-else-if="!row.ready" size="small" type="danger" effect="plain">
+                  not ready
+                </el-tag>
+                <el-tag v-else-if="!row.schedulable" size="small" type="warning" effect="plain">
+                  cordoned
+                </el-tag>
+                <span v-else class="muted tiny">new</span>
+              </template>
+            </el-table-column>
+          </el-table>
+          <el-alert v-if="nodesView.gone.length" type="warning" :closable="false" show-icon
+            class="gone"
+            :title="`Gone from the cluster: ${nodesView.gone.map((g) => g.name).join(', ')}`" />
+        </template>
+      </template>
+
+      <template #footer>
+        <el-button @click="showAddCluster = false">
+          {{ addStep === 'connect' ? 'Cancel' : 'Close' }}
+        </el-button>
+        <el-button v-if="addStep === 'connect'" type="primary" :loading="busy"
+          :disabled="!newCluster.kubeconfig.trim() || !newCluster.name.trim()"
+          @click="connectCluster">Connect</el-button>
+        <el-button v-else type="primary" :loading="busy" :disabled="!pickedNodes.length"
+          @click="registerNodes">
+          Register {{ pickedNodes.length || '' }} node{{ pickedNodes.length === 1 ? '' : 's' }}
+        </el-button>
+      </template>
+    </el-dialog>
+
     <el-dialog v-model="showClusters" title="Kubernetes clusters" width="680px">
       <div v-for="c in clusters" :key="c.id" class="card" style="margin-bottom: 8px">
         <div class="top">
@@ -1001,6 +1241,7 @@ onMounted(async () => {
             </el-tag>
           </div>
           <div class="acts">
+            <el-button size="small" type="primary" plain @click="openNodes(c)">Nodes</el-button>
             <el-button size="small" :loading="probingCluster === c.id"
               @click="probeCluster(c)">Probe</el-button>
             <el-button size="small" @click="openEditCluster(c)">Edit</el-button>
@@ -1022,12 +1263,15 @@ onMounted(async () => {
           probed {{ relativeTime(c.last_probe_at) }}
         </div>
       </div>
-      <div v-if="!clusters.length" class="empty muted">No clusters.</div>
+      <div v-if="!clusters.length" class="empty muted">
+        No clusters.
+        <el-button link type="primary" @click="showClusters = false; openAddCluster()">
+          Add a GPU cluster</el-button>
+      </div>
 
+      <template v-if="editingClusterId !== null">
       <el-divider />
-      <h3 class="muted">
-        {{ editingClusterId === null ? 'Add a cluster' : `Edit ${clusterForm.name}` }}
-      </h3>
+      <h3 class="muted">Edit {{ clusterForm.name }}</h3>
       <el-form label-position="top">
         <div class="grid-2">
           <el-form-item label="Name">
@@ -1118,11 +1362,11 @@ onMounted(async () => {
           <el-input v-model="clusterForm.notes" />
         </el-form-item>
       </el-form>
+      </template>
       <template #footer>
         <el-button @click="showClusters = false">Close</el-button>
-        <el-button type="primary" :loading="busy" @click="saveCluster">
-          {{ editingClusterId === null ? 'Add cluster' : 'Save' }}
-        </el-button>
+        <el-button v-if="editingClusterId !== null" type="primary" :loading="busy"
+          @click="saveCluster">Save</el-button>
       </template>
     </el-dialog>
   </div>
@@ -1131,6 +1375,17 @@ onMounted(async () => {
 <style scoped>
 .dialog-advanced {
   border-top: none;
+}
+.nodes-head {
+  margin-bottom: 8px;
+}
+.gone {
+  margin-top: 10px;
+}
+.label-link {
+  margin-left: 10px;
+  font-size: 12px;
+  font-weight: 400;
 }
 .header-row {
   display: flex;

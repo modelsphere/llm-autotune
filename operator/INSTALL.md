@@ -109,9 +109,9 @@ survives it.
 
 The operator alone is not enough: the autotune backend also needs a credential
 of its own to create `TuningRun` objects. That is a separate, **namespaced**
-ask — see [`deploy/k8s/remote-cluster/`](../deploy/k8s/remote-cluster/) in this
-repository (namespace, ServiceAccount, Role, token, and a script that turns them
-into a scoped kubeconfig).
+ask — [`deploy/gpu-cluster.sh`](../deploy/gpu-cluster.sh) in this repository
+creates the namespace, a ServiceAccount allowed to manage `TuningRun`s there,
+and a scoped kubeconfig for it.
 
 Then tell the platform to submit `TuningRun`s instead of Deployments:
 
