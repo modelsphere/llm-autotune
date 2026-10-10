@@ -56,13 +56,13 @@ deploy/gpu-cluster.sh --context <gpu-cluster> # 2. an account on a GPU cluster; 
 3. Sign in with the address and password the install prints. On
    **Resources ▸ Add GPU cluster**, upload the kubeconfig, register the GPU
    nodes, and **Lease to platform**.
-4. Optionally, build and register a search policy:
-   `deploy/quickstart.sh policy policies/random-search --registry <registry your GPU nodes pull from>`.
-5. Create a search space and a campaign; its **Check** step tries the images
-   and model path on the nodes before anything starts.
+4. Create a search space and a campaign, with no policy or the `random-search`
+   one the install registers; the **Check** step tries the images and model
+   path on the nodes before anything starts.
 
-The full walkthrough, with a cluster that can't reach Docker Hub and what to do
-when a step fails: [Installing](docs/install.md). Settings, more GPUs and
+The full walkthrough, with a cluster that can't reach Docker Hub, the whole
+thing on a laptop with two kind clusters, and what to do when a step fails:
+[Installing](docs/install.md). Settings, more GPUs and
 ingress: [After installing](docs/after-installing.md). The Helm chart and every
 setting: [Deploying](docs/deploying.md).
 

@@ -35,9 +35,11 @@ stores.
 ## Search policies
 
 A campaign with no policy tries every configuration in its search space. A
-policy is a container that decides what to try next instead. Policies are built
-from source, not pulled; the script builds one, pushes it to a registry your
-GPU clusters' nodes pull from, and registers it:
+policy is a container that decides what to try next instead. The install
+registers `random-search` from its published image on ghcr.io. Any other
+policy, or this one where the GPU nodes can't reach ghcr.io, is built from
+source: the script builds it, pushes it to a registry your GPU clusters' nodes
+pull from, and registers it:
 
 ```bash
 deploy/quickstart.sh policy policies/random-search --registry registry.example.com/team
@@ -45,7 +47,8 @@ deploy/quickstart.sh policy policies/random-search --registry registry.example.c
 
 Then, in **New campaign ▸ Search ▸ Strategy**, pick it. A policy campaign also
 takes a time budget on the same step. Running the command again after changing
-the policy builds a new image and points the registration at it.
+the policy builds a new image and points the registration at it; a policy
+already registered under a name is never replaced by the install.
 
 - **The policies in this repository** are under `policies/` (the
   [llm-autotune-policies](https://github.com/modelsphere/llm-autotune-policies)

@@ -1,6 +1,6 @@
 [project]
 name = "llm-autotune-backend"
-version = "0.2.0"
+version = "0.2.1"
 description = "LLM Autotune platform — API server and orchestrator worker"
 requires-python = ">=3.12"
 dependencies = [
