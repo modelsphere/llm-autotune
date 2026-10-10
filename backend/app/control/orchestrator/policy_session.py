@@ -27,6 +27,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.control.launch.base import DeploymentHandle, WorkloadSpec, WorkloadState
+from app.control.launch.failures import TRANSIENT_PLACEMENT_FAILURES
 from app.control.orchestrator.lifecycle import as_utc, now
 from app.control.orchestrator.policy_lifecycle import (
     contender_minutes,
@@ -477,10 +478,18 @@ class PolicySessionEngine:
         state = self._workload_state(db, session, machine)
         started = as_utc(session.started_at)
         waited = (now() - started).total_seconds() if started else 0.0
+        failure = self._workload_failure(session, machine)
         if state in (WorkloadState.EXITED, WorkloadState.GONE):
             self._fail_toward_validation(
                 db, session, "container_died",
                 f"policy container {state.value} before its first heartbeat",
+            )
+        elif failure is not None and failure[0] not in TRANSIENT_PLACEMENT_FAILURES:
+            # It will never start: an image that cannot be pulled, a container
+            # that keeps crashing, a pod no node could ever take. Waiting out
+            # the ready timeout would only hide the reason for half an hour.
+            self._fail_toward_validation(
+                db, session, failure[0], f"policy container cannot start: {failure[1]}"
             )
         elif waited > self.sup.settings.ready_timeout_minutes * 60:
             self._fail_toward_validation(
@@ -836,6 +845,25 @@ class PolicySessionEngine:
             # An ssh hiccup must not read as "container gone" — GONE fails the
             # session. Report RUNNING and let the next tick see clearly.
             return WorkloadState.RUNNING
+
+    def _workload_failure(self, session: PolicySession, machine) -> tuple[str, str] | None:
+        """Why the policy container is wedged, as the substrate tells it, or
+        None. Best-effort: an unreadable substrate reports nothing."""
+        if machine is None or not session.container_name:
+            return None
+        info = self.sup._machine_info(machine)
+        driver = self.sup._driver_for(info)
+        handle = DeploymentHandle(
+            driver=getattr(driver, "name", ""),
+            container_name=session.container_name,
+            machine=info,
+            endpoint_url="",
+            workload=True,
+        )
+        try:
+            return driver.failure_reason(handle)
+        except Exception:  # noqa: BLE001 — diagnostics never fail a session
+            return None
 
     def _save_policy_log(self, session: PolicySession, driver, handle) -> None:
         """Persist the policy container's stdout+stderr (docker logs merges both)

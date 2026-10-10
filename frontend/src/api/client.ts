@@ -658,6 +658,28 @@ export async function fetchRunLog(runId: number): Promise<string> {
 
 /** The policy container's stdout+stderr — live from the container while the
  *  session runs, the file captured at teardown once it has ended. */
+/** One policy container's night (GET /policy-sessions/{id}). */
+export interface PolicySessionDetail {
+  id: number
+  status: 'pending' | 'starting' | 'searching' | 'finalizing' | 'validating' | 'done'
+    | 'failed' | 'aborted'
+  started_at: string | null
+  first_heartbeat_at: string | null
+  last_heartbeat_at: string | null
+  policy_phase: string
+  policy_message: string
+  policy_progress: number | null
+  search_end_reason: string
+  failure_class: string
+  error: string
+  finalize_requested_at: string | null
+  abort_requested_at: string | null
+  search_deadline: string | null
+  trials: unknown[]
+  contenders: { id: number; status?: string }[]
+  waiting: string
+}
+
 export async function fetchPolicySessionLog(sessionId: number): Promise<string> {
   return (await api.get(`/policy-sessions/${sessionId}/log`, { responseType: 'text' })).data
 }

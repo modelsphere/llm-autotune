@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- A policy campaign's page shows its policy: where the session is (starting,
+  searching, finalizing, validating, done), trials and finalists, when it
+  last reported, what a starting policy is waiting on, its error, its log, and
+  Abort. Session responses carry `finalize_requested_at`,
+  `abort_requested_at` and, while starting, `waiting`.
 - **Add GPU cluster** on Resources: upload a kubeconfig, and the platform lists
   the cluster's GPU nodes and registers the ones you pick, each as a machine
   pinned to its node with the cards it reports (`GET` and `POST
@@ -190,6 +195,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Force stop** on a policy campaign stops it. A policy still starting (its
+  pod waiting for a node, say) used to be asked to wind down, which it never
+  heard, so the campaign stayed active; it is now aborted and the campaign
+  paused. A searching policy is still asked to finish and measure its
+  finalists, and a second press aborts it.
+- A policy container that can never start (an image that will not pull, a
+  crash loop, a pod no node could take) fails at once instead of after the
+  30-minute ready timeout; a pod waiting for free cards keeps waiting.
+- A policy's live log is read from its own cluster and its own pod; it asked
+  the default cluster, for an engine's pod.
 - A policy that takes cards gets the same tolerations as an engine, so it
   can land on a tainted GPU node instead of staying Pending; declared
   tolerations (`AUTOTUNE_K8S_TOLERATIONS`) apply to every policy pod.

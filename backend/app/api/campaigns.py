@@ -37,6 +37,7 @@ from app.db.models import (
     MachineGroupMember,
     Policy,
     PolicySession,
+    PolicySessionStatus,
     Result,
     Run,
     User,
@@ -1024,12 +1025,6 @@ async def force_stop(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "no such campaign")
 
     if campaign.policy_id:
-        # Stopping a policy campaign means "stop exploring NOW, still deliver
-        # the verdict": the session is told to finalize, validation runs inside
-        # what remains of the window, and the campaign stays ACTIVE until the
-        # session ends it. Pausing here would freeze the container mid-night
-        # with production down — the worst of both worlds. (To kill without a
-        # verdict, abort the session on its detail page.)
         live = (
             await session.execute(
                 select(PolicySession).where(
@@ -1040,9 +1035,19 @@ async def force_stop(
                 )
             )
         ).scalars().first()
-        if live is not None:
-            if live.finalize_requested_at is None:
-                live.finalize_requested_at = datetime.now(UTC)
+        # A policy that is searching is told to finalize: it stops exploring and
+        # its finalists are still measured inside what remains of the window,
+        # and the session ends the campaign. Pausing instead would freeze the
+        # container mid-night. A policy that never started (still pending, or
+        # launched with no heartbeat yet: say its pod cannot be scheduled) has
+        # nothing to measure, and one already finalizing was asked once: both
+        # are aborted, and the campaign pauses so no new session starts.
+        searching = live is not None and live.first_heartbeat_at is not None and (
+            live.status == PolicySessionStatus.SEARCHING.value
+            and live.finalize_requested_at is None
+        )
+        if searching:
+            live.finalize_requested_at = datetime.now(UTC)
             session.add(
                 Event(
                     actor=user.username, kind="policy_session_finalize_requested",
@@ -1053,7 +1058,16 @@ async def force_stop(
             await session.commit()
             await session.refresh(campaign)
             return await _campaign_out(session, campaign)
-        # No live session: fall through to the classic pause.
+        if live is not None and live.abort_requested_at is None:
+            live.abort_requested_at = datetime.now(UTC)
+            session.add(
+                Event(
+                    actor=user.username, kind="policy_session_abort_requested",
+                    campaign_id=campaign_id,
+                    payload={"session_id": live.id, "reason": "force stop"},
+                )
+            )
+        # Then the classic pause.
 
     campaign.status = CampaignStatus.PAUSED.value
     # Cleared, or the next tick would read the override and wake it again.

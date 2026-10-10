@@ -726,3 +726,70 @@ async def test_plan_never_touches_policy_campaigns(night):
     supervisor.tick()  # would raise ValueError without the guard
     async with http.db() as session:
         assert (await session.execute(select(PolicySession))).scalars().one() is not None
+
+
+# -- a policy that never starts, and Force stop ----------------------------------
+
+
+async def _starting(supervisor, driver, http) -> PolicySession:
+    supervisor.tick()  # reserved in the machine queue
+    supervisor.tick()  # container launched; STARTING, no heartbeat yet
+    row = await _session_row(http)
+    assert row.status == PolicySessionStatus.STARTING.value
+    return row
+
+
+async def test_a_policy_that_can_never_start_fails_at_once(night):
+    """A pod no node can ever take, or an image that will not pull, used to
+    wait out the 30-minute ready timeout with no word of why."""
+    supervisor, driver, http = night
+    await _starting(supervisor, driver, http)
+
+    driver.failure_reason = lambda handle: ("unschedulable", "0/9 nodes are available")
+    supervisor.tick()
+    assert (await _session_row(http)).status == PolicySessionStatus.STARTING.value, \
+        "a busy cluster is waited for"
+
+    driver.failure_reason = lambda handle: (
+        "image_pull", "Back-off pulling image \"policy-img:1\"")
+    supervisor.tick()
+    row = await _session_row(http)
+    assert row.failure_class == "image_pull"
+    assert "cannot start" in row.error and "policy-img:1" in row.error
+
+
+async def _force_stop(http):
+    from app.core.auth import create_token
+
+    async with http.db() as session:
+        token = create_token(await session.get(User, 1))
+    response = await http.post("/api/campaigns/1/force-stop",
+                               headers={"Authorization": f"Bearer {token}"})
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+async def test_force_stop_aborts_a_policy_that_never_started(night):
+    supervisor, driver, http = night
+    row = await _starting(supervisor, driver, http)
+    assert (await _force_stop(http))["status"] == CampaignStatus.PAUSED.value
+    supervisor.tick()
+    row = await _session_row(http)
+    assert row.status == PolicySessionStatus.ABORTED.value
+    assert row.container_name in driver.torn_down
+    supervisor.tick()
+    async with http.db() as session:
+        sessions = (await session.execute(select(func.count(PolicySession.id)))).scalar()
+    assert sessions == 1, "a paused campaign starts no new session"
+
+
+async def test_force_stop_finalizes_a_search_and_a_second_press_aborts(night):
+    supervisor, driver, http = night
+    await _boot(supervisor, driver, http)
+
+    assert (await _force_stop(http))["status"] == CampaignStatus.ACTIVE.value
+    row = await _session_row(http)
+    assert row.finalize_requested_at is not None and row.abort_requested_at is None
+
+    assert (await _force_stop(http))["status"] == CampaignStatus.PAUSED.value
+    assert (await _session_row(http)).abort_requested_at is not None

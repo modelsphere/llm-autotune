@@ -448,6 +448,10 @@ class SessionOut(BaseModel):
     sdk_version: str
     plan: dict[str, Any]
     finalized_at: datetime | None
+    # A human asked it to wind down (Force stop) or to stop now (Abort); the
+    # worker acts on its next tick.
+    finalize_requested_at: datetime | None = None
+    abort_requested_at: datetime | None = None
     serving_contender_id: int | None
     exit_code: int | None
     failure_class: str
@@ -460,6 +464,9 @@ class SessionDetailOut(SessionOut):
     hard_deadline: datetime | None = None
     trials: list[TrialOut] = Field(default_factory=list)
     contenders: list[ContenderOut] = Field(default_factory=list)
+    # While STARTING: what the container is waiting on, read live from the
+    # substrate (e.g. a pod no node can take yet). Empty otherwise.
+    waiting: str = ""
 
 
 # -- coverage (platform-derived, human-facing) -----------------------------------------

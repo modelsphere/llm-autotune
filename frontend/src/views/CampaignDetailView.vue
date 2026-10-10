@@ -18,6 +18,7 @@ import {
   type MachineLifecycle,
   type MetricSpec,
   type Policy,
+  type PolicySessionDetail,
   type Run,
   type RunDetail,
 } from '../api/client'
@@ -85,6 +86,95 @@ async function load() {
     (stages.machines as MachineLifecycle[]).map((m) => [m.machine_id, m]),
   )
   schedule.value = (await api.get(`/campaigns/${campaignId}/schedule`)).data
+  await loadSession()
+}
+
+// -- the policy's night: what the search container is doing ------------------
+/** The latest policy session of a policy campaign, with what it is waiting on.
+ *  Every session id, for the Logs menu: a session that never got as far as a
+ *  run still has a container log worth reading. */
+const sessionIds = ref<number[]>([])
+const session = ref<PolicySessionDetail | null>(null)
+
+async function loadSession() {
+  if (campaign.value?.policy_id == null) return
+  try {
+    const rows = (await api.get(`/campaigns/${campaignId}/sessions`)).data as { id: number }[]
+    sessionIds.value = rows.map((r) => r.id).sort((a, b) => b - a)
+    session.value = sessionIds.value.length
+      ? (await api.get(`/policy-sessions/${sessionIds.value[0]}`)).data
+      : null
+  } catch {
+    session.value = null
+  }
+}
+
+const SESSION_STEPS = ['starting', 'searching', 'finalizing', 'validating', 'done'] as const
+const sessionEnded = computed(
+  () => ['done', 'failed', 'aborted'].includes(session.value?.status ?? ''))
+const sessionLook = computed(() => {
+  const s = session.value
+  if (!s) return { text: '', type: 'info' }
+  if (s.status === 'failed') return { text: 'failed', type: 'danger' }
+  if (s.status === 'aborted') return { text: 'aborted', type: 'info' }
+  if (s.status === 'done') return { text: 'done', type: 'success' }
+  if (s.abort_requested_at) return { text: 'aborting', type: 'warning' }
+  if (s.finalize_requested_at && s.status === 'searching') return { text: 'stopping', type: 'warning' }
+  return { text: s.status, type: s.status === 'starting' || s.status === 'pending' ? 'warning' : 'primary' }
+})
+/** Where it is on pending > starting > searching > finalizing > validating >
+ *  done; a session that failed or was aborted stops where it was. */
+function sessionStepClass(step: string, i: number) {
+  const s = session.value
+  if (!s) return ''
+  const at = s.status === 'pending' ? 0 : SESSION_STEPS.indexOf(s.status as never)
+  if (s.status === 'done' || (at >= 0 && i < at)) return 'done'
+  if (i === at) return s.status === 'failed' ? 'bad' : 'now'
+  return ''
+}
+const sessionLine = computed(() => {
+  const s = session.value
+  if (!s) return ''
+  const finalists = s.contenders.length
+  switch (s.status) {
+    case 'pending': return 'Waiting for a machine'
+    case 'starting':
+      return s.started_at
+        ? `Starting for ${duration(s.started_at, new Date().toISOString())}` : 'Starting'
+    case 'searching': {
+      const parts = [`${s.trials.length} trial(s)`, `${finalists} finalist(s)`]
+      if (s.last_heartbeat_at) parts.push(`heard from ${relativeTime(s.last_heartbeat_at)}`)
+      if (s.finalize_requested_at) parts.push('stop requested')
+      return parts.join(' · ')
+    }
+    case 'finalizing': return 'Winding down its engines'
+    case 'validating': return `Measuring ${finalists} finalist(s)`
+    case 'done': return s.search_end_reason ? `Finished: ${s.search_end_reason}` : 'Finished'
+    case 'failed': return s.failure_class ? `Failed: ${s.failure_class}` : 'Failed'
+    case 'aborted': return 'Aborted'
+  }
+  return ''
+})
+
+function openPolicyLog() {
+  logOpen.value = true
+}
+
+async function abortSession() {
+  if (!session.value) return
+  try {
+    await ElMessageBox.confirm(
+      'Stop the policy now, without measuring its finalists?', 'Abort the search',
+      { confirmButtonText: 'Abort', cancelButtonText: 'Cancel', type: 'warning' })
+  } catch {
+    return
+  }
+  try {
+    await api.post(`/policy-sessions/${session.value.id}/abort`)
+    await load()
+  } catch (error: any) {
+    ElMessage.error(error.response?.data?.detail ?? 'Abort failed')
+  }
 }
 
 /** The grid this campaign was created from, when it recorded one. */
@@ -493,9 +583,8 @@ const logOpen = ref(false)
 const logSources = computed<LogSource[]>(() => {
   const name = campaign.value?.name ?? 'campaign'
   const sources: LogSource[] = []
-  // The policy container's log (policy campaigns), found via any run's session.
-  const sid = runs.value.find((r) => r.policy_session_id != null)?.policy_session_id
-  if (sid != null) {
+  // Each policy session's container log (policy campaigns), newest first.
+  for (const sid of sessionIds.value) {
     sources.push({
       key: `policy-${sid}`,
       label: `Policy container · session ${sid}`,
@@ -1024,6 +1113,32 @@ onMounted(() => {
         <div v-for="(line, i) in stall.lines" :key="i" class="stall-line">{{ line }}</div>
       </template>
     </el-alert>
+
+    <!-- The policy's night, for a policy campaign: where its search container
+         is, and what it waits on when it is stuck. -->
+    <div v-if="session" class="policy-card">
+      <div class="policy-head">
+        <b>Policy</b>
+        <span class="mono">{{ policy?.name ?? `#${campaign.policy_id}` }}</span>
+        <span class="muted tiny">session {{ session.id }}</span>
+        <el-tag size="small" :type="(sessionLook.type as any)">{{ sessionLook.text }}</el-tag>
+        <span class="spacer" />
+        <el-button size="small" text @click="openPolicyLog">{{ t('campaign.logs') }}</el-button>
+        <el-button v-if="!sessionEnded" size="small" text class="risky" @click="abortSession">
+          Abort
+        </el-button>
+      </div>
+      <div class="session-track">
+        <span v-for="(step, i) in SESSION_STEPS" :key="step" class="session-step"
+          :class="sessionStepClass(step, i)">
+          <span class="pip" />{{ step }}
+        </span>
+      </div>
+      <div class="muted tiny">{{ sessionLine }}<template v-if="session.policy_message">
+        · {{ session.policy_message }}</template></div>
+      <div v-if="session.waiting" class="session-warn tiny">Waiting on: {{ session.waiting }}</div>
+      <div v-if="session.error" class="session-bad tiny">{{ session.error }}</div>
+    </div>
 
     <!-- Sections installed plugins add about this campaign (src/plugins). -->
     <PluginSlot name="campaign-detail.sections" :props="{ campaign, reload: load }" />
@@ -1712,5 +1827,63 @@ onMounted(() => {
   overflow: auto;
   font-size: 12.5px;
   line-height: 1.5;
+}
+.policy-card {
+  background: #fff;
+  border: 1px solid var(--autotune-border);
+  border-radius: 8px;
+  padding: 10px 14px;
+  margin-bottom: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.policy-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.policy-head .spacer {
+  flex: 1;
+}
+.session-track {
+  display: flex;
+  gap: 14px;
+  flex-wrap: wrap;
+  font-size: 12px;
+  color: var(--autotune-muted);
+}
+.session-step {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.session-step .pip {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  border: 1px solid var(--autotune-border);
+}
+.session-step.done .pip {
+  background: var(--el-color-success);
+  border-color: var(--el-color-success);
+}
+.session-step.now {
+  color: var(--el-text-color-primary);
+  font-weight: 600;
+}
+.session-step.now .pip {
+  background: var(--el-color-primary);
+  border-color: var(--el-color-primary);
+}
+.session-step.bad .pip {
+  background: var(--el-color-danger);
+  border-color: var(--el-color-danger);
+}
+.session-warn {
+  color: var(--el-color-warning-dark-2, #b88230);
+}
+.session-bad {
+  color: var(--el-color-danger);
 }
 </style>
