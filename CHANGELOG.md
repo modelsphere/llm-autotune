@@ -19,6 +19,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   an account allowed only what the platform needs there plus reading nodes,
   and the kubeconfig to upload. Every name derives from the namespace, so two
   platforms can share a GPU cluster; `remove` revokes the account.
+  An API server name this machine knows only from `/etc/hosts`, which the
+  platform's pods cannot resolve, is written as its address, with the
+  certificate still checked against the name (`tls-server-name`);
+  `--api-server` chooses the address. Adding a cluster the platform cannot
+  resolve or reach says so and what to change.
 - A **Policies** page under Automatic Tuning: register a policy image by name,
   edit it, and remove one no campaign uses. The New campaign form links to it
   from its Strategy picker.

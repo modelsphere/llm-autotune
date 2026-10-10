@@ -327,8 +327,19 @@ async def _nodes_view(row: Cluster, session: AsyncSession) -> dict:
     try:
         nodes = await anyio.to_thread.run_sync(_gpu_nodes, cluster)
     except Exception as exc:  # noqa: BLE001 — the page says why
+        text = str(exc)
+        hint = ""
+        if "NameResolutionError" in text or "Failed to resolve" in text:
+            hint = (" The platform resolves names through its own cluster's DNS, which does "
+                    "not know this API server's name. Use a kubeconfig whose server is an "
+                    "address it can reach: deploy/gpu-cluster.sh writes one (--api-server "
+                    "https://<address>:6443), then Clusters ▸ Edit to replace it.")
+        elif "timed out" in text or "Connection refused" in text or "Max retries" in text:
+            hint = (" The platform's pods cannot reach this API server; check the network "
+                    "path from the platform's cluster to it.")
         raise HTTPException(
-            status.HTTP_502_BAD_GATEWAY, f"could not read the cluster's nodes: {str(exc)[:300]}"
+            status.HTTP_502_BAD_GATEWAY,
+            f"could not read the cluster's nodes: {text[:300]}.{hint}",
         ) from exc
     machines = (
         await session.execute(select(Machine).where(Machine.cluster_id == row.id))

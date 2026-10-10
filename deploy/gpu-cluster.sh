@@ -18,6 +18,12 @@
 #                      Every name derives from it, so two platforms can share a
 #                      cluster by using two namespaces.
 #   --out FILE         where to write the kubeconfig (default: <namespace>.kubeconfig)
+#   --api-server URL   the API server address the platform should use, when it
+#                      reaches the cluster differently from this machine (e.g.
+#                      https://10.0.0.5:6443). The certificate is still checked
+#                      against the original name. A name this machine resolves
+#                      only through /etc/hosts is replaced by its address on
+#                      its own, since the platform's pods cannot resolve it.
 #   --yes              do not ask before acting on the cluster
 set -euo pipefail
 
@@ -25,13 +31,14 @@ say() { printf '\n==> %s\n' "$*"; }
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
 command -v kubectl >/dev/null 2>&1 || die "kubectl is required"
 
-action=up context="" ns=llm-autotune-runs out="" yes=0
+action=up context="" ns=llm-autotune-runs out="" yes=0 api_server=""
 while [ $# -gt 0 ]; do
   case "$1" in
     remove) action=remove ;;
     --context) [ $# -ge 2 ] || die "--context needs a value"; context=$2; shift ;;
     --namespace|-n) [ $# -ge 2 ] || die "--namespace needs a value"; ns=$2; shift ;;
     --out|-o) [ $# -ge 2 ] || die "--out needs a value"; out=$2; shift ;;
+    --api-server) [ $# -ge 2 ] || die "--api-server needs a value"; api_server=${2%/}; shift ;;
     --yes|-y) yes=1 ;;
     -h|--help) sed -n '2,/^set -euo/p' "$0" | sed '$d'; exit 0 ;;
     *) die "unknown argument: $1 (see --help)" ;;
@@ -188,6 +195,25 @@ if [ -z "$ca" ]; then
   ca=$(base64 < "$ca_file" | tr -d '\n')
 fi
 
+# The address written for the platform. Its pods resolve names through their
+# own cluster's DNS, so a name known only to this machine's /etc/hosts would not
+# resolve there: use the address, and keep checking the certificate against the
+# name (tls-server-name).
+host=$(printf '%s' "$server" | sed -E 's#^[a-z]+://(\[[^]]*\]|[^:/]+).*#\1#')
+write_server=$server tls_name=""
+if [ -n "$api_server" ]; then
+  write_server=$api_server
+elif ! printf '%s' "$host" | grep -qE '^[0-9.]+$|^\[' && [ -r /etc/hosts ]; then
+  hosts_ip=$(awk -v h="$host" '$1 !~ /^#/ { for (i = 2; i <= NF; i++) if ($i == h) { print $1; exit } }' /etc/hosts)
+  if [ -n "$hosts_ip" ]; then
+    write_server=$(printf '%s' "$server" | sed "s#$host#$hosts_ip#")
+    printf '\nNote: %s comes from this machine'"'"'s /etc/hosts, which the platform cannot\nsee; the kubeconfig uses %s (--api-server to choose another address).\n' "$host" "$hosts_ip"
+  fi
+fi
+if [ "$write_server" != "$server" ] && ! printf '%s' "$host" | grep -qE '^[0-9.]+$|^\['; then
+  tls_name=$host
+fi
+
 umask 077
 cat > "$out" <<EOF
 apiVersion: v1
@@ -195,8 +221,9 @@ kind: Config
 clusters:
 - name: gpu-cluster
   cluster:
-    server: $server
-    certificate-authority-data: $ca
+    server: $write_server
+    certificate-authority-data: $ca${tls_name:+
+    tls-server-name: $tls_name}
 users:
 - name: $SA
   user:
@@ -219,6 +246,6 @@ gpus=$(KUBECONFIG=$out kubectl get nodes -o jsonpath='{range .items[*]}{.status.
 
 cat <<EOF
 
-Wrote $out: namespace $ns on $server, $gpus GPU node(s) visible.
+Wrote $out: namespace $ns on $write_server, $gpus GPU node(s) visible.
 In LLM AutoTune, open Resources > Add GPU cluster and upload it.
 EOF
