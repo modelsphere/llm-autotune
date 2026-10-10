@@ -66,4 +66,4 @@ jobs:
             -f deploy/helm/llm-autotune/values-mock.yaml \
             --set jwtSecret=ci --set adminPassword=ci > /dev/null
       - name: The install scripts pass shellcheck
-        run: shellcheck -x deploy/quickstart.sh deploy/demo.sh deploy/lib/platforms.sh deploy/gpu-cluster.sh
+        run: shellcheck -x deploy/quickstart.sh deploy/demo.sh deploy/lib/platforms.sh deploy/gpu-cluster.sh deploy/dev/mock-gpu-cluster.sh

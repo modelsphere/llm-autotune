@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-10-10
+
 ### Added
 
 - The install registers the `random-search` policy from its published image,
@@ -426,7 +428,8 @@ Released with LLMBench 0.2.0, which the install script now installs.
   [llm-autotune-policies](https://github.com/modelsphere/llm-autotune-policies), checked out under `policies/` as a git
   submodule: clone with `--recurse-submodules`.
 
-[Unreleased]: https://github.com/modelsphere/llm-autotune/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/modelsphere/llm-autotune/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/modelsphere/llm-autotune/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/modelsphere/llm-autotune/compare/v0.1.2...v0.2.0
 [0.1.2]: https://github.com/modelsphere/llm-autotune/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/modelsphere/llm-autotune/compare/v0.1.0...v0.1.1

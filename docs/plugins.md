@@ -224,7 +224,7 @@ startup, with a message that says which.
 To put a plugin into the image, build on top of the platform's:
 
 ```dockerfile
-FROM docker.io/4pdosc/llm-autotune-backend:0.2.0
+FROM docker.io/4pdosc/llm-autotune-backend:0.2.1
 COPY my-plugin /plugins/my-plugin
 RUN uv pip install --python /app/.venv/bin/python /plugins/my-plugin
 ```

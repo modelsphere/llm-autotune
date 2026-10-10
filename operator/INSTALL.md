@@ -64,7 +64,7 @@ No operator image is published. Build one into a registry your cluster pulls
 from, render the manifest against it, and apply that:
 
 ```sh
-IMG=<your-registry>/llm-autotune-operator:0.2.0
+IMG=<your-registry>/llm-autotune-operator:0.2.1
 make docker-build docker-push IMG=$IMG   # or `make docker-buildx IMG=$IMG` for several platforms
 make build-installer IMG=$IMG            # writes dist/install.yaml; the Makefile fetches its own tools
 kubectl apply -f dist/install.yaml
@@ -125,6 +125,7 @@ Then tell the platform to submit `TuningRun`s instead of Deployments:
 
 | version | changes | compatibility |
 |---|---|---|
+| 0.2.1 | none (released with the platform) | same as 0.1.1 |
 | 0.2.0 | none (released with the platform) | same as 0.1.1 |
 | 0.1.2 | none (released with the platform) | same as 0.1.1 |
 | 0.1.1 | API group `tuning.modelsphere.dev` (was `tuning.llm-autotune.io`); pods labelled `tuning.modelsphere.dev/run` | **not compatible with 0.1.0**: a CRD group cannot be renamed in place, so uninstall 0.1.0 and install this one |
