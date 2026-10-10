@@ -164,6 +164,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `deploy/quickstart.sh` and `deploy/demo.sh` say what a pod is stuck on
+  while they wait (an image that will not pull, a container crash-looping
+  with the end of its log, a pod nothing can schedule) instead of sitting
+  silent until the 20-minute timeout.
+- A rerun after an interrupted install recovers: a release that never
+  finished its first install is removed and installed again, and one stopped
+  mid-upgrade is rolled back first.
+- The install remembers its cluster's API server as well as the context
+  name, and refuses to act when the same name now leads elsewhere (kubeadm
+  names every cluster's admin context `kubernetes-admin@kubernetes`).
+- Fetching the LLMBench chart retries over HTTP/1.1 when a proxy breaks
+  git's HTTP/2, and says how to point at a local chart if GitHub is out of
+  reach.
 - `deploy/quickstart.sh` no longer prints git's "is not a commit" warning and
   detached-HEAD advice while fetching the LLMBench chart, and a fetch that
   fails part-way is retried on the next run instead of leaving an empty

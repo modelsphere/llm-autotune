@@ -75,6 +75,17 @@ fi
 k() { kubectl --context "$CTX" "$@"; }
 h() { helm --kube-context "$CTX" "$@"; }
 
+# A context is only a name: kubeadm calls every cluster's admin context
+# "kubernetes-admin@kubernetes", so the same name can lead to another cluster
+# after KUBECONFIG changes. The install remembers its API server as well, and
+# refuses to act on a different one.
+server_of_ctx() { k config view --minify -o jsonpath='{.clusters[0].cluster.server}' 2>/dev/null || true; }
+if [ "$kind" != 1 ] && [ -f "$STATE/server" ]; then
+  current_server=$(server_of_ctx)
+  [ "$current_server" = "$(cat "$STATE/server")" ] ||
+    die "context $CTX now points at ${current_server:-nothing}, but this install lives on $(cat "$STATE/server"). Point KUBECONFIG at that cluster's kubeconfig$([ "$action" = up ] && echo ", or run $SCRIPT down there first to install elsewhere")."
+fi
+
 # The registry, once given, is remembered for later commands (policy).
 if [ -n "$registry" ]; then
   mkdir -p "$STATE" && echo "$registry" > "$STATE/registry"
@@ -191,7 +202,7 @@ if [ "$action" = down ]; then
   # The namespaces take the databases' volumes with them: a new install then
   # starts clean, with new secrets. Your *.custom.yaml files are kept.
   k delete namespace "$TUNE_NS" "$BENCH_NS" --ignore-not-found --wait
-  rm -f "$STATE/secrets.env" "$STATE/context" "$STATE"/*.values.yaml
+  rm -f "$STATE/secrets.env" "$STATE/context" "$STATE/server" "$STATE"/*.values.yaml
   if [ "$kind" = 1 ] && kind get clusters 2>/dev/null | grep -qx "$KIND_CLUSTER"; then
     kind delete cluster --name "$KIND_CLUSTER"
   fi
@@ -309,6 +320,7 @@ fi
 mkdir -p "$STATE"
 chmod 700 "$STATE"
 echo "$CTX" > "$STATE/context"
+[ "$kind" = 1 ] || server_of_ctx > "$STATE/server"
 
 # Secrets, once. URL-safe alphabet only, so they need no quoting anywhere.
 token() { openssl rand -base64 "$1" | tr '+/' '-_' | tr -d '=\n'; }
@@ -394,7 +406,11 @@ else
     # warns, and a checkout of one prints git's detached-HEAD advice.
     rm -rf "$src.partial"
     git init -q "$src.partial"
-    git -C "$src.partial" fetch -q --depth 1 https://github.com/modelsphere/llm-bench tag "v$LLMBENCH_VERSION"
+    # Some proxies break git's HTTP/2 mid-response ("Error in the HTTP2
+    # framing layer"); HTTP/1.1 gets through them.
+    git -C "$src.partial" fetch -q --depth 1 https://github.com/modelsphere/llm-bench tag "v$LLMBENCH_VERSION" ||
+      git -C "$src.partial" -c http.version=HTTP/1.1 fetch -q --depth 1 https://github.com/modelsphere/llm-bench tag "v$LLMBENCH_VERSION" ||
+      die "could not fetch the LLMBench $LLMBENCH_VERSION chart from GitHub; with a clone of llm-bench at hand, set LLMBENCH_CHART=<clone>/deploy/helm/llm-bench"
     git -C "$src.partial" -c advice.detachedHead=false checkout -q "v$LLMBENCH_VERSION"
     mv "$src.partial" "$src"
   fi
@@ -452,11 +468,87 @@ EOF
 # here fails before this budget runs out.
 WAIT=20m
 
+# A run stopped mid-install (Ctrl-C, a lost shell) leaves its release failed or
+# pending, and helm then refuses or half-redoes the next install. A release
+# that never finished a first install holds nothing worth keeping: remove it
+# and start that one over. One stopped mid-upgrade goes back to its last
+# working revision first.
+recover_release() {  # <release> <namespace>
+  local status
+  status=$(h status "$1" -n "$2" 2>/dev/null | sed -n 's/^STATUS: //p') || true
+  case "$status" in
+    failed|pending-install|pending-upgrade|pending-rollback) ;;
+    *) return 0 ;;
+  esac
+  if ! h history "$1" -n "$2" -o json 2>/dev/null | grep -qE '"status":"(deployed|superseded)"'; then
+    say "An earlier install of $1 did not finish ($status); removing it to start over"
+    h uninstall "$1" -n "$2" --wait >/dev/null
+    # Its migrate job is a hook, which helm does not remove with the release.
+    k -n "$2" delete jobs --all --ignore-not-found >/dev/null 2>&1 || true
+  elif [ "$status" != failed ]; then
+    say "An earlier upgrade of $1 did not finish ($status); rolling back to its last working revision"
+    h rollback "$1" -n "$2" --wait >/dev/null
+  fi
+}
+
+# Pods in <namespace> that are stuck rather than starting, one line each: an
+# image that will not pull, a container that keeps crashing (with the end of
+# its log), a pod nothing can schedule.
+stuck_pods() {  # <namespace>
+  local name reasons message
+  k -n "$1" get pods -o jsonpath='{range .items[*]}{.metadata.name}{"|"}{range .status.initContainerStatuses[*]}{.state.waiting.reason}{" "}{end}{range .status.containerStatuses[*]}{.state.waiting.reason}{" "}{end}{"|"}{range .status.conditions[?(@.type=="PodScheduled")]}{.status}{":"}{.message}{end}{"\n"}{end}' 2>/dev/null |
+    # "|", not a tab: read collapses empty tab-separated fields, and a pod
+    # with nothing waiting has an empty middle one.
+    while IFS='|' read -r name reasons message; do
+      case "$reasons" in
+        *ImagePullBackOff*|*ErrImagePull*|*InvalidImageName*|*CreateContainerConfigError*)
+          printf '   %s: %s %s\n' "$name" "$(echo "$reasons" | xargs)" \
+            "$(k -n "$1" get pod "$name" -o jsonpath='{.spec.initContainers[*].image} {.spec.containers[*].image}' 2>/dev/null)" ;;
+        *CrashLoopBackOff*|*RunContainerError*)
+          printf '   %s: %s\n' "$name" "$(echo "$reasons" | xargs)"
+          k -n "$1" logs "$name" --all-containers --tail=3 2>/dev/null | sed 's/^/       | /' || true ;;
+        *)
+          case "$message" in
+            False:?*) printf '   %s: not scheduled: %s\n' "$name" "${message#False:}" ;;
+          esac ;;
+      esac
+    done
+}
+
+# Run a command that waits on <namespace>, saying what is stuck while it does:
+# helm and kubectl wait silently, so a crash-looping pod looked like a hang.
+watching() {  # <namespace> <command...>
+  local ns=$1 pid seen="" now log
+  shift
+  log=$(mktemp)
+  "$@" >"$log" 2>&1 &
+  pid=$!
+  while kill -0 "$pid" 2>/dev/null; do
+    sleep 10
+    kill -0 "$pid" 2>/dev/null || break
+    now=$(stuck_pods "$ns")
+    if [ -n "$now" ] && [ "$now" != "$seen" ]; then
+      printf '   still waiting; stuck in %s:\n%s\n' "$ns" "$now"
+    fi
+    seen=$now
+  done
+  if ! wait "$pid"; then
+    cat "$log" >&2
+    rm -f "$log"
+    now=$(stuck_pods "$ns")
+    [ -z "$now" ] || printf 'stuck in %s:\n%s\n' "$ns" "$now" >&2
+    die "waiting on $ns failed (above); kubectl --context $CTX -n $ns get pods"
+  fi
+  grep -v '^Waiting for\|^deployment .* successfully rolled out\|^statefulset rolling update complete\|^daemon set .* successfully rolled out' "$log" || true
+  rm -f "$log"
+}
+
 say "Installing LLMBench into namespace $BENCH_NS"
-h upgrade --install llm-bench "$bench_chart" -n "$BENCH_NS" --create-namespace --timeout "$WAIT" \
-  -f "$STATE/llm-bench.values.yaml" -f "$STATE/llm-bench.custom.yaml" >/dev/null
+recover_release llm-bench "$BENCH_NS"
+watching "$BENCH_NS" h upgrade --install llm-bench "$bench_chart" -n "$BENCH_NS" --create-namespace \
+  --timeout "$WAIT" -f "$STATE/llm-bench.values.yaml" -f "$STATE/llm-bench.custom.yaml"
 for d in postgres redis backend worker frontend; do
-  k -n "$BENCH_NS" rollout status "deploy/llm-bench-$d" --timeout="$WAIT"
+  watching "$BENCH_NS" k -n "$BENCH_NS" rollout status "deploy/llm-bench-$d" --timeout="$WAIT"
 done
 
 say "Waiting for LLMBench to accept AutoTune's service key"
@@ -475,13 +567,16 @@ done
 say "Installing LLM AutoTune into namespace $TUNE_NS"
 demo_values=()
 if [ "$MODE" = demo ]; then demo_values=(-f "$CHART/values-demo.yaml"); fi
-h upgrade --install llm-autotune "$CHART" -n "$TUNE_NS" --create-namespace --timeout "$WAIT" \
-  ${demo_values[@]+"${demo_values[@]}"} -f "$STATE/llm-autotune.values.yaml" \
-  -f "$STATE/llm-autotune.custom.yaml" >/dev/null
-k -n "$TUNE_NS" rollout status statefulset/llm-autotune-postgresql --timeout="$WAIT"
-for d in api worker frontend; do k -n "$TUNE_NS" rollout status "deploy/llm-autotune-$d" --timeout="$WAIT"; done
+recover_release llm-autotune "$TUNE_NS"
+watching "$TUNE_NS" h upgrade --install llm-autotune "$CHART" -n "$TUNE_NS" --create-namespace \
+  --timeout "$WAIT" ${demo_values[@]+"${demo_values[@]}"} -f "$STATE/llm-autotune.values.yaml" \
+  -f "$STATE/llm-autotune.custom.yaml"
+watching "$TUNE_NS" k -n "$TUNE_NS" rollout status statefulset/llm-autotune-postgresql --timeout="$WAIT"
+for d in api worker frontend; do
+  watching "$TUNE_NS" k -n "$TUNE_NS" rollout status "deploy/llm-autotune-$d" --timeout="$WAIT"
+done
 if k -n "$TUNE_NS" get ds/llm-autotune-mock-model >/dev/null 2>&1; then
-  k -n "$TUNE_NS" rollout status ds/llm-autotune-mock-model --timeout="$WAIT"
+  watching "$TUNE_NS" k -n "$TUNE_NS" rollout status ds/llm-autotune-mock-model --timeout="$WAIT"
 fi
 
 if [ "$MODE" = demo ]; then say "Wiring the two and starting the demo campaign"; else say "Wiring the two"; fi
