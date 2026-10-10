@@ -160,3 +160,34 @@ def test_the_probe_runs_where_a_run_would():
     assert {"name": "NVIDIA_VISIBLE_DEVICES", "value": "void"} in engine["env"]
     assert "nvidia.com/gpu" not in str(engine["resources"])
     assert job["spec"]["ttlSecondsAfterFinished"] > 0
+
+
+def test_a_container_that_ran_counts_while_the_next_image_pulls():
+    """The pod's status lags while the kubelet pulls the second image; the
+    first container's events show it already ran."""
+    def event(container, reason, message=""):
+        return {"reason": reason, "type": "Normal", "message": message,
+                "involvedObject": {"kind": "Pod", "name": "probe-pod",
+                                   "fieldPath": f"spec.containers{{{container}}}"}}
+
+    api = ProbeApi(
+        [_waiting("engine", "ContainerCreating"), _waiting("policy-0", "ContainerCreating")],
+        [event("engine", "Pulled", "already present on machine"), event("engine", "Started"),
+         event("policy-0", "Pulling")],
+    )
+    checks = _run(api, timeout=0)
+    assert checks["image"].status == "pass"
+    assert checks[f"policy_image:{POLICY}"].status == "warn"
+    assert checks["model_path"].status == "pass"
+
+
+def test_a_pull_failure_event_fails_that_image():
+    api = ProbeApi(
+        [_waiting("engine", "ContainerCreating"), _terminated("policy-0")],
+        [{"reason": "Failed", "type": "Warning",
+          "message": 'Failed to pull image "x": not found',
+          "involvedObject": {"kind": "Pod", "name": "probe-pod",
+                             "fieldPath": "spec.containers{engine}"}}],
+    )
+    checks = _run(api)
+    assert checks["image"].status == "fail" and "not found" in checks["image"].detail

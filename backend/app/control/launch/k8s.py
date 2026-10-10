@@ -1810,13 +1810,28 @@ def read_probe(pods: list[dict], events: list[dict], containers: list[str]) -> P
                 verdict.finished[name] = bool(state.get("terminated")) or bool(
                     reason and not state.get("running"))
                 verdict.mounted = True
+    # The kubelet starts a pod's containers one after another, pulling each
+    # image in turn, and the pod's status is not refreshed until it is through
+    # them all: while the second image pulls, the first container reads
+    # "ContainerCreating" though it has long since run. Its events say so.
     for event in sorted(events, key=lambda e: e.get("lastTimestamp") or e.get("eventTime") or ""):
         reason = event.get("reason")
+        message = event.get("message") or reason or ""
+        path = (event.get("involvedObject") or {}).get("fieldPath") or ""
+        name = path[path.find("{") + 1:path.rfind("}")] if "{" in path else ""
         if reason == "FailedMount":
-            verdict.mount_failed = event.get("message") or reason
-        elif reason in ("Pulling", "Pulled"):
+            verdict.mount_failed = message
+        elif reason in ("Pulling", "Pulled", "Created", "Started"):
             # Volumes are mounted before any image is pulled.
             verdict.mounted = True
+        if not name or name in verdict.images:
+            continue
+        if reason in ("Pulled", "Created", "Started"):
+            verdict.images[name] = (True, "")
+            # Its command is `exit 0`: started is as good as finished.
+            verdict.finished[name] = reason == "Started"
+        elif reason == "Failed" and "pull" in message.lower():
+            verdict.images[name] = (False, message)
     if verdict.mounted:
         verdict.mount_failed = ""
     return verdict

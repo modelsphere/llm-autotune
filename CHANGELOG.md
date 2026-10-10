@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- The install registers the `random-search` policy from its published image,
+  `ghcr.io/modelsphere/llm-autotune-policy-random-search:0.1.1`
+  (`POLICY_IMAGE` to choose another), unless a policy of that name exists.
+  `quickstart.sh policy` still builds one from source.
+- `deploy/dev/mock-gpu-cluster.sh`: a kind cluster that looks like a GPU
+  cluster (mock GPUs on each node, an `nvidia` RuntimeClass, the mock engine
+  and a placeholder model), so the whole install, from `quickstart.sh` to a
+  policy campaign, runs on a laptop with two kind clusters
+  ([installing](docs/install.md#trying-it-all-on-a-laptop)).
+
+### Fixed
+
+- On a cluster on this machine (kind, k3d, Docker Desktop), the UIs are still
+  port-forwarded, but the API also gets the AutoTune UI's NodePort on a node's
+  address as `publicApiUrl`, so a policy on another local cluster can call it.
+- `gpu-cluster.sh` on a kind or k3d cluster writes the API server's address on
+  the Docker network instead of its loopback port, which no pod reaches, and
+  checks the written account through the address this machine uses.
+- Creating a kind cluster (`deploy/demo.sh --kind`, `mock-gpu-cluster.sh`)
+  leaves out a proxy on this machine's loopback, which kind would otherwise
+  hand to the nodes and break every image pull.
+- On a kind or k3d cluster the install pulls the charts' images through Docker
+  on this machine, with retries, and loads them onto the nodes, which pull
+  without Docker's proxy or mirrors and start empty each time they are
+  recreated. It imports only this machine's platform when `kind load` cannot
+  (Docker's containerd image store).
+- Preflight on Kubernetes read the probe pod's status alone, which the kubelet
+  does not refresh while it pulls the next image: an engine image already on
+  the node read as "still being pulled". The container events decide now.
+
 ## [0.2.0] - 2026-10-10
 
 Released with LLMBench 0.2.0, which the install script now installs.

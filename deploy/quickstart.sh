@@ -31,6 +31,8 @@
 #   LLMBENCH_CHART  a local llm-bench chart directory instead of the pinned release
 #   AUTOTUNE_PORT, LLMBENCH_PORT   local ports for the two UIs when port-forwarded (8080, 8081)
 #   NODE_HOST       the node address to print for the NodePorts (default: the first Ready node)
+#   POLICY_IMAGE    the search policy image registered as random-search (default:
+#                   the published one on ghcr.io)
 #
 # State lives in .quickstart/ (git-ignored): the generated passwords and keys,
 # so running it again upgrades the same install, and two values files of your

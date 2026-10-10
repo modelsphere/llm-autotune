@@ -95,21 +95,24 @@ Image pull secrets and extra tolerations for the cluster are under
 **Advanced**. GPU taints are tolerated on their own. A cluster's **Nodes**
 button registers nodes added later.
 
-## 4. Register a search policy (optional)
+## 4. Search policies
 
 A campaign without a policy tries every config in its search space. A policy
-decides what to try next instead. Policies are built from source and pushed
-to a registry your GPU nodes pull from:
+decides what to try next instead. The install registers one, `random-search`,
+from its published image
+(`ghcr.io/modelsphere/llm-autotune-policy-random-search`); pick it on a
+campaign's **Search** step. Its pod runs on the GPU cluster, so those nodes pull
+it from ghcr.io. If they can't, copy the image into a registry they reach and
+change it on the **Policies** page, or build it from source:
 
 ```bash
 deploy/quickstart.sh policy policies/random-search --registry registry.example.com/team
 ```
 
-This builds `policies/random-search` (the
+That builds `policies/random-search` (the
 [llm-autotune-policies](https://github.com/modelsphere/llm-autotune-policies)
-submodule, fetched if missing), pushes it and registers it as `random-search`.
-The script remembers the registry. You can also register an image you built
-yourself on the **Policies** page. Writing your own:
+submodule, fetched if missing), pushes it and points the `random-search`
+registration at it. The script remembers the registry. Writing your own:
 [after installing](after-installing.md#search-policies).
 
 ## 5. Run a first campaign
@@ -129,6 +132,40 @@ yourself on the **Policies** page. Writing your own:
 3. **Create campaign**, then on its page **Start** (or **Run now**, outside a
    schedule). A policy campaign shows its policy's progress on the same page;
    **Pause** lets current runs finish, **Stop** ends them.
+
+## Trying it all on a laptop
+
+The same steps work with two [kind](https://kind.sigs.k8s.io/) clusters on one
+machine: one for the platforms, and one made to look like a GPU cluster. Its
+runs are the mock engine, so nothing it measures means anything; the point is
+the install and the loop. Give Docker about 8 GB.
+
+```bash
+kind create cluster --name autotune                    # the platform cluster
+deploy/quickstart.sh --context kind-autotune
+deploy/dev/mock-gpu-cluster.sh                         # kind-autotune-gpu: 4 mock GPUs, the mock engine
+deploy/gpu-cluster.sh --context kind-autotune-gpu      # writes llm-autotune-runs.kubeconfig
+```
+
+Then follow steps 3 to 5 at <http://localhost:8080>:
+
+- **Resources ▸ Add GPU cluster:** upload `llm-autotune-runs.kubeconfig`.
+  `gpu-cluster.sh` writes the cluster's address on the Docker network, which
+  the platform's pods reach, rather than its localhost port.
+- **The campaign:** engine `sglang`, the image and model path that
+  `mock-gpu-cluster.sh` prints, and a search space over the mock's own knobs,
+  such as `mock_token_ms: [2, 20]`. Keep the benchmark small (128 input and 32
+  output tokens, concurrency `1, 4`, 5 requests per slot): the laptop runs the
+  benchmark client too.
+
+If you use a local proxy app (`HTTPS_PROXY=http://127.0.0.1:…`), create the
+platform cluster without it, `env -u HTTPS_PROXY -u https_proxy kind create
+cluster --name autotune`: kind hands the proxy to its nodes, where 127.0.0.1 is
+the node itself, and every image pull fails. `mock-gpu-cluster.sh` and
+`deploy/demo.sh --kind` leave such a proxy out on their own.
+
+`deploy/quickstart.sh down`, `deploy/dev/mock-gpu-cluster.sh down` and
+`kind delete cluster --name autotune` remove it all.
 
 ## Upgrading and uninstalling
 
@@ -169,7 +206,8 @@ redis:
 ```
 
 The images keep their tags (`4pdosc/llm-autotune-backend:<version>` and so
-on), so mirror the versions the charts name. If GitHub isn't reachable
+on), so mirror the versions the charts name. The search policy comes from
+ghcr.io; mirror it too and change its image on the **Policies** page. If GitHub isn't reachable
 either, check out llm-bench at the matching tag and pass
 `LLMBENCH_CHART=<clone>/deploy/helm/llm-bench`.
 
@@ -181,7 +219,8 @@ The worker ssh'es into a box and runs the engine with `docker run`; see
 ## When something goes wrong
 
 - **A pod stuck during the install:** the script prints why. `ImagePullBackOff`
-  is a registry the nodes can't reach (see above); `Pending` is usually a
+  is a registry the nodes can't reach (see above), or on kind a proxy on
+  127.0.0.1 ([above](#trying-it-all-on-a-laptop)); `Pending` is usually a
   missing default StorageClass.
 - **Connect fails when adding a GPU cluster:** the message says whether the
   name didn't resolve or the server didn't answer from the platform's pods.

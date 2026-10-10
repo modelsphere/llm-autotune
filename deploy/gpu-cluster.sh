@@ -23,7 +23,8 @@
 #                      https://10.0.0.5:6443). The certificate is still checked
 #                      against the original name. A name this machine resolves
 #                      only through /etc/hosts is replaced by its address on
-#                      its own, since the platform's pods cannot resolve it.
+#                      its own, since the platform's pods cannot resolve it, and
+#                      so is the loopback port of a kind or k3d cluster.
 #   --yes              do not ask before acting on the cluster
 set -euo pipefail
 
@@ -203,8 +204,27 @@ fi
 # name (tls-server-name).
 host=$(printf '%s' "$server" | sed -E 's#^[a-z]+://(\[[^]]*\]|[^:/]+).*#\1#')
 write_server=$server tls_name=""
+# A cluster on this machine (kind, k3d) is served on a loopback port, which no
+# pod reaches; its API server container has an address on the Docker network
+# that other local clusters share, and its certificate names that address.
+loopback_container() {
+  case "$ctx" in
+    kind-*) echo "${ctx#kind-}-control-plane" ;;
+    k3d-*) echo "k3d-${ctx#k3d-}-server-0" ;;
+  esac
+}
 if [ -n "$api_server" ]; then
   write_server=$api_server
+elif printf '%s' "$host" | grep -qE '^(127\.|0\.0\.0\.0$|localhost$|\[::1\]$)'; then
+  node=$(loopback_container)
+  addr=""
+  if [ -n "$node" ] && command -v docker >/dev/null 2>&1; then
+    addr=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}' "$node" 2>/dev/null | awk '{print $1}')
+  fi
+  [ -n "$addr" ] ||
+    die "$server is this machine's loopback, which the platform cannot reach; pass --api-server with an address it can"
+  write_server="https://$addr:6443"
+  printf '\nNote: %s is a loopback address; the kubeconfig uses %s, the address of %s on the\nDocker network (--api-server to choose another).\n' "$server" "$write_server" "$node"
 elif ! printf '%s' "$host" | grep -qE '^[0-9.]+$|^\[' && [ -r /etc/hosts ]; then
   hosts_ip=$(awk -v h="$host" '$1 !~ /^#/ { for (i = 2; i <= NF; i++) if ($i == h) { print $1; exit } }' /etc/hosts)
   if [ -n "$hosts_ip" ]; then
@@ -239,11 +259,13 @@ contexts:
 current-context: $SA@$ns
 EOF
 
-# The account works, and can do no more than it should.
-KUBECONFIG=$out kubectl get nodes >/dev/null 2>&1 || die "the written kubeconfig cannot read nodes; check $out"
-[ "$(KUBECONFIG=$out kubectl auth can-i get pods -n kube-system 2>/dev/null)" = no ] ||
+# The account works, and can do no more than it should. Checked through the
+# address this machine uses, which may not be the one written for the platform.
+as_account() { KUBECONFIG=$out kubectl --server "$server" "$@"; }
+as_account get nodes >/dev/null 2>&1 || die "the written kubeconfig cannot read nodes; check $out"
+[ "$(as_account auth can-i get pods -n kube-system 2>/dev/null)" = no ] ||
   die "the written kubeconfig reaches beyond $ns; check the cluster's RBAC"
-gpus=$(KUBECONFIG=$out kubectl get nodes -o jsonpath='{range .items[*]}{.status.allocatable.nvidia\.com/gpu}{"\n"}{end}' |
+gpus=$(as_account get nodes -o jsonpath='{range .items[*]}{.status.allocatable.nvidia\.com/gpu}{"\n"}{end}' |
   awk '$1 > 0 {n++} END {print n + 0}')
 
 cat <<EOF

@@ -13,6 +13,8 @@ LLMBENCH_PORT=${LLMBENCH_PORT:-8081}
 BENCH_NS=llm-bench
 TUNE_NS=llm-autotune
 MOCK_MODEL_PATH=/var/lib/llm-autotune/mock-model
+# The published search policy quickstart registers; `policy` builds your own.
+POLICY_IMAGE=${POLICY_IMAGE:-ghcr.io/modelsphere/llm-autotune-policy-random-search:0.1.1}
 
 REPO=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 SCRIPT="deploy/$MODE_SCRIPT"
@@ -62,7 +64,15 @@ if [ "$kind" = 1 ]; then
   need kind "https://kind.sigs.k8s.io/docs/user/quick-start/#installation"
   if [ "$action" = up ] && ! kind get clusters 2>/dev/null | grep -qx "$KIND_CLUSTER"; then
     say "Creating kind cluster $KIND_CLUSTER"
-    kind create cluster --name "$KIND_CLUSTER"
+    # kind hands this shell's proxy to the node, where a proxy on this
+    # machine's loopback (a local proxy app) is the node itself.
+    proxy_env=()
+    for var in HTTP_PROXY HTTPS_PROXY http_proxy https_proxy; do
+      case "${!var:-}" in
+        *://127.*|*://localhost*|*://\[::1\]*) proxy_env+=(-u "$var") ;;
+      esac
+    done
+    env ${proxy_env[@]+"${proxy_env[@]}"} kind create cluster --name "$KIND_CLUSTER"
   fi
   CTX="kind-$KIND_CLUSTER"
 elif [ -n "$context" ]; then
@@ -233,6 +243,12 @@ ui_access() {
   fi
 }
 ACCESS=$(ui_access)
+# A browser reaches a local cluster's UIs through port-forward, but a policy on
+# a GPU cluster calls the API at an address of its own: the AutoTune UI's
+# NodePort on a node's address, which other clusters on the same Docker network
+# (kind, k3d) can reach. The demo's runs share its cluster, so it needs none.
+API_NODEPORT=0
+if [ "$ACCESS" = port-forward ] && [ "$MODE" != demo ]; then API_NODEPORT=1; fi
 node_host_env=${NODE_HOST:-}
 NODE_HOST="" AUTOTUNE_NODEPORT="" LLMBENCH_NODEPORT=""
 # shellcheck disable=SC1091
@@ -253,7 +269,10 @@ ui_urls() {
   AUTOTUNE_URL="" LLMBENCH_URL="" PUBLIC_API_URL=""
   case "$ACCESS" in
     port-forward)
-      AUTOTUNE_URL="http://localhost:$AUTOTUNE_PORT" LLMBENCH_URL="http://localhost:$LLMBENCH_PORT" ;;
+      AUTOTUNE_URL="http://localhost:$AUTOTUNE_PORT" LLMBENCH_URL="http://localhost:$LLMBENCH_PORT"
+      if [ "$API_NODEPORT" = 1 ] && [ -n "$NODE_HOST" ] && [ -n "$AUTOTUNE_NODEPORT" ]; then
+        PUBLIC_API_URL="http://$NODE_HOST:$AUTOTUNE_NODEPORT"
+      fi ;;
     nodeport)
       if [ -n "$NODE_HOST" ] && [ -n "$AUTOTUNE_NODEPORT" ]; then AUTOTUNE_URL="http://$NODE_HOST:$AUTOTUNE_NODEPORT"; fi
       if [ -n "$NODE_HOST" ] && [ -n "$LLMBENCH_NODEPORT" ]; then LLMBENCH_URL="http://$NODE_HOST:$LLMBENCH_NODEPORT"; fi
@@ -519,7 +538,7 @@ EOF
       # off until the custom values say.
       printf 'runLogs:\n  enabled: false\n'
     fi
-    if [ "$ACCESS" = nodeport ]; then
+    if [ "$ACCESS" = nodeport ] || [ "$API_NODEPORT" = 1 ]; then
       printf 'frontend:\n  service:\n    type: NodePort\n'
       [ -z "$AUTOTUNE_NODEPORT" ] || printf '    nodePort: %s\n' "$AUTOTUNE_NODEPORT"
     fi
@@ -607,6 +626,72 @@ watching() {  # <namespace> <command...>
   rm -f "$log"
 }
 
+demo_values=()
+if [ "$MODE" = demo ]; then demo_values=(-f "$CHART/values-demo.yaml"); fi
+
+# A cluster on this machine (kind, k3d) pulls on its own, without the proxy or
+# registry mirrors Docker here may be set up with, and from scratch every time
+# it is recreated. Pull what the charts run through Docker here instead, with
+# retries (a pull that breaks off resumes), and load it onto the nodes; an image
+# that still fails is left to the nodes to pull.
+local_nodes() {
+  case "$CTX" in
+    kind-*) kind get nodes --name "${CTX#kind-}" 2>/dev/null ;;
+    k3d-*) docker ps --filter "label=k3d.cluster=${CTX#k3d-}" --filter label=k3d.role=server \
+             --filter label=k3d.role=agent --format '{{.Names}}' 2>/dev/null ;;
+  esac
+}
+node_has_image() {  # <node> <image>
+  docker exec "$1" crictl inspecti "$2" >/dev/null 2>&1
+}
+load_image() {  # <image>
+  # `kind load` imports every platform an image lists, and fails on one pulled
+  # for this machine's platform only (Docker's containerd image store); save
+  # that platform alone and import it into each node's containerd instead.
+  case "$CTX" in
+    kind-*) kind load docker-image "$1" --name "${CTX#kind-}" >/dev/null 2>&1 && return 0 ;;
+    k3d-*) command -v k3d >/dev/null 2>&1 && k3d image import -c "${CTX#k3d-}" "$1" >/dev/null 2>&1 && return 0 ;;
+  esac
+  local node arch
+  arch=$(docker version -f '{{.Server.Arch}}' 2>/dev/null) || return 1
+  for node in $(local_nodes); do
+    node_has_image "$node" "$1" && continue
+    docker save --platform "linux/$arch" "$1" 2>/dev/null |
+      docker exec -i "$node" ctr --namespace=k8s.io images import --digests - >/dev/null 2>&1 || return 1
+  done
+}
+preload_images() {
+  case "$CTX" in kind-*|k3d-*) ;; *) return 0 ;; esac
+  command -v docker >/dev/null 2>&1 || return 0
+  local images image node missing
+  images=$({
+    h template llm-bench "$bench_chart" -f "$STATE/llm-bench.values.yaml" -f "$STATE/llm-bench.custom.yaml"
+    h template llm-autotune "$CHART" ${demo_values[@]+"${demo_values[@]}"} \
+      -f "$STATE/llm-autotune.values.yaml" -f "$STATE/llm-autotune.custom.yaml"
+  } 2>/dev/null | sed -n 's/^ *image: *"\{0,1\}\([^" ]*\)"\{0,1\} *$/\1/p' | sort -u)
+  [ -n "$images" ] || return 0
+  say "Pulling the images here and loading them into $CTX"
+  for image in $images; do
+    missing=0
+    for node in $(local_nodes); do node_has_image "$node" "$image" || missing=1; done
+    if [ "$missing" = 0 ]; then echo "   $image: already on the nodes"; continue; fi
+    if ! docker image inspect "$image" >/dev/null 2>&1; then
+      for _ in 1 2 3 4 5 6 7 8; do
+        docker pull -q "$image" >/dev/null 2>&1 && break
+        sleep 2
+      done
+    fi
+    if ! docker image inspect "$image" >/dev/null 2>&1; then
+      echo "   $image: could not pull it here; the nodes will try"
+    elif load_image "$image"; then
+      echo "   $image"
+    else
+      echo "   $image: pulled here, but could not load it into $CTX; the nodes will try"
+    fi
+  done
+}
+preload_images
+
 say "Installing LLMBench into namespace $BENCH_NS"
 recover_release llm-bench "$BENCH_NS"
 watching "$BENCH_NS" h upgrade --install llm-bench "$bench_chart" -n "$BENCH_NS" --create-namespace \
@@ -629,8 +714,6 @@ done
 [ "$bench_ready" = 1 ] || die "LLMBench did not accept the service key; see: kubectl --context $CTX -n $BENCH_NS logs job/llm-bench-migrate"
 
 say "Installing LLM AutoTune into namespace $TUNE_NS"
-demo_values=()
-if [ "$MODE" = demo ]; then demo_values=(-f "$CHART/values-demo.yaml"); fi
 install_autotune() {
   watching "$TUNE_NS" h upgrade --install llm-autotune "$CHART" -n "$TUNE_NS" --create-namespace \
     --timeout "$WAIT" ${demo_values[@]+"${demo_values[@]}"} -f "$STATE/llm-autotune.values.yaml" \
@@ -644,20 +727,25 @@ recover_release llm-autotune "$TUNE_NS"
 install_autotune
 
 # With NodePorts, the ports are only known now. Keep them (so later runs ask
-# for the same ones) and point each UI's links at the other's address.
-if [ "$ACCESS" = nodeport ]; then
+# for the same ones) and point each UI's links at the other's address, and GPU
+# clusters at the API.
+if [ "$ACCESS" = nodeport ] || [ "$API_NODEPORT" = 1 ]; then
   [ -n "$NODE_HOST" ] || NODE_HOST=$(pick_node_host)
   [ -n "$NODE_HOST" ] || die "no Ready node with an InternalIP to reach the UIs on; set NODE_HOST=<address>"
   old_urls="$AUTOTUNE_NODEPORT $LLMBENCH_NODEPORT"
   AUTOTUNE_NODEPORT=$(k -n "$TUNE_NS" get svc llm-autotune-frontend -o jsonpath='{.spec.ports[0].nodePort}')
-  LLMBENCH_NODEPORT=$(k -n "$BENCH_NS" get svc llm-bench-frontend -o jsonpath='{.spec.ports[0].nodePort}')
+  LLMBENCH_NODEPORT=$(k -n "$BENCH_NS" get svc llm-bench-frontend -o jsonpath='{.spec.ports[0].nodePort}' 2>/dev/null || true)
   printf 'NODE_HOST=%s\nAUTOTUNE_NODEPORT=%s\nLLMBENCH_NODEPORT=%s\n' \
     "$NODE_HOST" "$AUTOTUNE_NODEPORT" "$LLMBENCH_NODEPORT" > "$STATE/ui.env"
   if [ "$old_urls" != "$AUTOTUNE_NODEPORT $LLMBENCH_NODEPORT" ] ||
-      ! grep -q "publicUiUrl: \"http://$NODE_HOST:$AUTOTUNE_NODEPORT\"" "$STATE/llm-autotune.values.yaml"; then
+      ! grep -q "publicApiUrl: \"http://$NODE_HOST:$AUTOTUNE_NODEPORT\"" "$STATE/llm-autotune.values.yaml"; then
     # The ports exist only once the services do: a second, short upgrade
     # gives each UI the other's address for its links.
-    say "Pointing each UI's links at the other (http://$NODE_HOST, ports $AUTOTUNE_NODEPORT and $LLMBENCH_NODEPORT)"
+    if [ "$ACCESS" = nodeport ]; then
+      say "Pointing each UI's links at the other (http://$NODE_HOST, ports $AUTOTUNE_NODEPORT and $LLMBENCH_NODEPORT)"
+    else
+      say "Giving GPU clusters the API's address (http://$NODE_HOST:$AUTOTUNE_NODEPORT)"
+    fi
     write_values
     install_autotune
   fi
@@ -668,7 +756,7 @@ fi
 
 if [ "$MODE" = demo ]; then say "Wiring the two and starting the demo campaign"; else say "Wiring the two"; fi
 {
-  api_script "\"demo\": $([ "$MODE" = demo ] && echo True || echo False), \"image\": \"$mock_image\", \"model_path\": \"$MOCK_MODEL_PATH\""
+  api_script "\"demo\": $([ "$MODE" = demo ] && echo True || echo False), \"image\": \"$mock_image\", \"model_path\": \"$MOCK_MODEL_PATH\", \"policy_image\": \"$POLICY_IMAGE\""
   cat <<'PY'
 
 
@@ -683,6 +771,21 @@ def ensure():
 ensured = until("the screen benchmark on LLMBench", ensure)
 print(f"   AutoTune measures runs with {ensured['slug']} on LLMBench "
       f"({'created' if ensured['created'] else 'present'}, locked)")
+
+# The published random-search policy, unless a policy of that name is already
+# registered (one built here with `policy`, or edited on the Policies page).
+status, rows = call("GET", "/policies", token=token)
+if status == 200 and not any(p["name"] == "random-search" for p in rows):
+    status, body = call("POST", "/policies", {
+        "name": "random-search", "image": CFG["policy_image"],
+        "version": CFG["policy_image"].rsplit(":", 1)[-1],
+        "description": "Samples the search space at random.",
+        "repo_url": "https://github.com/modelsphere/llm-autotune-policies",
+        "gpus_in_container": False, "needs_model": False,
+    }, token)
+    if status not in (200, 201):
+        sys.exit(f"could not register the random-search policy: {status} {body}")
+    print(f"   registered the random-search policy ({CFG['policy_image']})")
 if not CFG["demo"]:
     sys.exit(0)
 
@@ -780,7 +883,9 @@ EOF
 fi
 cat <<EOF
 
-Search policies: $SCRIPT policy policies/random-search$([ "$MODE" = demo ] || echo " --registry <registry your GPU nodes pull from>")
+Search policy: random-search, registered from
+  $POLICY_IMAGE
+To build it yourself: $SCRIPT policy policies/random-search$([ "$MODE" = demo ] || echo " --registry <registry>")
 Your own values go in ${STATE#"$REPO/"}/llm-autotune.custom.yaml and
 ${STATE#"$REPO/"}/llm-bench.custom.yaml; run $SCRIPT again to apply them.
 More in docs/after-installing.md.
