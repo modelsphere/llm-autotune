@@ -502,6 +502,13 @@ def render_policy_job(spec: WorkloadSpec, settings: Settings) -> dict:
             pod_spec["nodeSelector"] = selector
         if gpus and settings.k8s_runtime_class:
             pod_spec["runtimeClassName"] = settings.k8s_runtime_class
+    # The same tolerations an engine with these cards would carry: a policy
+    # that takes cards lands on a tainted GPU node like an engine does, and the
+    # explicitly declared ones apply to every pod. Without them a self-serving
+    # policy sat Pending on a GPU node's taint.
+    tolerations = _tolerations(gpus, settings)
+    if tolerations:
+        pod_spec["tolerations"] = tolerations
     if settings.k8s_policy_priority_class:
         pod_spec["priorityClassName"] = settings.k8s_policy_priority_class
 

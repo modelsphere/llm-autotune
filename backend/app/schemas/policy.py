@@ -76,11 +76,14 @@ class PolicyIn(BaseModel):
     image: str = Field(min_length=1, max_length=255)
     repo_url: str = ""
     version: str = ""
-    gpus_in_container: bool = True
+    # Off by default: most policies delegate, asking the platform to launch
+    # engines, and need neither. A self-serving policy, which runs engines in
+    # its own container, turns both on. (Rows registered before keep theirs.)
+    gpus_in_container: bool = False
     # Mount the campaign's weights at /model. False for a delegated-only policy:
     # it never reads them, and on k8s the mount would pin a placement-free
     # controller pod to a weights-bearing node.
-    needs_model: bool = True
+    needs_model: bool = False
     env: dict[str, str] = Field(default_factory=dict)
     ports: int = Field(default=4, ge=1, le=16)
 

@@ -190,6 +190,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A policy that takes cards gets the same tolerations as an engine, so it
+  can land on a tainted GPU node instead of staying Pending; declared
+  tolerations (`AUTOTUNE_K8S_TOLERATIONS`) apply to every policy pod.
+- Registering a policy no longer gives it the GPUs and the model mount unless
+  asked: most policies delegate engine launches, and a registration that took
+  both sat waiting for a whole free machine. The Policies list marks the ones
+  that take GPUs.
 - `deploy/quickstart.sh` and `deploy/demo.sh` say what a pod is stuck on
   while they wait (an image that will not pull, a container crash-looping
   with the end of its log, a pod nothing can schedule) instead of sitting

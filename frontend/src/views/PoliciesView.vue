@@ -26,8 +26,10 @@ function empty() {
     description: '',
     version: '',
     repo_url: '',
-    gpus_in_container: true,
-    needs_model: true,
+    // Off: most policies delegate engine launches to the platform. Only a
+    // policy that runs engines in its own container needs cards and weights.
+    gpus_in_container: false,
+    needs_model: false,
     ports: 4,
     env_text: toYaml({}),
   }
@@ -137,7 +139,10 @@ onMounted(load)
       <el-table-column label="Name" min-width="200">
         <template #default="{ row }">
           <div>{{ row.name }}
-            <span v-if="row.version" class="muted tiny">{{ row.version }}</span></div>
+            <span v-if="row.version" class="muted tiny">{{ row.version }}</span>
+            <el-tag v-if="row.gpus_in_container" size="small" type="warning" effect="plain"
+              title="Its container takes the machine's GPUs: it runs engines itself">
+              takes GPUs</el-tag></div>
           <div class="muted tiny">{{ row.description }}</div>
         </template>
       </el-table-column>
