@@ -607,6 +607,9 @@ class PreflightRequest(BaseModel):
     # will become (see _with_specs).
     benchmark_spec: dict | None = None
     verify_benchmark_spec: dict | None = None
+    # The search policy, whose image must reach the machine too.
+    policy_id: int | None = None
+    policy_image: str = ""
 
 
 def _with_specs(
@@ -741,22 +744,27 @@ def _run_preflight(
         # into `driver._ssh`, which only the ssh_docker driver has; a k8s machine
         # is scheduled by the cluster, so its readiness is a cluster-side concern
         # this form cannot answer from here. Say so rather than crash or pretend.
-        driver = get_driver(machine.driver or "ssh_docker")
-        if not hasattr(driver, "_ssh"):
-            checks = [pf.Check(
-                "substrate", "Deployment substrate", pf.SKIP,
-                f"{machine.name} runs on the {driver.name} substrate; "
-                "placement and readiness are decided cluster-side",
-                "Machine-side preflight (ssh, ports, GPUs) only applies to bare-metal "
-                "hosts. The k8s driver validates against the cluster at launch time.",
-            )]
-        else:
+        driver = get_driver(machine.driver or "ssh_docker", cluster_id=machine.cluster_id)
+        policy_images = [body.policy_image] if body.policy_image else []
+        if hasattr(driver, "_ssh"):
             checks = pf.inspect(
                 driver, info,
                 image=body.image, model_path=body.model_path,
                 volumes=body.extra_volumes, port=body.service_port,
-                widest_candidate_cards=widest,
+                widest_candidate_cards=widest, policy_images=policy_images,
             )
+        elif hasattr(driver, "preflight"):
+            # A cluster machine answers through the cluster: a probe pod on its
+            # node pulls the images and mounts the model the way a run does.
+            checks = driver.preflight(
+                info, image=body.image, model_path=body.model_path,
+                policy_images=policy_images, widest_candidate_cards=widest,
+            )
+        else:
+            checks = [pf.Check(
+                "substrate", "Deployment substrate", pf.SKIP,
+                f"{machine.name} runs on the {driver.name} substrate, which has no preflight",
+            )]
         # Parity is not a machine probe but it is the same kind of finding —
         # cheap to learn, expensive to discover at 3am — so it belongs in the
         # same list rather than in a banner people close.
@@ -833,6 +841,9 @@ async def preflight(
             lambda db, card_type=card_type: resolve_baseline(db, served, body.engine, card_type)
         )
         production[card_type] = dict(row.engine_args or {}) if row is not None else None
+    if body.policy_id is not None and not body.policy_image:
+        policy = await session.get(Policy, body.policy_id)
+        body.policy_image = policy.image if policy is not None else ""
     results = await anyio.to_thread.run_sync(_run_preflight, body, candidates, production)
     return {"machines": results, "ok": all(r["ok"] for r in results), "note": ""}
 
@@ -867,6 +878,7 @@ async def campaign_preflight(
         verify_benchmark_slug=campaign.verify_benchmark_slug or "",
         verify_objective=campaign.verify_objective or {},
         dataset_profile=campaign.dataset_profile or "",
+        policy_id=campaign.policy_id,
     )
     return await preflight(body, _, session)
 
@@ -959,11 +971,16 @@ async def set_schedule(
     return await _campaign_out(session, campaign)
 
 
+# What "until it is done or stopped" means in a window: far beyond any search,
+# and still an end, since the loop's deadlines all read the window.
+_FORCE_START_MAX_HOURS = 720
+
+
 class ForceStartRequest(BaseModel):
-    hours: int = Field(
-        8, ge=1, le=72,
-        description="How long to run outside the schedule. Bounded because an "
-        "override with no end is how a machine stays borrowed for a week.",
+    hours: int | None = Field(
+        None, ge=1, le=_FORCE_START_MAX_HOURS,
+        description="How long to run outside the schedule. Empty: until the search "
+        "is done or someone stops it.",
     )
 
 
@@ -972,8 +989,9 @@ class ForceStartRequest(BaseModel):
     response_model=CampaignOut,
     summary="Run now, ignoring the schedule",
     description="Starts a campaign outside its nightly window and holds it open for "
-    "`hours`. Without this, setting a scheduled campaign to active is undone on the "
-    "next tick — the clock would put it straight back to sleep.",
+    "`hours`, or until it is done or stopped. Without this, setting a scheduled "
+    "campaign to active is undone on the next tick — the clock would put it straight "
+    "back to sleep.",
 )
 async def force_start(
     campaign_id: int,
@@ -986,7 +1004,7 @@ async def force_start(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "no such campaign")
 
     now = datetime.now(UTC)
-    until = now + timedelta(hours=body.hours)
+    until = now + timedelta(hours=body.hours or _FORCE_START_MAX_HOURS)
     campaign.status = CampaignStatus.ACTIVE.value
     campaign.override_until = until
     # The window the rest of the loop reads. Writing it here is what makes the

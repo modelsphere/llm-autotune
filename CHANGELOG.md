@@ -29,12 +29,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   certificate still checked against the name (`tls-server-name`);
   `--api-server` chooses the address. Adding a cluster the platform cannot
   resolve or reach says so and what to change.
+- Preflight on a Kubernetes machine: a probe Job on the machine's node pulls
+  the engine image and the campaign's policy image, and mounts the model the
+  way a run does, so a missing tag, a registry the nodes cannot reach or a
+  model path that is not on the node is found before the campaign starts. A
+  pull still going when the check ends carries on, so the image is cached for
+  the first run. Over ssh, the policy image is checked too.
 - A **Policies** page under Automatic Tuning: register a policy image by name,
   edit it, and remove one no campaign uses. The New campaign form links to it
   from its Strategy picker.
 
 - A campaign describes its workload instead of naming a benchmark: synthetic
-  prompts (sizes, concurrency levels) or a replay of a dataset. AutoTune
+  prompts (sizes, concurrency levels, requests per concurrent slot) or a replay
+  of a dataset. A synthetic level c sends c × `requests_per_concurrency`
+  requests (default 20), capped by `max_seconds_per_level`, so every level is
+  measured on the same sample however fast the engine is. AutoTune
   creates the matching benchmark on LLMBench when the campaign is created,
   locked, with a slug hashed from the workload so the same workload reuses it
   (`benchmark_spec` and `verify_benchmark_spec` on `POST /api/campaigns`;
@@ -99,6 +108,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   frontend.
 
 ### Changed
+
+- The campaign page's run control is one group with icons: the way forward
+  (Start, Run now, Resume schedule) first, Pause, then Stop. **Force start**
+  is now **Run now**, and runs until the search is done or you stop it
+  instead of for eight hours (`hours` on `POST /campaigns/{id}/force-start`
+  is optional). **Force stop** is **Stop**; on a searching policy the first
+  press asks it to wrap up, the second ends it.
 
 - `deploy/quickstart.sh` installs the two platforms only, on a cluster that
   needs no GPUs: it no longer grants itself the cluster it runs in or

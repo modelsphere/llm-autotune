@@ -92,9 +92,17 @@ function profileNote(p: DatasetProfile): string {
         <el-input v-model="w.concurrencies" size="small" class="mono" placeholder="1, 4, 16, 64" />
       </label>
       <label class="field">
-        <span class="muted tiny">Duration / level (s)
-          <InfoHint>How long each concurrency level runs.</InfoHint></span>
-        <el-input-number v-model="w.seconds_per_level" :min="10" :max="3600" :step="30"
+        <span class="muted tiny">Requests / slot
+          <InfoHint :width="320">Level c sends c × this many requests, so every level is
+            measured on the same sample per concurrent slot however fast the engine is.
+            More requests, tighter numbers, longer runs.</InfoHint></span>
+        <el-input-number v-model="w.requests_per_concurrency" :min="1" :max="10000" :step="5"
+          size="small" controls-position="right" />
+      </label>
+      <label class="field">
+        <span class="muted tiny">Max s / level
+          <InfoHint>A level that has not sent its requests by then stops anyway.</InfoHint></span>
+        <el-input-number v-model="w.max_seconds_per_level" :min="10" :max="7200" :step="60"
           size="small" controls-position="right" />
       </label>
     </div>

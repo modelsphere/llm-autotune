@@ -198,8 +198,8 @@ const zh: typeof en = {
     rerunFailedOne: '重跑 {n} 个失败配置',
     rerunFailedMany: '重跑 {n} 个失败配置',
     pause: '暂停',
-    forceStop: '强制停止',
-    forceStart: '强制启动',
+    forceStop: '停止',
+    forceStart: '立即运行',
     resumeSchedule: '恢复定时',
     start: '启动',
     tabs: {

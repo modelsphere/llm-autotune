@@ -135,6 +135,9 @@ PRIOR = "prior"
 # Per concurrency level on top of its measured seconds: starting the level,
 # draining it, writing its results.
 _LEVEL_OVERHEAD_SECONDS = 30
+# One stream's decode speed for a level measured by request count, until real
+# runs replace the estimate.
+_ASSUMED_DECODE_TOKENS_PER_SECOND = 40
 # A replay's own time cap stands in for its length only when it is a real
 # bound; LLMBench's default (hours) says nothing about how long one takes.
 _REPLAY_CAP_TRUSTED_SECONDS = 2 * 3600
@@ -151,8 +154,14 @@ def estimate_benchmark_minutes(benchmark: dict) -> float | None:
             levels = [c for c in str(params.get("concurrencies", "")).split(",") if c.strip()]
             if not levels:
                 return None
-            per_level = (float(params.get("max_seconds", 300)) + float(
-                params.get("warmup_seconds", 30)) + _LEVEL_OVERHEAD_SECONDS)
+            run = float(params.get("max_seconds", 300))
+            per_slot = int(params.get("requests_per_concurrency") or 0)
+            if per_slot:
+                # Counted levels end when their sample is in: each slot sends its
+                # requests one after another, at a modest decode speed.
+                run = min(run, per_slot * float(params.get("output_tokens", 512))
+                          / _ASSUMED_DECODE_TOKENS_PER_SECOND)
+            per_level = run + float(params.get("warmup_seconds", 30)) + _LEVEL_OVERHEAD_SECONDS
             total += len(levels) * per_level / 60
         elif name == get_settings().llmbench_replay_module or name == "replay":
             cap = float(params.get("max_seconds", 0) or 0)

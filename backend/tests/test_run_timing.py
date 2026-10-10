@@ -59,6 +59,16 @@ def test_a_sweep_is_estimated_from_its_levels():
     assert timing.estimate_benchmark_minutes(SWEEP) == 400 / 60
 
 
+def test_a_counted_sweep_is_estimated_from_its_sample():
+    counted = {"modules": [{"module_name": "perf_guidellm_sweep",
+                            "params_json": {"search_mode": "grid", "concurrencies": "1,16",
+                                            "requests_per_concurrency": 20,
+                                            "output_tokens": 512, "max_seconds": 600,
+                                            "warmup_seconds": 10}}]}
+    # 2 levels × (20 × 512 / 40 + 10 + 30) s; the 600 s cap is not reached.
+    assert timing.estimate_benchmark_minutes(counted) == 2 * (256 + 40) / 60
+
+
 def test_a_replay_is_estimated_only_from_a_real_time_cap():
     capped = {"modules": [{"module_name": "replay", "params_json": {"max_seconds": 1800}}]}
     assert timing.estimate_benchmark_minutes(capped) == 30

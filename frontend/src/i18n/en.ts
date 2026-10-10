@@ -200,8 +200,8 @@ export default {
     rerunFailedOne: 'Re-run {n} failed config',
     rerunFailedMany: 'Re-run {n} failed configs',
     pause: 'Pause',
-    forceStop: 'Force stop',
-    forceStart: 'Force start',
+    forceStop: 'Stop',
+    forceStart: 'Run now',
     resumeSchedule: 'Resume schedule',
     start: 'Start',
     tabs: {

@@ -1,6 +1,10 @@
 <script setup lang="ts">
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { computed, onMounted, ref } from 'vue'
+import {
+  AlarmClock, CopyDocument, Document, Download, MoreFilled, RefreshRight, Tickets,
+  VideoPause, VideoPlay,
+} from '@element-plus/icons-vue'
+import { computed, h, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import PluginSlot from '../components/PluginSlot.vue'
 import { describeStrategy } from '../plugins'
@@ -112,6 +116,8 @@ async function loadSession() {
 const SESSION_STEPS = ['starting', 'searching', 'finalizing', 'validating', 'done'] as const
 const sessionEnded = computed(
   () => ['done', 'failed', 'aborted'].includes(session.value?.status ?? ''))
+/** A policy still holding something on the cluster, whatever the campaign says. */
+const policyLive = computed(() => !!session.value && !sessionEnded.value)
 const sessionLook = computed(() => {
   const s = session.value
   if (!s) return { text: '', type: 'info' }
@@ -404,38 +410,63 @@ async function setStatus(status: 'active' | 'paused' | 'scheduled') {
  *  setting `active`: the schedule would see no open window on the next tick
  *  and put the campaign straight back to sleep. */
 async function forceStart() {
+  const scheduled = !!schedule.value?.daily_start
   try {
     await ElMessageBox.confirm(
-      'Run this campaign now, ignoring its schedule?\n\n' +
-        'It will keep going for 8 hours or until you stop it, then hand control back ' +
-        'to the clock.',
-      'Force start',
-      { confirmButtonText: 'Run now', cancelButtonText: 'Cancel', type: 'warning' },
+      (scheduled ? 'Run this campaign now, outside its schedule? ' : 'Start this campaign now? ') +
+        'It runs until its search is done or you stop it.',
+      scheduled ? t('campaign.forceStart') : t('campaign.start'),
+      { confirmButtonText: t('campaign.forceStart'), cancelButtonText: 'Cancel', type: 'info' },
     )
   } catch {
     return
   }
-  await api.post(`/campaigns/${campaignId}/force-start`, { hours: 8 })
-  ElMessage.success('Running now — the first run starts within a tick')
+  try {
+    await api.post(`/campaigns/${campaignId}/force-start`, {})
+  } catch (error: any) {
+    ElMessage.error(error.response?.data?.detail ?? 'Could not start')
+    return
+  }
+  ElMessage.success('Running — the first run starts within a tick')
   await load()
 }
 
+const liveRuns = computed(() => runs.value.filter((r) => isLive(r.status)))
+/** Stop, drawn as the square every player uses. */
+const StopIcon = () =>
+  h('svg', { viewBox: '0 0 1024 1024', fill: 'currentColor' },
+    [h('rect', { x: 224, y: 224, width: 576, height: 576, rx: 64 })])
+
 async function forceStop() {
-  const live = runs.value.filter((r) => isLive(r.status)).length
+  const live = liveRuns.value.length
+  const s = session.value
+  // A searching policy is first asked to wrap up (measure its finalists); a
+  // second Stop ends it at once.
+  const windDown = !!s && s.status === 'searching' && !s.finalize_requested_at
+  let message = 'Pause this campaign?'
+  if (windDown) {
+    message = 'Ask the policy to wrap up? It measures its finalists, then stops. ' +
+      'Press Stop again to end it at once.'
+  } else if (live || policyLive.value) {
+    const what = [live ? `${live} run(s)` : '', policyLive.value ? 'the policy' : '']
+      .filter(Boolean).join(' and ')
+    message = `Stop now? ${what} will be ended; measurements in progress are lost.`
+  }
   try {
-    await ElMessageBox.confirm(
-      live
-        ? `Stop everything now? ${live} run(s) will be killed and their measurements lost.`
-        : 'Pause this campaign and clear any schedule override?',
-      'Force stop',
-      { confirmButtonText: 'Stop everything', cancelButtonText: 'Cancel', type: 'error' },
-    )
+    await ElMessageBox.confirm(message, t('campaign.forceStop'), {
+      confirmButtonText: windDown ? 'Wrap up' : t('campaign.forceStop'),
+      cancelButtonText: 'Cancel', type: windDown ? 'warning' : 'error',
+    })
   } catch {
     return
   }
-  const { data } = await api.post(`/campaigns/${campaignId}/force-stop`)
-  ElMessage.success(`Paused${live ? `; ${live} run(s) stopping` : ''}`)
-  void data
+  try {
+    await api.post(`/campaigns/${campaignId}/force-stop`)
+  } catch (error: any) {
+    ElMessage.error(error.response?.data?.detail ?? 'Could not stop')
+    return
+  }
+  ElMessage.success(windDown ? 'The policy is wrapping up' : 'Stopped')
   await load()
 }
 
@@ -958,23 +989,25 @@ onMounted(() => {
             <b>{{ objective.name }}</b></template>
         </span>
       </div>
-      <div>
+      <div class="actions">
         <el-tag size="large" :type="campaignStatus(campaign.status).type"
-          :class="campaignStatus(campaign.status).cls" style="margin-right: 12px">
+          :class="campaignStatus(campaign.status).cls">
           {{ campaign.status }}
         </el-tag>
-        <el-button @click="openReport">{{ t('campaign.report') }}</el-button>
+        <el-button :icon="Document" @click="openReport">{{ t('campaign.report') }}</el-button>
         <!-- The occasional actions, one click away instead of a row of buttons
              nobody reads past. -->
-        <el-dropdown trigger="click" class="more" @command="moreAction">
-          <el-button>{{ t('campaign.more') }} ▾</el-button>
+        <el-dropdown trigger="click" @command="moreAction">
+          <el-button :icon="MoreFilled" :aria-label="t('campaign.more')" />
           <template #dropdown>
             <el-dropdown-menu>
-              <el-dropdown-item v-if="logSources.length" command="logs">
+              <el-dropdown-item v-if="logSources.length" command="logs" :icon="Tickets">
                 {{ t('campaign.logs') }}
               </el-dropdown-item>
-              <el-dropdown-item command="clone">{{ t('campaign.clone') }}</el-dropdown-item>
-              <el-dropdown-item command="export"
+              <el-dropdown-item command="clone" :icon="CopyDocument">
+                {{ t('campaign.clone') }}
+              </el-dropdown-item>
+              <el-dropdown-item command="export" :icon="Download"
                 title="Everything needed to recreate this campaign — import it on the New campaign page">
                 {{ t('campaign.exportYaml') }}
               </el-dropdown-item>
@@ -982,64 +1015,47 @@ onMounted(() => {
           </template>
         </el-dropdown>
 
-        <!-- Named for what it does and how much of it there is. "Retry failed"
-             said neither, so nobody could tell whether it re-ran one config or
-             the whole night. It re-queues only candidates whose every run
-             failed, and then puts the campaign back to work — a button that
-             queued work but left the campaign DONE did nothing visible. -->
-        <el-button v-if="retryableCount" @click="retryFailed">
+        <!-- Re-queues only candidates whose every run failed, then puts the
+             campaign back to work. -->
+        <el-button v-if="retryableCount" :icon="RefreshRight" @click="retryFailed">
           {{ retryableCount === 1
             ? t('campaign.rerunFailedOne', { n: retryableCount })
             : t('campaign.rerunFailedMany', { n: retryableCount }) }}
-          <InfoHint :width="330">
-            Configurations whose every attempt failed go back in the queue. Ones that
-            succeeded are left alone, so nothing already measured is thrown away or
-            measured twice.
-          </InfoHint>
         </el-button>
 
-        <!-- Pause is gentle: no new runs, current ones finish. Force stop kills
-             them. Both are offered because "stop" means different things when a
-             benchmark is 18 minutes into 20. -->
-        <template v-if="campaign.status === 'active'">
-          <el-button type="warning" @click="setStatus('paused')">
-            {{ t('campaign.pause') }}
-          </el-button>
-          <el-button type="danger" plain @click="forceStop">
-            {{ t('campaign.forceStop') }}
-          </el-button>
-        </template>
-        <template v-else-if="campaign.status === 'scheduled'">
-          <el-button type="primary" @click="forceStart">
-            {{ t('campaign.forceStart') }}
-          </el-button>
-          <el-button type="warning" plain @click="setStatus('paused')">
-            {{ t('campaign.pause') }}
-          </el-button>
-        </template>
-        <template v-else-if="campaign.status === 'paused' && schedule?.daily_start">
-          <el-button type="primary" @click="setStatus('scheduled')">
-            {{ t('campaign.resumeSchedule') }}
-          </el-button>
-          <el-button @click="forceStart">{{ t('campaign.forceStart') }}</el-button>
-        </template>
-        <!-- A policy campaign with no window cannot be activated (its session
-             deadlines come from the window), so Force start is the button:
-             it writes an 8h window and activates in one call. -->
-        <template v-else-if="(campaign.status === 'draft' || campaign.status === 'paused')
-          && campaign.policy_id != null && !campaign.window_end">
-          <el-button type="primary" @click="forceStart">
-            {{ t('campaign.forceStart') }}
-          </el-button>
-        </template>
-        <el-button v-else-if="campaign.status === 'draft' || campaign.status === 'paused'"
-          type="primary" @click="setStatus('active')">
-          {{ t('campaign.start') }}
-        </el-button>
-        <!-- `done` deliberately offers no Start: the search is exhausted, so
-             activating it plans nothing, finds nothing to place, and the very
-             next tick marks it done again. The honest actions are reading the
-             report and re-running whatever failed. -->
+        <!-- The run control: one segmented group, the way forward first and
+             Stop always last. Pause lets current runs finish; Stop ends them.
+             `done` offers neither: the search is exhausted, and the honest
+             actions are the report and re-running what failed. -->
+        <el-button-group v-if="campaign.status !== 'done'" class="run-control">
+          <template v-if="campaign.status === 'active'">
+            <el-button :icon="VideoPause" title="No new runs; the ones going now finish"
+              @click="setStatus('paused')">{{ t('campaign.pause') }}</el-button>
+          </template>
+          <template v-else-if="campaign.status === 'scheduled'">
+            <el-button type="primary" :icon="VideoPlay" @click="forceStart">
+              {{ t('campaign.forceStart') }}</el-button>
+            <el-button :icon="VideoPause" title="Skip the coming windows until resumed"
+              @click="setStatus('paused')">{{ t('campaign.pause') }}</el-button>
+          </template>
+          <template v-else-if="campaign.status === 'paused' && schedule?.daily_start">
+            <el-button type="primary" :icon="VideoPlay" @click="forceStart">
+              {{ t('campaign.forceStart') }}</el-button>
+            <el-button :icon="AlarmClock" @click="setStatus('scheduled')">
+              {{ t('campaign.resumeSchedule') }}</el-button>
+          </template>
+          <!-- A policy campaign with no window cannot simply be activated (its
+               session deadlines come from the window): Run now writes one. -->
+          <el-button v-else-if="campaign.policy_id != null && !campaign.window_end"
+            type="primary" :icon="VideoPlay" @click="forceStart">
+            {{ t('campaign.start') }}</el-button>
+          <el-button v-else type="primary" :icon="VideoPlay" @click="setStatus('active')">
+            {{ t('campaign.start') }}</el-button>
+          <el-button v-if="campaign.status === 'active' || liveRuns.length || policyLive"
+            class="stop"
+            :icon="StopIcon" title="Stop now: runs in progress are ended and their measurements lost"
+            @click="forceStop">{{ t('campaign.forceStop') }}</el-button>
+        </el-button-group>
       </div>
     </div>
 
@@ -1550,10 +1566,28 @@ onMounted(() => {
 </template>
 
 <style scoped>
-/* A dropdown breaks el-button's sibling spacing; restore it. */
-.more {
-  margin: 0 12px;
-  vertical-align: middle;
+.actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+/* el-button's sibling margin is for loose buttons; the flex gap spaces these. */
+.actions > .el-button + .el-button {
+  margin-left: 0;
+}
+.run-control {
+  margin-left: 8px;
+}
+.run-control .stop {
+  color: var(--el-color-danger);
+}
+.run-control .stop:hover,
+.run-control .stop:focus-visible {
+  color: #fff;
+  background: var(--el-color-danger);
+  border-color: var(--el-color-danger);
 }
 .log-head {
   display: flex;

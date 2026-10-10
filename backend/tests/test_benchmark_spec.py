@@ -56,6 +56,8 @@ def test_a_sweep_document_carries_the_workload_and_the_group():
     params = doc["modules"][0]["params"]
     assert (params["input_tokens"], params["output_tokens"], params["concurrencies"]) == (
         1024, 128, "2,8")
+    # Each level is a sample of requests per slot; the duration only caps it.
+    assert (params["requests_per_concurrency"], params["max_seconds"]) == (20, 600)
     assert doc["group_tags"] == [f"{GROUP_TAG}/sweep"]
     assert doc["status"] == "active"
 

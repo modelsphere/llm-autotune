@@ -7,7 +7,10 @@ export interface Workload {
   output_tokens: number
   /** Comma-separated, as typed. */
   concurrencies: string
-  seconds_per_level: number
+  /** Level c sends c × this many requests. */
+  requests_per_concurrency: number
+  /** Caps a level that has not finished its requests. */
+  max_seconds_per_level: number
   /** '' = LLMBench's built-in example set. */
   dataset_profile: string
   requests: number
@@ -18,7 +21,7 @@ export interface Workload {
 export function defaultWorkload(mode: Workload['mode'] = 'sweep'): Workload {
   return {
     mode, input_tokens: 2048, output_tokens: 512, concurrencies: '1, 4, 16, 64',
-    seconds_per_level: 60, dataset_profile: '', requests: 500, concurrency: 16, slug: '',
+    requests_per_concurrency: 20, max_seconds_per_level: 600, dataset_profile: '', requests: 500, concurrency: 16, slug: '',
   }
 }
 
@@ -29,7 +32,8 @@ export function specOf(w: Workload): Record<string, unknown> | null {
     return {
       kind: 'sweep', input_tokens: w.input_tokens, output_tokens: w.output_tokens,
       concurrencies: w.concurrencies.split(/[\s,]+/).map(Number).filter((n) => n > 0),
-      seconds_per_level: w.seconds_per_level,
+      requests_per_concurrency: w.requests_per_concurrency,
+      max_seconds_per_level: w.max_seconds_per_level,
     }
   }
   return {

@@ -316,6 +316,7 @@ async function runPreflight() {
         ? { target_metric: selectedObjective.value.target_metric }
         : {},
       verify_objective: verifyObjectivePayload.value,
+      policy_id: selectedPolicy.value?.id ?? null,
     })
     preflight.value = data
   } catch (error: any) {

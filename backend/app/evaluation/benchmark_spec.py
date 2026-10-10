@@ -50,8 +50,10 @@ class BenchmarkSpec(BaseModel):
     """What every candidate is measured with. Two kinds:
 
     - `sweep`: random prompts of `input_tokens`, answers of `output_tokens`,
-      at each of `concurrencies`, `seconds_per_level` each. Fast, and blind to
-      prefix-cache reuse.
+      at each of `concurrencies`. Level c sends c × `requests_per_concurrency`
+      requests, so every level is measured on the same sample per slot however
+      fast the engine is; `max_seconds_per_level` caps a slow one. Fast, and
+      blind to prefix-cache reuse.
     - `replay`: requests recorded from real traffic, replayed `concurrency` at
       a time. `dataset_profile` names an LLMBench collection profile; empty
       replays LLMBench's built-in example set (proves the pipeline, measures
@@ -62,7 +64,8 @@ class BenchmarkSpec(BaseModel):
     input_tokens: int = Field(default=2048, ge=1, le=1_000_000)
     output_tokens: int = Field(default=512, ge=1, le=100_000)
     concurrencies: list[int] = Field(default_factory=lambda: [1, 4, 16, 64])
-    seconds_per_level: int = Field(default=60, ge=10, le=3600)
+    requests_per_concurrency: int = Field(default=20, ge=1, le=10_000)
+    max_seconds_per_level: int = Field(default=600, ge=10, le=7200)
     dataset_profile: str = ""
     requests: int = Field(default=500, ge=0, le=1_000_000)
     concurrency: int = Field(default=16, ge=1, le=4096)
@@ -83,7 +86,8 @@ class BenchmarkSpec(BaseModel):
         if self.kind == "sweep":
             return {"kind": "sweep", "input_tokens": self.input_tokens,
                     "output_tokens": self.output_tokens, "concurrencies": self.concurrencies,
-                    "seconds_per_level": self.seconds_per_level}
+                    "requests_per_concurrency": self.requests_per_concurrency,
+                    "max_seconds_per_level": self.max_seconds_per_level}
         return {"kind": "replay", "dataset_profile": self.dataset_profile.strip(),
                 "requests": self.requests, "concurrency": self.concurrency}
 
@@ -99,7 +103,8 @@ class BenchmarkSpec(BaseModel):
         if self.kind == "sweep":
             levels = ",".join(str(c) for c in self.concurrencies)
             return (f"AutoTune sweep — {self.input_tokens} in / {self.output_tokens} out "
-                    f"at concurrency {levels}")
+                    f"at concurrency {levels}, {self.requests_per_concurrency} requests "
+                    "per slot")
         dataset = self.dataset_profile.strip() or "the example set"
         count = f"{self.requests} requests" if self.requests else "all requests"
         return f"AutoTune replay — {dataset}, {count} at concurrency {self.concurrency}"
@@ -128,7 +133,8 @@ def document(spec: BenchmarkSpec, client: LLMBenchClient | None = None) -> dict:
                 "concurrencies": ",".join(str(c) for c in spec.concurrencies),
                 "input_tokens": spec.input_tokens,
                 "output_tokens": spec.output_tokens,
-                "max_seconds": spec.seconds_per_level,
+                "requests_per_concurrency": spec.requests_per_concurrency,
+                "max_seconds": spec.max_seconds_per_level,
                 "warmup_seconds": 10,
                 "request_timeout": 300,
             },
