@@ -1,10 +1,9 @@
 # After installing
 
-[`deploy/quickstart.sh`](../deploy/quickstart.sh) leaves you with LLM AutoTune
-and LLMBench on one cluster, connected, with that cluster registered as the
-machine pool `local-cluster`. This page takes the install further one piece at
-a time: every step is a value you set, or a command run against the same
-install.
+[Installing](install.md) leaves you with LLM AutoTune and LLMBench on one
+cluster, connected, and GPU clusters added on **Resources**. This page takes
+the install further one piece at a time: every step is a value you set, or a
+command run against the same install.
 
 Everything here works the same on the no-GPU demo: use `deploy/demo.sh` in
 place of `deploy/quickstart.sh`, and `.demo/` in place of `.quickstart/`.

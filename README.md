@@ -42,40 +42,29 @@ verdict. More in [platform architecture](docs/api/platform-architecture.md).
 
 ## Install
 
-You need a Kubernetes cluster for the platforms (no GPUs needed), one or more
-GPU clusters (NVIDIA device plugin installed) or ssh-reachable GPU boxes, and
-`kubectl`, `helm`, `git` and `openssl` on your machine.
+The platforms run on a Kubernetes cluster with no GPUs; runs go to GPU
+clusters (or ssh boxes) you add from the UI afterwards. You need `kubectl`,
+`helm`, `git` and `openssl`, and `docker` for search policies.
 
 ```bash
 git clone https://github.com/modelsphere/llm-autotune
 cd llm-autotune
-deploy/quickstart.sh
+deploy/quickstart.sh                          # 1. LLM AutoTune + LLMBench on the current context
+deploy/gpu-cluster.sh --context <gpu-cluster> # 2. an account on a GPU cluster; writes llm-autotune-runs.kubeconfig
 ```
 
-It installs LLM AutoTune and LLMBench into the cluster kubectl points at
-(`--context` to pick another) and connects them with a generated service key.
-Then it prints both UIs' addresses
-and logins: each UI is opened on a NodePort, at `http://<node address>:<port>`
-(on a cluster on your own machine, such as kind or Docker Desktop, it
-port-forwards them to <http://localhost:8080> and <http://localhost:8081>
-instead).
+3. Sign in with the address and password the install prints. On
+   **Resources ▸ Add GPU cluster**, upload the kubeconfig, register the GPU
+   nodes, and **Lease to platform**.
+4. Optionally, build and register a search policy:
+   `deploy/quickstart.sh policy policies/random-search --registry <registry your GPU nodes pull from>`.
+5. Create a search space and a campaign; its **Check** step tries the images
+   and model path on the nodes before anything starts.
 
-| | sign in as |
-|---|---|
-| LLM AutoTune | `admin` and the printed password |
-| LLMBench | `admin@example.com` and the printed password |
-
-Then give it GPUs. On each GPU cluster, with its admin kubeconfig, run
-`deploy/gpu-cluster.sh`: it creates a namespace and an account limited to it,
-and writes a kubeconfig for that account. On **Resources ▸ Add GPU cluster**,
-upload the file and pick the GPU nodes to register; lease them to the
-platform, then create a search space and a campaign. Running the install
-script again upgrades the same install.
-
-- [After installing](docs/after-installing.md): your own values, search
-  policies, more GPUs (another cluster, ssh machines), ingress, datasets.
-- [Deploying](docs/deploying.md): installing the Helm chart yourself, and every
-  setting.
+The full walkthrough, with a cluster that can't reach Docker Hub and what to do
+when a step fails: [Installing](docs/install.md). Settings, more GPUs and
+ingress: [After installing](docs/after-installing.md). The Helm chart and every
+setting: [Deploying](docs/deploying.md).
 
 ## Try it without GPUs
 
@@ -112,9 +101,9 @@ backend/     FastAPI API + the orchestrator worker (Python 3.12, uv)
 frontend/    Vue 3 + TypeScript SPA
 deploy/
   quickstart.sh  install both platforms on your cluster; demo.sh: the no-GPU try-out
+  gpu-cluster.sh prepare a GPU cluster and write the kubeconfig to add it with
   helm/      the chart
   docker/    images, and a compose file for local development
-  k8s/       RBAC for a GPU cluster the platform does not run inside
 policies/    submodule: llm-autotune-policies — the SDK and two policies
 operator/    the optional Kubernetes operator (Go)
 mock-engine/ a fake engine, for running the loop without GPUs
@@ -127,6 +116,8 @@ docs/        architecture, the API contracts, deployment
   that decide the rest. 中文：[架构概览](docs/architecture.zh.md)
 - [How it works](docs/workflow.md) — the product walkthrough, no code.
   中文：[产品视角](docs/workflow.zh.md)
+- [Installing](docs/install.md) — the platform cluster, GPU clusters and a
+  first campaign, step by step
 - [After installing](docs/after-installing.md) — your own values, policies,
   more GPUs, ingress and datasets
 - [Deploying](docs/deploying.md) — the chart, GPU access, the benchmark

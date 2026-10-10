@@ -9,6 +9,8 @@ Understanding it:
 
 Running it:
 
+- [Installing](install.md): the platform cluster, GPU clusters, a policy and
+  a first campaign, step by step.
 - [After installing](after-installing.md): settings, search policies, more
   GPUs, ingress and datasets.
 - [Deploying](deploying.md): the Helm chart and every setting.
