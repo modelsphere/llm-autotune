@@ -586,7 +586,7 @@ ranks the faster configuration first. Each run is also a submission on LLMBench.
 EOF
 else
   cat <<EOF
-GPU nodes found: $gpu_nodes. In LLM AutoTune, on Resources, use Refresh capacity on
+GPU nodes found: $gpu_nodes. In LLM AutoTune, on Resources, use More > Re-read GPUs on
 local-cluster and then Lease to platform; then add a search space and a campaign.
 EOF
 fi

@@ -40,8 +40,8 @@ cluster-scoped and is how the platform fills in a machine's card count and type
 without being told. It never writes a node: no cordon, no label, no taint.
 
 On an empty install it also registers that cluster as a machine called
-`local-cluster`, so the Resources page has something in it. Use *Refresh
-capacity* there to fill in its GPUs, then **Lease to platform** to let campaigns
+`local-cluster`, so the Resources page has something in it. Use *More > Re-read
+GPUs* there to fill in its GPUs, then **Lease to platform** to let campaigns
 use it. Set `gpuCluster.autoRegister=false` to skip this.
 
 A cluster without GPUs (kind, a CPU-only test cluster) takes
