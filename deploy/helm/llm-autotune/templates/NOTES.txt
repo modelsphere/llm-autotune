@@ -2,6 +2,12 @@
 
 {{ if .Values.ingress.enabled -}}
 The UI is at http{{ if .Values.ingress.tls }}s{{ end }}://{{ .Values.ingress.host }}
+{{- else if eq (.Values.frontend.service.type | default "ClusterIP") "NodePort" -}}
+The UI is on a NodePort of every node:
+
+  kubectl -n {{ .Release.Namespace }} get svc {{ include "llm-autotune.fullname" . }}-frontend -o jsonpath='{.spec.ports[0].nodePort}'
+
+then open http://<node address>:<that port>
 {{- else -}}
 No ingress. To reach the UI:
 

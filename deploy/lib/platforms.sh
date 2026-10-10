@@ -609,7 +609,8 @@ watching() {  # <namespace> <command...>
     [ -z "$now" ] || printf 'stuck in %s:\n%s\n' "$ns" "$now" >&2
     die "waiting on $ns failed (above); kubectl --context $CTX -n $ns get pods"
   fi
-  grep -v '^Waiting for\|^deployment .* successfully rolled out\|^statefulset rolling update complete\|^daemon set .* successfully rolled out' "$log" || true
+  # On success the output is helm's release notes and kubectl's progress
+  # lines: the script says where the UIs are itself, at the end.
   rm -f "$log"
 }
 
@@ -661,7 +662,9 @@ if [ "$ACCESS" = nodeport ]; then
     "$NODE_HOST" "$AUTOTUNE_NODEPORT" "$LLMBENCH_NODEPORT" > "$STATE/ui.env"
   if [ "$old_urls" != "$AUTOTUNE_NODEPORT $LLMBENCH_NODEPORT" ] ||
       ! grep -q "publicUiUrl: \"http://$NODE_HOST:$AUTOTUNE_NODEPORT\"" "$STATE/llm-autotune.values.yaml"; then
-    say "Pointing the UIs' links at http://$NODE_HOST"
+    # The ports exist only once the services do: a second, short upgrade
+    # gives each UI the other's address for its links.
+    say "Pointing each UI's links at the other (http://$NODE_HOST, ports $AUTOTUNE_NODEPORT and $LLMBENCH_NODEPORT)"
     write_values
     install_autotune
   fi
