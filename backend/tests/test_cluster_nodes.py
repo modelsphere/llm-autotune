@@ -29,7 +29,7 @@ def _node(name, gpus=8, product="NVIDIA-H800", ready=True, cordoned=False, hostn
 
 @pytest.fixture
 def cluster_nodes(monkeypatch):
-    nodes = [_node("h800-37"), _node("h800-40", cordoned=True),
+    nodes = [_node("gpu-node-1"), _node("gpu-node-2", cordoned=True),
              _node("cpu-1", gpus=0, product=None), _node("a100-5", product="NVIDIA-A100-SXM4-80GB")]
 
     class _Api:
@@ -62,47 +62,47 @@ async def test_only_gpu_nodes_are_listed(client, cluster_nodes):  # noqa: F811
     cluster = await _add(client)
     view = (await client.get(f"/api/clusters/{cluster['id']}/nodes")).json()
     rows = {n["node"]: n for n in view["nodes"]}
-    assert set(rows) == {"a100-5", "h800-37", "h800-40"}
-    assert rows["h800-37"]["gpu_count"] == 8 and rows["h800-37"]["gpu_type"]
-    assert rows["h800-40"]["schedulable"] is False
+    assert set(rows) == {"a100-5", "gpu-node-1", "gpu-node-2"}
+    assert rows["gpu-node-1"]["gpu_count"] == 8 and rows["gpu-node-1"]["gpu_type"]
+    assert rows["gpu-node-2"]["schedulable"] is False
     assert all(n["machine"] is None for n in view["nodes"])
 
 
 async def test_registering_makes_one_machine_per_node(client, cluster_nodes):  # noqa: F811
     cluster = await _add(client)
     response = await client.post(f"/api/clusters/{cluster['id']}/nodes",
-                                 json={"nodes": ["h800-37", "a100-5"]})
+                                 json={"nodes": ["gpu-node-1", "a100-5"]})
     assert response.status_code == 200, response.text
-    assert sorted(response.json()["registered"]) == ["a100-5", "h800-37"]
+    assert sorted(response.json()["registered"]) == ["a100-5", "gpu-node-1"]
     async with client.factory() as session:
         machine = (await session.execute(
-            Machine.__table__.select().where(Machine.name == "h800-37"))).one()
+            Machine.__table__.select().where(Machine.name == "gpu-node-1"))).one()
     assert machine.driver == "k8s" and machine.cluster_id == cluster["id"]
-    assert machine.node_selector == "kubernetes.io/hostname=h800-37"
+    assert machine.node_selector == "kubernetes.io/hostname=gpu-node-1"
     assert machine.gpu_count == 8 and machine.state == "away"
 
-    again = await client.post(f"/api/clusters/{cluster['id']}/nodes", json={"nodes": ["h800-37"]})
+    again = await client.post(f"/api/clusters/{cluster['id']}/nodes", json={"nodes": ["gpu-node-1"]})
     assert again.json()["registered"] == [], "a registered node is not registered twice"
     listed = {n["node"]: n["machine"] for n in again.json()["nodes"]}
-    assert listed["h800-37"]["name"] == "h800-37" and listed["h800-40"] is None
+    assert listed["gpu-node-1"]["name"] == "gpu-node-1" and listed["gpu-node-2"] is None
 
 
 async def test_a_node_that_left_is_reported(client, cluster_nodes):  # noqa: F811
     cluster = await _add(client)
-    await client.post(f"/api/clusters/{cluster['id']}/nodes", json={"nodes": ["h800-37"]})
+    await client.post(f"/api/clusters/{cluster['id']}/nodes", json={"nodes": ["gpu-node-1"]})
     cluster_nodes.pop(0)
     view = (await client.get(f"/api/clusters/{cluster['id']}/nodes")).json()
-    assert [g["name"] for g in view["gone"]] == ["h800-37"]
+    assert [g["name"] for g in view["gone"]] == ["gpu-node-1"]
 
 
 async def test_a_taken_name_gets_the_cluster_prefix(client, cluster_nodes):  # noqa: F811
     async with client.factory() as session:
-        session.add(Machine(name="h800-37", host="10.0.0.1", gpu_count=8))
+        session.add(Machine(name="gpu-node-1", host="10.0.0.1", gpu_count=8))
         await session.commit()
     cluster = await _add(client)
     response = await client.post(f"/api/clusters/{cluster['id']}/nodes",
-                                 json={"nodes": ["h800-37"]})
-    assert response.json()["registered"] == ["test-h800-37"]
+                                 json={"nodes": ["gpu-node-1"]})
+    assert response.json()["registered"] == ["test-gpu-node-1"]
 
 
 async def test_a_node_not_in_the_cluster_is_refused(client, cluster_nodes):  # noqa: F811
