@@ -55,6 +55,8 @@ from app.control.engines.base import MODEL_MOUNT
 from app.control.engines.flags import negated_flag, render_flag
 from app.control.launch_config import LaunchConfig
 
+from .portability import ENV_ACTIONS, Input, classify_env, plan_mounts
+
 API_VERSION = "catalog.swiss/v2"
 SCHEMA_DIR = Path(__file__).parent / "schema"
 # The oldest chart release the catalog accepts a new or changed variant on, per
@@ -89,11 +91,6 @@ _CONTEXT_KEYS = ("context_length", "max_model_len")
 SERVING_CONTRACT: dict[str, tuple[str, ...]] = {
     "sglang": ("enable_cache_report", "stream_response_default_include_usage"),
 }
-
-# Env the platform sets per launch, or that is plainly a credential: never
-# published in a public catalog.
-_PLATFORM_ENV = frozenset({"CUDA_VISIBLE_DEVICES", "NVIDIA_VISIBLE_DEVICES", "HIP_VISIBLE_DEVICES"})
-_SECRET_ENV = re.compile(r"TOKEN|SECRET|PASSWORD|PASSWD|API_KEY|ACCESS_KEY|CREDENTIAL", re.I)
 
 # nvidia.com/gpu.product values, as the catalog's own entries spell them. The
 # platform keeps only the normalized card name ("H100"), so this is the one
@@ -206,6 +203,9 @@ class CatalogOptions:
     model_label: str = ""
     # Applied to every variant that has none of its own.
     gpu_product: list[str] = field(default_factory=list)
+    # Env var name -> recipe | site | secret | platform: what a person settled
+    # for a name the rules do not know (portability.py). Always wins.
+    env_categories: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -227,6 +227,12 @@ class ExportedVariant:
     status: str
     path: str
     document: dict[str, Any]
+    # Each env var and mount the run had, and what the export did with it.
+    inputs: list[Input] = field(default_factory=list)
+    # A tuned variant's result in metadata.yaml: recorded, no_report (no saved
+    # report on these runs), no_baseline; "" for any other variant.
+    tuning: str = ""
+    uplift: float | None = None
 
 
 @dataclass
@@ -235,7 +241,10 @@ class CatalogExport:
     variants: list[ExportedVariant] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
     files: list[CatalogFile] = field(default_factory=list)
+    # What someone should look at before publishing.
     warnings: list[str] = field(default_factory=list)
+    # What the export did that needs no action, for whoever wants to know.
+    details: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
     # Where each variant came from (campaign / run ids, measured numbers).
     # Platform ids have no place in a public file, so this is for the pull
@@ -243,8 +252,12 @@ class CatalogExport:
     provenance: list[str] = field(default_factory=list)
     # True when the catalog already has this model.
     existing: bool = False
+    # found | new | unreachable: what the catalog's index said about the model.
+    catalog: str = "new"
     # A source.hf read off the weights path, offered to confirm, never written.
     hf_suggestion: str = ""
+    # Where the perf report came from: "saved:<report id>"; "" when none ships.
+    report_source: str = ""
 
     @property
     def valid(self) -> bool:
@@ -257,6 +270,7 @@ class CatalogExport:
         return {
             "name": self.name,
             "existing": self.existing,
+            "catalog": self.catalog,
             "variants": [
                 {
                     "id": v.id,
@@ -264,16 +278,21 @@ class CatalogExport:
                     "role": v.role,
                     "status": v.status,
                     "path": v.path,
+                    "inputs": [i.payload() for i in v.inputs],
+                    "tuning": v.tuning,
+                    "uplift": v.uplift,
                 }
                 for v in self.variants
             ],
             "metadata": self.metadata,
             "files": [{"path": f.path, "kind": f.kind, "text": f.text} for f in self.files],
             "warnings": list(self.warnings),
+            "details": list(self.details),
             "errors": list(self.errors),
             "valid": self.valid,
             "provenance": list(self.provenance),
             "hf_suggestion": self.hf_suggestion,
+            "report_source": self.report_source,
         }
 
 
@@ -476,67 +495,11 @@ def _describe(src: VariantSource, gpus: int, reference: VariantSource | None) ->
     return text[:512]
 
 
-def _env_items(env: dict[str, str], warnings: list[str], vid: str) -> list[dict[str, str]]:
-    out = []
-    for name, value in env.items():
-        if name in _PLATFORM_ENV:
-            continue
-        if _SECRET_ENV.search(name):
-            warnings.append(f"{vid}: env {name} looks like a credential and was left out")
-            continue
-        out.append({"name": name, "value": str(value)})
-    return out
-
-
 def runtime_env() -> dict[str, str]:
     """Env every launch driver sets under a config's own extra_env."""
     from app.control.launch import k8s, ssh_docker
 
     return {**ssh_docker.DEFAULT_ENV, **k8s.DEFAULT_ENV}
-
-
-# Engine flags that read a directory the config mounts, and the volume name the
-# catalog's own entries give it.
-_PATH_FLAG_VOLUMES = {"speculative_draft_model_path": "draft-model"}
-
-
-def _referenced_volumes(volumes: dict[str, str], engine_args: dict[str, Any]) -> dict[str, str]:
-    """The host volumes some engine flag's value points into."""
-    values = [str(v) for v in engine_args.values() if isinstance(v, str) and v.startswith("/")]
-    needed = {}
-    for host, container in volumes.items():
-        path = str(container).partition(":")[0].rstrip("/")
-        if path and any(v == path or v.startswith(path + "/") for v in values):
-            needed[host] = container
-    return needed
-
-
-def _volume_names(volumes: dict[str, str], cfg: LaunchConfig) -> dict[str, str]:
-    names = {}
-    for host, container in volumes.items():
-        path = str(container).partition(":")[0].rstrip("/")
-        for flag, name in _PATH_FLAG_VOLUMES.items():
-            value = str((cfg.engine_args or {}).get(flag) or "")
-            if value == path or value.startswith(path + "/"):
-                names[host] = name
-    return names
-
-
-def _volumes(
-    volumes: dict[str, str], vid: str, names: dict[str, str] | None = None
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    vols, mounts = [], []
-    for index, (host, container) in enumerate(volumes.items()):
-        container, _, mode = str(container).partition(":")
-        name = (names or {}).get(host) or (
-            _id_slug(Path(container).name or f"vol-{index}")[:50] or f"vol-{index}"
-        )
-        vols.append({"name": name, "hostPath": {"path": host, "type": "Directory"}})
-        mount: dict[str, Any] = {"name": name, "mountPath": container}
-        if mode == "ro" or name == "draft-model":
-            mount["readOnly"] = True
-        mounts.append(mount)
-    return vols, mounts
 
 
 def startup_minutes(src: VariantSource, opts: CatalogOptions) -> int:
@@ -556,13 +519,15 @@ def _variant(
     reference: VariantSource | None,
     warnings: list[str],
     errors: list[str],
+    inputs: list[Input],
+    details: list[str],
 ) -> dict[str, Any]:
     cfg = src.config
     nodes = max(1, int(src.nodes or 1))
     total = max(1, cfg.cards)
     gpus = total // nodes if total % nodes == 0 else total
     if total % nodes:
-        warnings.append(f"{cfg.engine}: {total} cards do not split over {nodes} nodes evenly")
+        warnings.append(f"{total} GPUs don't split evenly over {nodes} nodes")
     vid = _variant_id(src, gpus)
 
     variant: dict[str, Any] = {"id": vid}
@@ -581,15 +546,10 @@ def _variant(
         if re.fullmatch(r"sha256:[a-f0-9]{64}", digest or ""):
             variant["image"]["digest"] = digest
         if not _RELEASE_TAG.match(tag) or _DEV_WORDS.search(tag):
-            warnings.append(
-                f"{vid}: image tag {tag!r} does not look like a release; a moved tag changes"
-                " what this frozen version deploys"
-                + (
-                    " (the measured digest is pinned)"
-                    if "digest" in variant["image"]
-                    else " -- use a release tag, or pin image.digest"
-                )
-            )
+            if "digest" in variant["image"]:
+                details.append(f"{vid}: image tag {tag} isn't a release tag; its digest is pinned")
+            else:
+                warnings.append(f"{vid}: image tag {tag} isn't a release tag and may move")
     else:
         # Without an image the chart's default engine would deploy, which is
         # not what was measured.
@@ -608,8 +568,8 @@ def _variant(
         requires["gpuProduct"] = list(dict.fromkeys(products))
     else:
         warnings.append(
-            f"{vid}: no gpuProduct -- no known node label for {cfg.gpu_type or 'this card'!r},"
-            " so the variant can land on any card of the vendor; pass the label"
+            f"{vid}: no node label known for {cfg.gpu_type or 'this card'}: set gpuProduct"
+            " under Advanced"
         )
     variant["requires"] = requires
 
@@ -622,13 +582,11 @@ def _variant(
     missing = [key for key in SERVING_CONTRACT.get(cfg.engine, ()) if key not in engine_args]
     if missing:
         engine_args.update(dict.fromkeys(missing, True))
-        warnings.append(
-            f"{vid}: added the serving-contract flags the config lacked: {', '.join(missing)}"
-        )
+        details.append(f"{vid}: added {', '.join(missing)}, which every catalog entry serves with")
     args, context, dropped = extra_args(cfg.engine, engine_args)
     dropped = [key for key in dropped if key not in _ROUTINE_CHART_OWNED]
     if dropped:
-        warnings.append(f"{vid}: chart-owned flags left to the chart: {', '.join(dropped)}")
+        details.append(f"{vid}: left to the chart: {', '.join(dropped)}")
 
     # The chart-0.7.1 shape of the catalog's newest entries (qwen3.6-35b-a3b,
     # kimi-k3, glm5.3): weights preflight, scratch and shm volumes, ephemeral
@@ -648,53 +606,49 @@ def _variant(
     if nodes > 1:
         values["lws"] = {"enabled": True, "size": nodes}
     values["extraArgs"] = args
-    if opts.include_env:
-        # The env the run actually had: the launch driver's defaults under the
-        # config's own. A config measured without extra_env still ran with the
-        # defaults, and an entry that drops them is not what was measured.
-        env = _env_items({**runtime_env(), **cfg.extra_env}, warnings, vid)
-        if env:
-            values["env"] = env
+    # The env the run actually had: the launch driver's defaults under the
+    # config's own. A config measured without extra_env still ran with the
+    # defaults, and an entry that drops them is not what was measured.
+    env = {**runtime_env(), **cfg.extra_env}
+    # A mount an env var points into is kept only when that env var itself
+    # could be: one named for this site's setup takes its files with it.
+    readers = {
+        k: v
+        for k, v in env.items()
+        if classify_env(k, "", [], opts.env_categories)[0] in ("recipe", "unknown")
+    }
+    plan = plan_mounts(
+        dict(cfg.extra_volumes),
+        dict(cfg.engine_args),
+        readers,
+        MODEL_MOUNT,
+        keep_all=opts.include_volumes,
+    )
+    provided = [MODEL_MOUNT, "/dev/shm", "/root/.cache", *plan.provided]
+    kept_env = []
+    for name, value in env.items():
+        category, reason = classify_env(name, str(value), provided, opts.env_categories)
+        action = ENV_ACTIONS[category] if opts.include_env else "left out"
+        if action == "kept":
+            kept_env.append({"name": name, "value": str(value)})
+        inputs.append(Input("env", name, str(value), category, action, reason))
+    if kept_env:
+        values["env"] = kept_env
+    inputs.extend(plan.inputs)
+    if opts.include_volumes and cfg.extra_volumes:
+        warnings.append(f"{vid}: host paths are published as they are")
 
     shm = "32Gi" if gpus >= 4 else "16Gi"
     volumes: list[dict[str, Any]] = [
+        *plan.volumes,
         {"name": "dot-cache", "emptyDir": {"sizeLimit": "10Gi"}},
         {"name": "dshm", "emptyDir": {"medium": "Memory", "sizeLimit": shm}},
     ]
     mounts: list[dict[str, Any]] = [
+        *plan.mounts,
         {"name": "dot-cache", "mountPath": "/root/.cache"},
         {"name": "dshm", "mountPath": "/dev/shm"},
     ]
-    if cfg.extra_volumes:
-        if opts.include_volumes:
-            extra_vols, extra_mounts = _volumes(dict(cfg.extra_volumes), vid)
-            volumes = extra_vols + volumes
-            mounts = extra_mounts + mounts
-            warnings.append(
-                f"{vid}: host-path volumes are site facts in a public catalog: "
-                + ", ".join(cfg.extra_volumes)
-            )
-        else:
-            # A volume an engine flag points into (a draft model) is part of the
-            # config: without it the flag names an empty path and the engine
-            # exits at startup. The catalog's own kimi-k3 entry mounts its draft
-            # the same way. Everything else stays site-owned.
-            needed = _referenced_volumes(dict(cfg.extra_volumes), dict(cfg.engine_args))
-            if needed:
-                extra_vols, extra_mounts = _volumes(needed, vid, names=_volume_names(needed, cfg))
-                volumes = extra_vols + volumes
-                mounts = extra_mounts + mounts
-                warnings.append(
-                    f"{vid}: kept host volume(s) an engine flag reads from: "
-                    + ", ".join(f"{h}:{c}" for h, c in needed.items())
-                    + " -- the host path is this site's; a deployer must have the files there"
-                )
-            rest = {h: c for h, c in cfg.extra_volumes.items() if h not in needed}
-            if rest:
-                warnings.append(
-                    f"{vid}: volumes not exported (host paths are site-owned): "
-                    + ", ".join(f"{h}:{c}" for h, c in rest.items())
-                )
     values["volumes"] = volumes
     values["volumeMounts"] = mounts
 
@@ -730,6 +684,7 @@ def _variant(
 def build_catalog_entry(sources: list[VariantSource], opts: CatalogOptions) -> CatalogExport:
     """The variant files and metadata.yaml for these configs, validated."""
     warnings: list[str] = []
+    details: list[str] = []
     errors: list[str] = []
     if not sources:
         raise ValueError("at least one config is needed")
@@ -739,13 +694,13 @@ def build_catalog_entry(sources: list[VariantSource], opts: CatalogOptions) -> C
         # The catalog's own name wins: a second spelling would be a second model.
         name = existing.name
         if opts.name and slug(opts.name) != name:
-            warnings.append(f"the catalog has this model as {name!r}; exported under that name")
+            details.append(f"the catalog has this model as {name}")
     else:
         name = opts.name if NAME_RE.match(opts.name or "") else slug(opts.name)
         if not name:
             raise ValueError(f"catalog name {opts.name!r} has nothing usable in it")
         if name != opts.name:
-            warnings.append(f"catalog name {opts.name!r} normalized to {name!r}")
+            details.append(f"name {opts.name} written as {name}")
 
     for src in sources:
         if src.config.engine not in ENGINES:
@@ -756,13 +711,14 @@ def build_catalog_entry(sources: list[VariantSource], opts: CatalogOptions) -> C
     )
     others = {s.config.served_model_name for s in sources if s.config.served_model_name}
     if len(others) > 1:
-        warnings.append(
-            f"the configs serve different names ({', '.join(sorted(others))});"
-            f" every variant is served as {served!r}"
-        )
+        warnings.append(f"the runs serve different names; all variants serve {served}")
 
     reference = next((s for s in sources if s.role == "baseline"), None)
-    bodies = [_variant(s, opts, reference, warnings, errors) for s in sources]
+    inputs: list[list[Input]] = [[] for _ in sources]
+    bodies = [
+        _variant(s, opts, reference, warnings, errors, ins, details)
+        for s, ins in zip(sources, inputs, strict=True)
+    ]
     for body, src in zip(bodies, sources, strict=True):
         warnings += judge(body["id"], src)
     seen: dict[str, int] = {}
@@ -773,7 +729,7 @@ def build_catalog_entry(sources: list[VariantSource], opts: CatalogOptions) -> C
             body["id"] = f"{base[:60]}-{seen[base]}"
 
     exported: list[ExportedVariant] = []
-    for body, src in zip(bodies, sources, strict=True):
+    for body, src, ins in zip(bodies, sources, inputs, strict=True):
         doc: dict[str, Any] = {
             "apiVersion": API_VERSION,
             "kind": "Variant",
@@ -792,18 +748,12 @@ def build_catalog_entry(sources: list[VariantSource], opts: CatalogOptions) -> C
             if old is not None and _same_variant(old, doc):
                 doc["version"] = was
                 status = "unchanged"
-                warnings.append(f"{doc['id']}: the same as the published {was}; no file is written")
+                details.append(f"{doc['id']}: the same as the published {was}")
             else:
                 doc["version"] = bump_minor(was)
                 status = "updated"
-                warnings.append(
-                    f"{doc['id']}: replaces the published {was} with {doc['version']}"
-                    + (
-                        ""
-                        if old is not None
-                        else " (the published file could not be read to compare)"
-                    )
-                )
+                if old is None:
+                    details.append(f"{doc['id']}: the published {was} could not be read to compare")
         errors += [f"{doc['id']}: {e}" for e in validate(doc, "variant")]
         errors += [f"{doc['id']}: {e}" for e in variant_problems(doc)]
         exported.append(
@@ -814,6 +764,7 @@ def build_catalog_entry(sources: list[VariantSource], opts: CatalogOptions) -> C
                 status=status,
                 path=f"models/{name}/{doc['id']}.yaml",
                 document=doc,
+                inputs=ins,
             )
         )
 
@@ -824,7 +775,7 @@ def build_catalog_entry(sources: list[VariantSource], opts: CatalogOptions) -> C
         if v.status != "unchanged"
     ]
     if existing is not None and existing.metadata_text and "#" in existing.metadata_text:
-        warnings.append("metadata.yaml is rewritten from its fields: its comments are not kept")
+        details.append("metadata.yaml is rewritten from its fields, without its comments")
     files.append(CatalogFile(f"models/{name}/metadata.yaml", "metadata", dump(meta)))
     return CatalogExport(
         name=name,
@@ -835,6 +786,8 @@ def build_catalog_entry(sources: list[VariantSource], opts: CatalogOptions) -> C
         errors=errors,
         provenance=provenance(sources),
         existing=existing is not None,
+        catalog="found" if existing is not None else "new",
+        details=details,
         hf_suggestion=suggestion,
     )
 
@@ -913,17 +866,17 @@ def _metadata(
             errors.append(f"default variant {default!r} is not a variant of {name}")
         meta["defaultVariant"] = default
 
-    tuning = _tuning(sources, exported, opts, errors)
+    tuning = _tuning(sources, exported, opts, warnings)
     if tuning:
         recorded = [t for t in meta.get("tuning") or [] if t not in tuning]
         meta["tuning"] = recorded + tuning
     named = re.compile(r"(^|-)optimi[sz]ed(-|$)")
     covered = {str(t.get("optimized", "")).split("@")[0] for t in meta.get("tuning") or []}
     for v in exported:
-        if named.search(v.id) and v.id not in covered:
-            errors.append(
-                f"{v.id}: an id named optimized needs a tuning entry, which needs a"
-                " baseline and a report in the same export"
+        # An optimized variant was already warned about by _tuning.
+        if named.search(v.id) and v.id not in covered and v.role != "optimized":
+            warnings.append(
+                f"{v.id}: the id says optimized; the catalog will want its tuning result"
             )
     if "source" in meta:
         errors += [f"metadata: {e}" for e in validate(meta, "metadata.v2")]
@@ -953,10 +906,13 @@ def _tuning(
     sources: list[VariantSource],
     exported: list[ExportedVariant],
     opts: CatalogOptions,
-    errors: list[str],
+    warnings: list[str],
 ) -> list[dict[str, Any]]:
     """One entry per optimized variant: what it gained over the baseline
-    exported with it, on the benchmark and on each workload, and the report."""
+    exported with it, on the benchmark and on each workload, and the report.
+    Without a baseline or a report there is no entry, and the variant says why
+    (ExportedVariant.tuning): the catalog's own check asks for one before the
+    pull request passes."""
     pairs = list(zip(exported, sources, strict=True))
     base = next(((v, s) for v, s in pairs if v.role == "baseline"), None)
     out = []
@@ -964,18 +920,20 @@ def _tuning(
         if v.role != "optimized":
             continue
         if base is None:
-            errors.append(f"{v.id}: a tuning result needs the baseline it was measured against")
+            v.tuning = "no_baseline"
             continue
+        gain = gain_pct(src, base[1])
+        v.uplift = round_pct(gain) if gain is not None else None
         if not opts.report_file:
-            errors.append(f"{v.id}: a tuning result needs its perf report: pick the report")
+            v.tuning = "no_report"
             continue
+        v.tuning = "recorded"
         entry: dict[str, Any] = {
             "baseline": f"{base[0].id}@{base[0].version}",
             "optimized": f"{v.id}@{v.version}",
         }
-        gain = gain_pct(src, base[1])
-        if gain is not None:
-            entry["uplift"] = round_pct(gain)
+        if v.uplift is not None:
+            entry["uplift"] = v.uplift
         workloads: list[dict[str, Any]] = []
         for sc in (src.evidence or {}).get("scenarios") or []:
             label = str(sc.get("label") or sc.get("key") or "")[:64]

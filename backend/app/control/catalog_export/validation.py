@@ -35,9 +35,7 @@ def validation_file(export: CatalogExport, sources: list[VariantSource]) -> Cata
     if not export.valid:
         return None
     if any(not source.origin.get("track_slug") for source in sources):
-        export.warnings.append(
-            "CI validation file unavailable: every selected run must belong to a track."
-        )
+        export.details.append("no CI routing file: not every run belongs to a track")
         return None
     texts = {f.path: f.text for f in export.files if f.kind == "variant"}
     variants: list[dict[str, Any]] = []

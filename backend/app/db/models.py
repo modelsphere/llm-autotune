@@ -1077,6 +1077,24 @@ class ReplayDataset(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class CatalogEnvCategory(Base):
+    """What an env var is to a model-catalog export, settled by a person for a
+    name the export's rules do not know (catalog_export/portability.py): part
+    of the serving recipe, or this site's setup. Settled once, it applies to
+    every later export."""
+
+    __tablename__ = "catalog_env_categories"
+
+    name: Mapped[str] = mapped_column(String(128), primary_key=True)
+    category: Mapped[str] = mapped_column(String(16))  # recipe | site | secret | platform
+    set_by_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    set_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
 class Baseline(Base):
     """A production reference config, keyed by what it serves and on what.
 

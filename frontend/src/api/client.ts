@@ -485,6 +485,22 @@ export interface RunDetail extends Run {
   }[]
 }
 
+/** One env var or mount of a measured run, sorted into the serving recipe or
+ *  this site's setup by the export. */
+export interface CatalogInput {
+  kind: 'env' | 'mount'
+  /** The env var, or the mount's path in the container. */
+  name: string
+  /** The env value, or the host path. */
+  value: string
+  /** env: recipe | site | secret | platform | unknown;
+   *  mount: weights | model | config | scratch | site */
+  category: string
+  /** kept | left out | emptyDir | moved */
+  action: string
+  reason: string
+}
+
 /** POST /catalog-export/preview: measured runs as model-catalog files
  *  (catalog.swiss/v2: one file per variant, and the model's metadata.yaml).
  *  POST /catalog-export/archive returns the same files as a zip. */
@@ -492,6 +508,8 @@ export interface CatalogExportPreview {
   name: string
   /** The catalog already has this model: its metadata is updated, not created. */
   existing: boolean
+  /** found | new | unreachable: what the catalog's index said about the model. */
+  catalog: string
   variants: {
     id: string
     version: string
@@ -499,17 +517,28 @@ export interface CatalogExportPreview {
     /** new | updated (the next version of a published variant) | unchanged (no file). */
     status: string
     path: string
+    /** Each env var and mount the run had, and what the export did with it. */
+    inputs: CatalogInput[]
+    /** A tuned variant's result: recorded | no_report | no_baseline; '' otherwise. */
+    tuning: string
+    /** Its gain over the baseline, in percent, when measured. */
+    uplift: number | null
   }[]
   metadata: Record<string, unknown>
   /** kind: variant | metadata | report | validation */
   files: { path: string; kind: string; text: string }[]
+  /** What someone should look at before publishing. */
   warnings: string[]
+  /** What the export did that needs no action. */
+  details: string[]
   errors: string[]
   valid: boolean
   /** Where each variant came from: for the pull request description, never a file. */
   provenance: string[]
   /** A source.hf read off the weights path, to confirm; never written. */
   hf_suggestion: string
+  /** Where the perf report came from: "saved:<report id>"; "" when none ships. */
+  report_source: string
   hf: string
   /** The metadata the server drafted (or was given), for the form to adopt. */
   display_name: string

@@ -27,14 +27,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `validate:schema` and `validate:helm` on an export.
   - API: the preview returns `files` and `variants`; `version`, `base_entry`
     and `with_metadata` are gone; a variant takes `image_tag`.
+- **Catalog export ships the saved report on the exported runs** with a tuned
+  variant (the newest one comparing exactly these runs, or the one picked under
+  Advanced), and writes its `tuning` entry. Without a report the export still
+  goes through, with no tuning entry and a warning (`report_source` says which
+  report shipped).
+- **Catalog export sorts env vars and mounts into the recipe and the site's
+  setup** instead of copying them as measured. Engine and runtime settings
+  are kept; network interfaces, store addresses, proxies, library paths, and
+  values that are addresses or paths no mount provides are left out. A draft
+  model a flag reads is published at `/data/models/<name>`; a mount an env var
+  reads is kept with it; cache mounts become empty directories; mounts nothing
+  reads are left out. The export lists every env var and mount with what it
+  did and why. A name no rule knows is kept and flagged, and can be settled for
+  one export (`env_categories`) or for all of them
+  (`PUT /api/catalog-export/env-categories/{name}`, migration
+  `012_catalog_env_categories`).
 
 ### Fixed
 
+- A perf report shipped with a catalog export embedded the whole frozen
+  comparison, so the HTML named the machines, GPU indices, host paths, run and
+  campaign ids and names, and links into the platform it was measured on. The
+  shipped copy now keeps what the report draws and leaves the rest out
+  (`app/agent/publish.py`); saved reports are unchanged.
 - Catalog export: a run whose image was named by digest only exported no
   image, so the chart's default engine would have deployed; it now asks for
   the tag. `source.hf` is no longer written from a guess off the weights path:
   a new model needs it given, with the guess offered. A tuned variant without
-  its baseline or report is refused instead of published untuned.
+  its baseline or report says that the catalog will ask for its tuning entry.
 - The CI routing file of a track export (`<name>.validation.json`) labels a
   variant without a role `other` rather than `optimized`, and hashes each
   variant file's content instead of its bytes, so the catalog's formatting does

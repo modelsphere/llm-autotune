@@ -14,6 +14,7 @@ evidence, and reads what the catalog already publishes.
 from __future__ import annotations
 
 import io
+import re
 import zipfile
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
@@ -23,6 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.agent import comparison as cmp
 from app.agent import export as report_export
 from app.agent.loader import load_run
+from app.agent.publish import publishable
 from app.control.catalog_export import (
     CatalogExport,
     CatalogFile,
@@ -39,13 +41,26 @@ from app.core.auth import Principal, get_principal
 from app.core.config import get_settings
 from app.datasets.pinning import dataset_of
 from app.db.base import get_async_session
-from app.db.models import AgentReport, Campaign, Candidate, Event, Machine, Result, Run, RunStatus
+from app.db.models import (
+    AgentReport,
+    Campaign,
+    Candidate,
+    CatalogEnvCategory,
+    Event,
+    Machine,
+    Result,
+    Run,
+    RunStatus,
+    User,
+)
 from app.hardware import normalize_gpu_type
 from app.objective import direction, target_metric
 from app.schemas.catalog_export import (
     CatalogExportOut,
     CatalogExportRequest,
     CatalogVariantIn,
+    EnvCategoryIn,
+    EnvCategoryOut,
 )
 
 router = APIRouter(prefix="/catalog-export", tags=["catalog-export"])
@@ -233,6 +248,21 @@ async def _attach_comparison(session: AsyncSession, sources: list[VariantSource]
         }
 
 
+def _public(report: AgentReport) -> AgentReport:
+    """A copy of a saved report whose embedded comparison says nothing about
+    this site, for a file published outside the platform."""
+    return AgentReport(
+        id=report.id,
+        title=report.title,
+        lang=report.lang,
+        markdown=report.markdown,
+        comparison=publishable(report.comparison or {}),
+        labels=list(report.labels or []),
+        scenario_labels=dict(report.scenario_labels or {}),
+        assets=list(report.assets or []),
+    )
+
+
 async def _report_for(
     session: AsyncSession, report_id: int, sources: list[VariantSource], name: str
 ) -> tuple[str, str, list[str]]:
@@ -264,11 +294,46 @@ async def _report_for(
         .all()
     )
     try:
-        html = report_export.render_html(report, list(rows) or [report])
+        public = [_public(r) for r in (list(rows) or [report])]
+        first = next((r for r in public if r.id == report.id), public[0])
+        html = report_export.render_html(first, public)
     except report_export.RendererMissing as exc:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
     card = next((s.config.gpu_type for s in sources if s.config.gpu_type), "").lower() or "gpu"
     return f"models/{name}/{name}-{card}-report.html", html, errors
+
+
+async def _saved_report(
+    session: AsyncSession, sources: list[VariantSource], name: str
+) -> tuple[str, str, str]:
+    """The report a tuning result ships with, when the caller named none: the
+    newest saved report comparing exactly these runs. Returns its path, HTML
+    and where it came from; empty when no saved report compares them."""
+    base = next((s for s in sources if s.role == "baseline"), None)
+    tuned = [s for s in sources if s.role == "optimized"]
+    if base is None or not tuned:
+        return "", "", ""
+    base_id = int(base.origin["run_id"])
+    tuned_ids = [int(s.origin["run_id"]) for s in tuned]
+    saved = (
+        (
+            await session.execute(
+                select(AgentReport)
+                .where(AgentReport.baseline_run_id == base_id, AgentReport.translation_of.is_(None))
+                .order_by(AgentReport.id.desc())
+            )
+        )
+        .scalars()
+        .all()
+    )
+    match = next(
+        (r for r in saved if sorted(int(i) for i in r.attempt_run_ids or []) == sorted(tuned_ids)),
+        None,
+    )
+    if match is not None:
+        path, html, _ = await _report_for(session, match.id, sources, name)
+        return path, html, f"saved:{match.id}"
+    return "", "", ""
 
 
 async def _export(body: CatalogExportRequest, session: AsyncSession) -> CatalogExport:
@@ -287,12 +352,15 @@ async def _export(body: CatalogExportRequest, session: AsyncSession) -> CatalogE
         else (None, "")
     )
     name = existing.name if existing is not None else name
-    report_path = report_html = ""
+    report_path = report_html = report_source = ""
     report_errors: list[str] = []
     if body.report_id is not None:
         report_path, report_html, report_errors = await _report_for(
             session, body.report_id, sources, name
         )
+        report_source = f"saved:{body.report_id}"
+    else:
+        report_path, report_html, report_source = await _saved_report(session, sources, name)
     opts = CatalogOptions(
         name=name,
         served_name=body.served_name.strip(),
@@ -313,16 +381,27 @@ async def _export(body: CatalogExportRequest, session: AsyncSession) -> CatalogE
         homepage=body.homepage.strip(),
         model_label=next((n for n in model_names if n), ""),
         gpu_product=[p.strip() for p in body.gpu_product if p.strip()],
+        # What people settled for names the rules do not know, then this
+        # export's own calls.
+        env_categories={
+            **{
+                row.name: row.category
+                for row in (await session.execute(select(CatalogEnvCategory))).scalars()
+            },
+            **body.env_categories,
+        },
     )
     try:
         export = build_catalog_entry(sources, opts)
     except ValueError as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
     if note:
-        export.warnings.insert(0, note)
+        export.catalog = "unreachable"
+        export.details.insert(0, note)
     export.errors += report_errors
     if report_html:
         export.files.append(CatalogFile(report_path, "report", report_html))
+        export.report_source = report_source
     sidecar = validation_file(export, sources)
     if sidecar is not None:
         export.files.append(sidecar)
@@ -369,3 +448,64 @@ async def archive_catalog_export(
         media_type="application/zip",
         headers={"Content-Disposition": f'attachment; filename="{export.name}-catalog.zip"'},
     )
+
+
+@router.get("/env-categories", response_model=list[EnvCategoryOut])
+async def list_env_categories(
+    _: Principal = Depends(get_principal),
+    session: AsyncSession = Depends(get_async_session),
+):
+    """Env vars people settled for every export: part of the recipe, or a
+    site's setup."""
+    rows = (
+        (await session.execute(select(CatalogEnvCategory).order_by(CatalogEnvCategory.name)))
+        .scalars()
+        .all()
+    )
+    users = {u.id: u.username for u in (await session.execute(select(User))).scalars()}
+    return [
+        EnvCategoryOut(name=r.name, category=r.category, set_by=users.get(r.set_by_id, ""))
+        for r in rows
+    ]
+
+
+@router.put("/env-categories/{name}", response_model=EnvCategoryOut)
+async def set_env_category(
+    name: str,
+    body: EnvCategoryIn,
+    principal: Principal = Depends(get_principal),
+    session: AsyncSession = Depends(get_async_session),
+):
+    """Settle what an env var is, for every later export."""
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,127}", name):
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY, f"{name!r} is not an env var name"
+        )
+    row = await session.get(CatalogEnvCategory, name)
+    if row is None:
+        row = CatalogEnvCategory(name=name)
+        session.add(row)
+    row.category = body.category
+    row.set_by_id = principal.user.id
+    session.add(
+        Event(
+            actor=principal.actor,
+            kind="catalog_env_category_set",
+            payload={"name": name, "category": body.category},
+        )
+    )
+    await session.commit()
+    return EnvCategoryOut(name=name, category=body.category, set_by=principal.user.username)
+
+
+@router.delete("/env-categories/{name}", status_code=status.HTTP_204_NO_CONTENT)
+async def clear_env_category(
+    name: str,
+    _: Principal = Depends(get_principal),
+    session: AsyncSession = Depends(get_async_session),
+):
+    """Back to the rules for this name."""
+    row = await session.get(CatalogEnvCategory, name)
+    if row is not None:
+        await session.delete(row)
+        await session.commit()

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -56,6 +56,9 @@ class CatalogExportRequest(BaseModel):
     report_id: int | None = None
     # Look the model up in the published catalog (catalog_index_url).
     use_catalog: bool = True
+    # Env var name -> recipe | site | secret | platform, for this export only;
+    # PUT /catalog-export/env-categories/{name} settles one for every export.
+    env_categories: dict[str, str] = Field(default_factory=dict)
 
 
 class CatalogFileOut(BaseModel):
@@ -64,12 +67,39 @@ class CatalogFileOut(BaseModel):
     text: str
 
 
+class CatalogInputOut(BaseModel):
+    """One env var or mount of the measured run, and what the export did."""
+
+    kind: str  # env | mount
+    name: str  # the env var, or the mount's path in the container
+    value: str  # the env value, or the host path
+    category: (
+        str  # recipe | site | secret | platform | unknown | weights | model | config | scratch
+    )
+    action: str  # kept | left out | emptyDir | moved
+    reason: str
+
+
 class CatalogVariantOut(BaseModel):
     id: str
     version: str
     role: str
     status: str  # new | updated | unchanged
     path: str
+    inputs: list[CatalogInputOut] = Field(default_factory=list)
+    # A tuned variant's result: recorded | no_report | no_baseline; "" otherwise.
+    tuning: str = ""
+    uplift: float | None = None
+
+
+class EnvCategoryIn(BaseModel):
+    category: Literal["recipe", "site", "secret", "platform"]
+
+
+class EnvCategoryOut(BaseModel):
+    name: str
+    category: str
+    set_by: str = ""
 
 
 class CatalogExportOut(BaseModel):
@@ -79,16 +109,23 @@ class CatalogExportOut(BaseModel):
     name: str
     # The catalog already has this model: its metadata is updated, not created.
     existing: bool = False
+    # found | new | unreachable: what the catalog's index said about the model.
+    catalog: str = "new"
     variants: list[CatalogVariantOut] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
     files: list[CatalogFileOut] = Field(default_factory=list)
+    # What someone should look at before publishing.
     warnings: list[str] = Field(default_factory=list)
+    # What the export did that needs no action.
+    details: list[str] = Field(default_factory=list)
     errors: list[str] = Field(default_factory=list)
     valid: bool
     # Where each variant came from, for the pull request description.
     provenance: list[str] = Field(default_factory=list)
     # A source.hf read off the weights path, to confirm; never written.
     hf_suggestion: str = ""
+    # Where the perf report came from: "saved:<report id>"; "" when none ships.
+    report_source: str = ""
     hf: str = ""
     display_name: str = ""
     description: str = ""

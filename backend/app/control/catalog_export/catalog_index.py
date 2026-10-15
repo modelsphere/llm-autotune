@@ -83,7 +83,7 @@ async def lookup(
                 *(text(v.get("path") or f"models/{name}/{v.get('id')}.yaml") for v in variants),
             )
     except (httpx.HTTPError, ValueError) as exc:
-        return None, f"could not read the catalog's index ({exc}); the model was treated as new"
+        return None, f"could not read the catalog's index ({exc})"
 
     metadata = _load(meta_text) or {
         k: v for k, v in model.items() if k not in ("variants", "reports")
