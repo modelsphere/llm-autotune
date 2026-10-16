@@ -237,6 +237,10 @@ A frontend plugin imports from `@/plugins/api` only: the API client, `useI18n`,
 building blocks of the platform's own pages, so a plugin's pages look and
 behave like them:
 - **Lists:** `ListFilters` with `useQueryFilters` and `countOptions`;
+- **Loading:** `useFirstLoad` (a page's first load as `loading` and
+  `error`, and a table's empty text while it loads), `PageLoading` (a
+  spinner, or the error with a retry) and `all` (requests at once, not in a
+  row);
 - **At a glance:** `FactTile`, `ScoreBars`, `ConfigChips`, `FlagChips`, the
   status helpers (`campaignStatus`, `runStatus`, `failureLabel`);
 - **Forms:** `WorkloadPicker`, `NightlyWindow`, `InfoHint`;

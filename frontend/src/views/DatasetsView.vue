@@ -17,6 +17,7 @@ import {
 import DatasetDialog from '../components/DatasetDialog.vue'
 import InfoHint from '../components/InfoHint.vue'
 import { apiErrorText } from '../utils/apiError'
+import { useFirstLoad } from '../utils/load'
 import { usePoll } from '../utils/poll'
 import { absoluteTime, exactTime, relativeTime } from '../utils/time'
 
@@ -39,12 +40,17 @@ const frozen = ref<FrozenDataset[]>([])
 const frozenError = ref('')
 
 async function load() {
+  await Promise.all([loadList(), loadFrozen()])
+}
+async function loadList() {
   try {
     list.value = (await api.get('/datasets')).data
     loadError.value = ''
   } catch (error) {
     loadError.value = apiErrorText(error, 'Could not reach LLMBench')
   }
+}
+async function loadFrozen() {
   try {
     frozen.value = (await api.get('/datasets/frozen')).data.frozen
     frozenError.value = ''
@@ -53,6 +59,7 @@ async function load() {
     frozenError.value = apiErrorText(error, 'Could not read the frozen datasets')
   }
 }
+const first = useFirstLoad(load)
 
 function openOnLlmbench() {
   if (list.value?.llmbench_url) {
@@ -71,7 +78,7 @@ const fast = usePoll(() => (collecting.value ? load() : undefined), 5_000)
 const slow = usePoll(load, 60_000)
 
 onMounted(async () => {
-  await load()
+  await first.run()
   fast.start()
   slow.start()
   if (route.query.new) openNew()
@@ -214,7 +221,8 @@ function bandRows(d: ReplayDataset): { band: string; count: number; share: numbe
       <a :href="DOCS" target="_blank" rel="noopener">see the guide</a>.
     </el-alert>
 
-    <el-table :data="datasets" row-key="name" @expand-change="onExpand">
+    <el-table :data="datasets" row-key="name" @expand-change="onExpand"
+      v-loading="first.loading" :empty-text="first.emptyText()">
       <el-table-column type="expand" width="36">
         <template #default="{ row }">
           <div class="detail">
@@ -354,7 +362,8 @@ function bandRows(d: ReplayDataset): { band: string; count: number; share: numbe
       </el-table-column>
 
       <template #empty>
-        <div class="empty muted">
+        <div v-if="first.loading" class="empty muted">{{ first.emptyText() }}</div>
+        <div v-else class="empty muted">
           No datasets yet. A dataset samples one model's recorded requests from the gateway's
           logs, so a campaign can replay real traffic.
           <div><el-button link type="primary" @click="openNew">New dataset</el-button></div>
@@ -377,7 +386,7 @@ function bandRows(d: ReplayDataset): { band: string; count: number; share: numbe
     </div>
     <el-alert v-if="frozenError" type="warning" :closable="false" show-icon class="banner"
       :title="frozenError" />
-    <el-table v-else :data="frozen" row-key="name">
+    <el-table v-else :data="frozen" row-key="name" v-loading="first.loading">
       <el-table-column label="Name" min-width="200">
         <template #default="{ row }">
           <span class="mono">{{ row.name }}</span>
@@ -414,7 +423,8 @@ function bandRows(d: ReplayDataset): { band: string; count: number; share: numbe
         </template>
       </el-table-column>
       <template #empty>
-        <div class="empty muted">
+        <div v-if="first.loading" class="empty muted">{{ first.emptyText() }}</div>
+        <div v-else class="empty muted">
           No frozen datasets. Freeze a sample, or import a dataset downloaded from another
           installation, on LLMBench's datasets page.
         </div>

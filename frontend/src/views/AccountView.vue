@@ -17,6 +17,7 @@ import InfoHint from '../components/InfoHint.vue'
 import { useI18n } from '../i18n'
 import { useAuthStore } from '../stores/auth'
 import { exactTime, relativeTime } from '../utils/time'
+import { useFirstLoad } from '../utils/load'
 
 interface AccountUser {
   id: number
@@ -153,7 +154,8 @@ function lockedReason(user: AccountUser): string {
   return ''
 }
 
-onMounted(load)
+const first = useFirstLoad(load)
+onMounted(first.run)
 </script>
 
 <template>
@@ -238,7 +240,7 @@ onMounted(load)
           {{ t('account.addUser') }}
         </el-button>
       </h3>
-      <el-table :data="users" size="small">
+      <el-table :data="users" size="small" v-loading="first.loading">
         <el-table-column prop="id" :label="t('common.id')" width="70" />
         <el-table-column prop="username" :label="t('login.username')" min-width="180" />
         <el-table-column :label="t('account.role')" width="120">

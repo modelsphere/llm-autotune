@@ -36,6 +36,7 @@ import { absoluteTime } from '../utils/time'
 import { sweptKeysOf } from '../utils/space'
 import { defaultWorkload, specOf, type BenchmarkChoice, type Workload } from '../utils/workload'
 import { fromYaml, toYaml, YamlError } from '../utils/yaml'
+import { all } from '../utils/load'
 
 const router = useRouter()
 const route = useRoute()
@@ -397,27 +398,26 @@ const selectedPolicy = computed<Policy | null>(() => {
 })
 
 async function load() {
-  machines.value = (await api.get('/machines')).data
-  try {
-    groups.value = (await api.get('/machine-groups')).data
-  } catch {
-    groups.value = [] // the group picker just stays empty
-  }
-  try {
-    policies.value = (await api.get('/policies')).data
-  } catch {
-    policies.value = [] // the select just offers the built-ins
-  }
-  searchSpaces.value = (await api.get('/search-spaces')).data
-  objectives.value = (await api.get('/objectives')).data
+  // At once: on a slow link, one after another meant ten round trips before
+  // the form's lists were filled. The extras just stay empty if they fail.
+  const [ms, gs, ps, spaces, objs] = await all(
+    api.get('/machines'),
+    api.get('/machine-groups').catch(() => null),
+    api.get('/policies').catch(() => null),
+    api.get('/search-spaces'),
+    api.get('/objectives'),
+    // These two leave this platform.
+    loadDatasetProfiles(),
+    api.get('/campaigns/benchmarks')
+      .then(({ data }) => (benchmarks.value = data))
+      .catch(() => (benchmarks.value = [])),
+  )
+  machines.value = ms.data
+  groups.value = gs?.data ?? []
+  policies.value = ps?.data ?? []
+  searchSpaces.value = spaces.data
+  objectives.value = objs.data
   if (selectedObjectiveId.value === null) await selectDefaultObjective()
-  // Last: these two leave this platform.
-  await loadDatasetProfiles()
-  try {
-    benchmarks.value = (await api.get('/campaigns/benchmarks')).data
-  } catch {
-    benchmarks.value = []
-  }
 }
 
 /** Preselect an objective rather than leaving it blank: a campaign created
@@ -427,17 +427,15 @@ async function load() {
 // benchmark platform that is briefly unreachable must not stop anyone writing a
 // campaign. The field falls back to free text.
 async function loadDatasetProfiles() {
-  try {
-    datasetProfiles.value = (await api.get('/campaigns/dataset-profiles')).data
-  } catch {
-    datasetProfiles.value = []
-  }
-  // An LLMBench too old to share them just offers none.
-  try {
-    frozenDatasets.value = (await api.get('/datasets/frozen')).data.frozen
-  } catch {
-    frozenDatasets.value = []
-  }
+  await Promise.all([
+    api.get('/campaigns/dataset-profiles')
+      .then(({ data }) => (datasetProfiles.value = data))
+      .catch(() => (datasetProfiles.value = [])),
+    // An LLMBench too old to share them just offers none.
+    api.get('/datasets/frozen')
+      .then(({ data }) => (frozenDatasets.value = data.frozen))
+      .catch(() => (frozenDatasets.value = [])),
+  ])
 }
 
 async function selectDefaultObjective() {
@@ -464,9 +462,11 @@ function openBuilder(path: string) {
 }
 
 async function refreshLists() {
-  searchSpaces.value = (await api.get('/search-spaces')).data
-  objectives.value = (await api.get('/objectives')).data
-  policies.value = (await api.get('/policies')).data
+  const [spaces, objs, ps] = await all(
+    api.get('/search-spaces'), api.get('/objectives'), api.get('/policies'))
+  searchSpaces.value = spaces.data
+  objectives.value = objs.data
+  policies.value = ps.data
   ElMessage.success('List refreshed')
 }
 

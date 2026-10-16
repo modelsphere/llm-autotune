@@ -4,8 +4,10 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { computed, onMounted, ref, watch } from 'vue'
 import { api, type Cluster, type Machine, type MachineGroup, type MachineGroupPreflight, type MachineLifecycle } from '../api/client'
 import InfoHint from '../components/InfoHint.vue'
+import PageLoading from '../components/PageLoading.vue'
 import LinkButton from '../components/LinkButton.vue'
 import { useAuthStore } from '../stores/auth'
+import { all, useFirstLoad } from '../utils/load'
 import { usePoll } from '../utils/poll'
 import { relativeTime } from '../utils/time'
 
@@ -296,18 +298,16 @@ const memberChoices = computed(() =>
 )
 
 async function load() {
-  machines.value = (await api.get('/machines')).data
-  try {
-    groups.value = (await api.get('/machine-groups')).data
-  } catch {
-    groups.value = [] // the fleet list is the page's job; groups are extra
-  }
-  try {
-    clusters.value = (await api.get('/clusters')).data
-  } catch {
-    clusters.value = [] // clusters are an overlay on the machine list
-  }
-  const { data } = await api.get('/machines/lifecycle')
+  const [ms, gs, cs, { data }] = await all(
+    api.get('/machines'),
+    // The fleet list is the page's job; groups and clusters are extras on it.
+    api.get('/machine-groups').catch(() => null),
+    api.get('/clusters').catch(() => null),
+    api.get('/machines/lifecycle'),
+  )
+  machines.value = ms.data
+  groups.value = gs?.data ?? []
+  clusters.value = cs?.data ?? []
   steps.value = data.steps
   lifecycle.value = Object.fromEntries(
     (data.machines as MachineLifecycle[]).map((m) => [m.machine_id, m]),
@@ -727,13 +727,12 @@ function stepClass(machine: Machine, index: number): string {
   return stage.state === 'waiting' ? 'now pending' : 'now'
 }
 
-onMounted(async () => {
-  try {
-    gpuTypes.value = (await api.get('/machines/gpu-types')).data.gpu_types
-  } catch {
-    gpuTypes.value = []
-  }
-  load()
+const first = useFirstLoad(load)
+onMounted(() => {
+  void first.run()
+  api.get('/machines/gpu-types')
+    .then(({ data }) => (gpuTypes.value = data.gpu_types))
+    .catch(() => (gpuTypes.value = []))
   poll.start()
 })
 </script>
@@ -820,7 +819,9 @@ onMounted(async () => {
       </div>
     </div>
 
-    <div v-if="!machines.length" class="empty muted">
+    <PageLoading v-if="!machines.length && (first.loading || first.error)" :error="first.error"
+      @retry="first.run" />
+    <div v-else-if="!machines.length" class="empty muted">
       No machines.
       <el-button v-if="isAdmin" link type="primary" @click="openAddCluster">Add a GPU cluster</el-button>
       <span v-else>An admin adds GPU clusters.</span>

@@ -102,6 +102,9 @@ export default {
   },
 
   common: {
+    loading: 'Loading…',
+    loadFailed: 'Could not load this page',
+    retry: 'Try again',
     cancel: 'Cancel',
     save: 'Save',
     close: 'Close',

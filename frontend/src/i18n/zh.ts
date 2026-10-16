@@ -104,6 +104,9 @@ const zh: typeof en = {
   },
 
   common: {
+    loading: '加载中…',
+    loadFailed: '页面加载失败',
+    retry: '重试',
     cancel: '取消',
     save: '保存',
     close: '关闭',

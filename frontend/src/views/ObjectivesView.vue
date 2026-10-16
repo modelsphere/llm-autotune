@@ -6,6 +6,7 @@ import { api, type MetricSpec, type Objective, type Redline } from '../api/clien
 import InfoHint from '../components/InfoHint.vue'
 import { exactTime, relativeTime } from '../utils/time'
 import { toYaml } from '../utils/yaml'
+import { useFirstLoad } from '../utils/load'
 
 const objectives = ref<Objective[]>([])
 const metrics = ref<MetricSpec[]>([])
@@ -64,6 +65,7 @@ const effectiveDirection = computed(() =>
 async function load() {
   objectives.value = (await api.get('/objectives')).data
 }
+const first = useFirstLoad(load)
 
 async function loadMetrics() {
   const { data } = await api.get('/objectives/metrics')
@@ -194,8 +196,8 @@ function redlinesOf(objective: Objective): string {
 }
 
 onMounted(() => {
-  load()
-  loadMetrics()
+  void first.run()
+  void loadMetrics()
 })
 </script>
 
@@ -214,7 +216,7 @@ onMounted(() => {
       <el-button type="primary" @click="openNew">New objective</el-button>
     </div>
 
-    <el-table :data="objectives">
+    <el-table :data="objectives" v-loading="first.loading" :empty-text="first.emptyText()">
       <el-table-column label="Name" min-width="220">
         <template #default="{ row }">
           <div>

@@ -5,6 +5,7 @@ import { api, type Campaign, type Policy } from '../api/client'
 import LinkButton from '../components/LinkButton.vue'
 import ListFilters from '../components/ListFilters.vue'
 import { useI18n } from '../i18n'
+import { all, useFirstLoad } from '../utils/load'
 import { useRowLink } from '../utils/nav'
 import { countOptions, useQueryFilters } from '../utils/queryFilters'
 import { campaignStatus } from '../utils/status'
@@ -19,15 +20,14 @@ const policies = ref<Policy[]>([])
 const withManaged = ref(false)
 
 async function load() {
-  campaigns.value = (await api.get('/campaigns', {
-    params: { managed: withManaged.value ? 'include' : 'exclude' },
-  })).data
-  try {
-    policies.value = (await api.get('/policies')).data
-  } catch {
-    policies.value = []
-  }
+  const [c, p] = await all(
+    api.get('/campaigns', { params: { managed: withManaged.value ? 'include' : 'exclude' } }),
+    api.get('/policies').catch(() => null),
+  )
+  campaigns.value = c.data
+  policies.value = p?.data ?? []
 }
+const first = useFirstLoad(load)
 
 /** The policy by name: "policy #1" meant looking it up on another page. */
 function policyName(id: number): string {
@@ -73,7 +73,7 @@ const shown = computed(() => {
 const running = computed(() => campaigns.value.filter((c) => c.status === 'active').length)
 const waiting = computed(() => campaigns.value.filter((c) => c.status === 'scheduled').length)
 
-onMounted(load)
+onMounted(first.run)
 </script>
 
 <template>
@@ -97,7 +97,8 @@ onMounted(load)
     <el-checkbox v-if="plugins.length" v-model="withManaged" class="managed-toggle"
       @change="load">{{ t('campaigns.includeManaged') }}</el-checkbox>
 
-    <el-table :data="shown" v-bind="campaignRows" style="cursor: pointer">
+    <el-table :data="shown" v-bind="campaignRows" style="cursor: pointer"
+      v-loading="first.loading" :empty-text="first.emptyText()">
       <el-table-column prop="id" :label="t('common.id')" width="70" />
       <el-table-column :label="t('common.name')" min-width="200">
         <template #default="{ row }">

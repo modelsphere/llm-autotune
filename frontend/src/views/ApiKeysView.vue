@@ -7,6 +7,7 @@ import { api, type ApiKey, type ApiKeyCreated } from '../api/client'
 import InfoHint from '../components/InfoHint.vue'
 import { copyText } from '../utils/clipboard'
 import { exactTime, relativeTime } from '../utils/time'
+import { useFirstLoad } from '../utils/load'
 
 const openDocs = () => window.open('/api/docs', '_blank')
 
@@ -23,6 +24,7 @@ const minted = ref<ApiKeyCreated | null>(null)
 async function load() {
   keys.value = (await api.get('/api-keys')).data
 }
+const first = useFirstLoad(load)
 
 async function create() {
   if (!name.value.trim()) {
@@ -66,7 +68,7 @@ const curlExample = (secret: string) =>
   -H 'Content-Type: application/json' \\
   -d '{"name": "node-24", "host": "198.51.100.24", "gpu_count": 8}'`
 
-onMounted(load)
+onMounted(first.run)
 </script>
 
 <template>
@@ -87,7 +89,7 @@ onMounted(load)
       </div>
     </div>
 
-    <el-table :data="keys" empty-text="No keys yet">
+    <el-table :data="keys" v-loading="first.loading" :empty-text="first.emptyText('No keys yet')">
       <el-table-column label="Name" min-width="180">
         <template #default="{ row }">
           <span :class="row.revoked_at ? 'dead' : ''">{{ row.name }}</span>

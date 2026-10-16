@@ -30,6 +30,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Pages load faster on a slow connection, and say they are loading.**
+  - nginx compresses: the build leaves a `.gz` next to every script and
+    stylesheet, and API responses are compressed as they pass through.
+  - Element Plus is loaded per component, in the pages that use them, and
+    libraries get chunks of their own that stay cached across redeploys.
+    The first download goes from 1.5 MB uncompressed to about 180 kB.
+  - The page shows a spinner from the first byte instead of a blank page,
+    lists show "Loading…" until their rows arrive instead of "No data", and
+    a campaign's page shows a spinner, or the error with a retry, instead of
+    staying blank.
+  - Pages send their requests at once instead of one after another: a
+    campaign's page made up to 11 in a row on every 10-second refresh, the
+    new-campaign form up to 10.
 - Catalog export: a run whose image was named by digest only exported no
   image, so the chart's default engine would have deployed; it now asks for
   the tag. `source.hf` is no longer written from a guess off the weights path:

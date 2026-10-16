@@ -6,6 +6,7 @@ import { api, type Campaign, type Run } from '../api/client'
 import ListFilters from '../components/ListFilters.vue'
 import { useI18n } from '../i18n'
 import { useRowLink } from '../utils/nav'
+import { useFirstLoad } from '../utils/load'
 import { usePoll } from '../utils/poll'
 import { countOptions, useQueryFilters } from '../utils/queryFilters'
 import { failureLabel, isLive, runLabel, runStatus } from '../utils/status'
@@ -36,6 +37,7 @@ async function loadCampaigns() {
   }
 }
 
+const first = useFirstLoad(load)
 watch(selected, () => void load(), { deep: true })
 
 const STATUSES = ['live', 'succeeded', 'failed', 'killed']
@@ -82,8 +84,8 @@ async function stopRun(run: Run) {
 
 const poll = usePoll(load, 10000)
 onMounted(() => {
-  load()
-  loadCampaigns()
+  void first.run()
+  void loadCampaigns()
   poll.start()
 })
 </script>
@@ -92,7 +94,8 @@ onMounted(() => {
   <div class="page">
     <h1 class="page-title">{{ t('runs.title') }}</h1>
     <ListFilters v-model="selected" :fields="filterFields" />
-    <el-table :data="runs" v-bind="runRows" style="cursor: pointer">
+    <el-table :data="runs" v-bind="runRows" style="cursor: pointer"
+      v-loading="first.loading" :empty-text="first.emptyText()">
       <el-table-column prop="id" :label="t('common.id')" width="70" />
       <el-table-column :label="t('runs.campaign')" min-width="200">
         <template #default="{ row }">
@@ -133,7 +136,7 @@ onMounted(() => {
         </template>
       </el-table-column>
       <template #empty>
-        <span class="muted">{{ t('runs.noneMatch') }}</span>
+        <span class="muted">{{ first.emptyText(t('runs.noneMatch')) }}</span>
       </template>
     </el-table>
   </div>

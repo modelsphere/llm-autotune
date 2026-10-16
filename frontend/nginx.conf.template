@@ -3,6 +3,18 @@ server {
     root /usr/share/nginx/html;
     index index.html;
 
+    # Compressed, or a slow link spends seconds on the app before it can
+    # show anything. The build leaves a .gz next to each script and
+    # stylesheet (gzip_static sends it as it is); the API's JSON, list pages
+    # above all, is compressed as it passes through.
+    gzip on;
+    gzip_static on;
+    gzip_proxied any;
+    gzip_comp_level 5;
+    gzip_min_length 1024;
+    gzip_vary on;
+    gzip_types application/json application/javascript text/css text/plain image/svg+xml;
+
     location /api/ {
         # Re-resolve the API's address at request time rather than caching it
         # once at worker start: a redeploy that recreates the API gives it a

@@ -31,10 +31,18 @@ import {
 } from './data'
 import { tr, type Lang } from './strings'
 
-echarts.use([
-  BarChart, LineChart, GridComponent, LegendComponent, MarkLineComponent, TitleComponent,
-  TooltipComponent, SVGRenderer,
-])
+// Registered on first use, not on import: a bundle that only imports
+// something next to the renderer (the plugin API re-exports it) then leaves
+// ECharts out altogether.
+let registered = false
+function registerCharts() {
+  if (registered) return
+  echarts.use([
+    BarChart, LineChart, GridComponent, LegendComponent, MarkLineComponent, TitleComponent,
+    TooltipComponent, SVGRenderer,
+  ])
+  registered = true
+}
 
 // Baseline muted, attempts in strong colours.
 const PALETTE = ['#8c9bb0', '#ee7b30', '#2f9e77', '#7a5cc2', '#d1495b', '#3a7bd5']
@@ -302,6 +310,7 @@ export function mountChart(
 ): MountedChart {
   let width = el.clientWidth || 800
   el.style.height = `${heightFor(width)}px`
+  registerCharts()
   const chart = echarts.init(el, undefined, { renderer: 'svg' })
   chart.setOption(build(width))
   const observer = typeof ResizeObserver !== 'undefined'
