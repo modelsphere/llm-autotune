@@ -136,7 +136,7 @@ defineExpose({ reload: load })
   <div class="campaign-runs">
     <div class="runs-head">
       <span class="muted tiny">
-        {{ runs.length ? t('runs.count', { n: runs.length }) : (loaded ? t('runs.none') : '…') }}
+        {{ runs.length ? t('runs.count', { n: runs.length }) : (loaded ? t('runs.none') : t('common.loading')) }}
       </span>
       <el-button v-if="runs.length" size="small" @click="logOpen = true">
         {{ t('runs.logs') }}

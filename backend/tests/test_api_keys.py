@@ -111,3 +111,16 @@ async def test_a_blank_name_is_refused(env):
     head = await _register(http, "admin")
     r = await http.post("/api-keys", json={"name": "   "}, headers=head)
     assert r.status_code == 422
+
+
+async def test_a_key_answers_who_am_i_and_stops_once_revoked(env):
+    """The API keys page tells people to check a key with GET /api/auth/me."""
+    http, _ = env
+    await _register(http, "admin")
+    alice = await _register(http, "alice")
+    key = await _mint(http, alice, "ci")
+    r = await http.get("/auth/me", headers={"X-API-Key": key["secret"]})
+    assert r.status_code == 200 and r.json()["username"] == "alice"
+    await http.delete(f"/api-keys/{key['id']}", headers=alice)
+    r = await http.get("/auth/me", headers={"X-API-Key": key["secret"]})
+    assert r.status_code == 401

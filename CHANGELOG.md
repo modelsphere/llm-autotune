@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Check an API key from the API keys page**: the page shows the one call
+  that tells you who a key acts as (`GET /api/auth/me` with `X-API-Key`), ready
+  to copy, and a field to try a key from the page. The new-key dialog shows the
+  same call with the new key. `/api/auth/me` now answers for an API key as well
+  as a signed-in browser.
+- **Plugin slots on the Reports page**: `reports.actions` (header buttons) and
+  `reports.sections` (above the list), so a plugin can write reports from there.
+
+### Fixed
+
+- **Account and API keys in the user menu open again.** Clicking them did
+  nothing: the menu's links cancel their own click so the menu can navigate,
+  and Element Plus's dropdown ignores a cancelled click. The links navigate
+  themselves now (a middle or Ctrl/Cmd-click still opens a new tab).
+- **The API keys page is translated**; it was English only. The account page's
+  link to it no longer sits indented, and the help icons no longer warn in the
+  browser console.
+- **The dev server's API proxy matches `/api/` only**, as nginx does: `/api`
+  also caught the `/api-keys` page, which then loaded as an API 404.
+
 ### Changed
 
 - **Export to model catalog writes the catalog's v2 layout**
@@ -30,6 +52,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Pages load faster on a slow connection, and say they are loading.**
+  - nginx compresses: the build leaves a `.gz` next to every script and
+    stylesheet, and API responses are compressed as they pass through.
+  - Element Plus is loaded per component, in the pages that use them, and
+    libraries get chunks of their own that stay cached across redeploys.
+    The first download goes from 1.5 MB uncompressed to about 180 kB.
+  - The page shows a spinner from the first byte instead of a blank page,
+    lists show "Loading…" until their rows arrive instead of "No data", and
+    a campaign's page shows a spinner, or the error with a retry, instead of
+    staying blank.
+  - Pages send their requests at once instead of one after another: a
+    campaign's page made up to 11 in a row on every 10-second refresh, the
+    new-campaign form up to 10.
 - Catalog export: a run whose image was named by digest only exported no
   image, so the chart's default engine would have deployed; it now asks for
   the tag. `source.hf` is no longer written from a guess off the weights path:

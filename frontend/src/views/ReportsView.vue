@@ -1,37 +1,42 @@
 <script setup lang="ts">
+/** Saved reports. Plugins may add actions to the header (`reports.actions`)
+ *  and a section above the list (`reports.sections`), e.g. to write reports
+ *  from here; both get `reload` to refresh the list. */
 import { onMounted, ref } from 'vue'
 import { api, type AgentReport } from '../api/client'
+import InfoHint from '../components/InfoHint.vue'
+import PluginSlot from '../components/PluginSlot.vue'
 import { useI18n } from '../i18n'
+import { useFirstLoad } from '../utils/load'
 import { useRowLink } from '../utils/nav'
 import { exactTime, relativeTime } from '../utils/time'
 
 const { t } = useI18n()
 const reportRows = useRowLink((row: AgentReport) => `/reports/${row.id}`)
 const reports = ref<AgentReport[]>([])
-const loading = ref(true)
 
 async function load() {
-  loading.value = true
-  try {
-    reports.value = (await api.get('/agent/v1/reports')).data
-  } finally {
-    loading.value = false
-  }
+  reports.value = (await api.get('/agent/v1/reports')).data
 }
+const first = useFirstLoad(load)
 
-onMounted(load)
+onMounted(first.run)
 </script>
 
 <template>
   <div class="page">
     <div class="header-row">
       <div>
-        <h1 class="page-title">{{ t('reports.title') }}</h1>
+        <h1 class="page-title">{{ t('reports.title') }}
+          <InfoHint :width="380">{{ t('reports.how') }}</InfoHint>
+        </h1>
         <span class="muted">{{ t('reports.subtitle') }}</span>
       </div>
+      <div class="actions"><PluginSlot name="reports.actions" :props="{ reload: load }" /></div>
     </div>
+    <PluginSlot name="reports.sections" :props="{ reload: load }" />
 
-    <el-table :data="reports" v-loading="loading" :empty-text="t('reports.empty')"
+    <el-table :data="reports" v-loading="first.loading" :empty-text="first.emptyText(t('reports.empty'))"
       v-bind="reportRows" class="clickable">
       <el-table-column :label="t('reports.title')" min-width="280">
         <template #default="{ row }">
@@ -92,4 +97,5 @@ onMounted(load)
 }
 .clickable :deep(.el-table__row) { cursor: pointer; }
 .tag { margin-left: 8px; }
+.actions { display: flex; gap: 8px; }
 </style>

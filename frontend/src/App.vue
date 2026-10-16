@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n, type Locale } from './i18n'
 import { pluginNav, type NavItem } from './plugins'
@@ -76,6 +76,21 @@ function onNavLinkClick(event: MouseEvent) {
   else event.preventDefault()
 }
 
+/** The account menu's links navigate themselves. Element Plus's dropdown item
+ *  ignores a click whose default was prevented (since 2.x), so leaving it to
+ *  the menu's `command` made Account and API keys do nothing when clicked.
+ *  Keyboard use still goes through `command`. */
+const userMenu = ref<{ handleClose: () => void } | null>(null)
+function onMenuLinkClick(event: MouseEvent, path: string) {
+  if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) {
+    event.stopPropagation()
+    return
+  }
+  event.preventDefault()
+  userMenu.value?.handleClose()
+  router.push(path)
+}
+
 function logout() {
   auth.logout()
   router.push('/login')
@@ -117,7 +132,7 @@ function logout() {
       <!-- API keys moved in here from the main nav: it is an account-level
            credential, not one of the working pages, and the top row is for the
            things people move between all day. -->
-      <el-dropdown trigger="click" @command="onCommand">
+      <el-dropdown ref="userMenu" trigger="click" @command="onCommand">
         <span class="user-trigger">
           <span class="avatar">{{ initial }}</span>
           <span class="who">{{ auth.user?.username ?? '' }}</span>
@@ -140,11 +155,11 @@ function logout() {
             </el-dropdown-item>
             <el-dropdown-item divided command="account">
               <a :href="href('/account')" class="dropdown-link"
-                @click="onNavLinkClick">{{ t('nav.account') }}</a>
+                @click="onMenuLinkClick($event, '/account')">{{ t('nav.account') }}</a>
             </el-dropdown-item>
             <el-dropdown-item command="keys">
               <a :href="href('/api-keys')" class="dropdown-link"
-                @click="onNavLinkClick">{{ t('nav.apiKeys') }}</a>
+                @click="onMenuLinkClick($event, '/api-keys')">{{ t('nav.apiKeys') }}</a>
             </el-dropdown-item>
             <el-dropdown-item divided command="logout">
               {{ t('nav.logOut') }}

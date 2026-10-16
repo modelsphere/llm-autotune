@@ -10,7 +10,7 @@ defineProps<{ width?: number }>()
 </script>
 
 <template>
-  <el-tooltip placement="top" :show-after="120" :max-width="width ?? 320" raw-content="false">
+  <el-tooltip placement="top" :show-after="120" :max-width="width ?? 320" :raw-content="false">
     <template #content>
       <div class="body" :style="{ maxWidth: `${width ?? 320}px` }">
         <slot />

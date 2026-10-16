@@ -6,6 +6,7 @@ import { useRouter } from 'vue-router'
 import { api, type Baseline } from '../api/client'
 import InfoHint from '../components/InfoHint.vue'
 import { useI18n } from '../i18n'
+import { useFirstLoad } from '../utils/load'
 import { exactTime, relativeTime } from '../utils/time'
 import { fromYaml, toYaml } from '../utils/yaml'
 
@@ -41,6 +42,7 @@ const form = ref({
 async function load() {
   baselines.value = (await api.get('/baselines')).data
 }
+const first = useFirstLoad(load)
 
 function argsSummary(args: Record<string, unknown>): string {
   const entries = Object.entries(args)
@@ -187,13 +189,11 @@ const capturedNote = computed(
   () => 'Recorded here by hand, or from a pasted command.',
 )
 
-onMounted(async () => {
-  try {
-    gpuTypes.value = (await api.get('/machines/gpu-types')).data.gpu_types
-  } catch {
-    gpuTypes.value = []
-  }
-  load()
+onMounted(() => {
+  void first.run()
+  api.get('/machines/gpu-types')
+    .then(({ data }) => (gpuTypes.value = data.gpu_types))
+    .catch(() => (gpuTypes.value = []))
 })
 </script>
 
@@ -216,8 +216,8 @@ onMounted(async () => {
       </div>
     </div>
 
-    <el-table :data="baselines" row-key="id" :expand-row-keys="expanded"
-      empty-text="No baselines yet — add one by hand, or paste production's command">
+    <el-table :data="baselines" row-key="id" :expand-row-keys="expanded" v-loading="first.loading"
+      :empty-text="first.emptyText('No baselines yet — add one by hand, or paste production\'s command')">
       <el-table-column type="expand">
         <template #default="{ row }">
           <div class="expand">

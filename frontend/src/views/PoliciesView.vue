@@ -7,6 +7,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { computed, onMounted, ref } from 'vue'
 import { api, type Campaign, type Policy } from '../api/client'
 import InfoHint from '../components/InfoHint.vue'
+import { all, useFirstLoad } from '../utils/load'
 import { fromYaml, toYaml, YamlError } from '../utils/yaml'
 
 const POLICIES_REPO = 'https://github.com/modelsphere/llm-autotune-policies'
@@ -47,13 +48,11 @@ const usage = computed(() => {
 })
 
 async function load() {
-  policies.value = (await api.get('/policies')).data
-  try {
-    campaigns.value = (await api.get('/campaigns')).data
-  } catch {
-    campaigns.value = []
-  }
+  const [p, c] = await all(api.get('/policies'), api.get('/campaigns').catch(() => null))
+  policies.value = p.data
+  campaigns.value = c?.data ?? []
 }
+const first = useFirstLoad(load)
 
 function openNew() {
   editingId.value = null
@@ -113,7 +112,7 @@ async function remove(p: Policy) {
   }
 }
 
-onMounted(load)
+onMounted(first.run)
 </script>
 
 <template>
@@ -136,7 +135,7 @@ onMounted(load)
       <el-button type="primary" @click="openNew">Register policy</el-button>
     </div>
 
-    <el-table :data="policies">
+    <el-table :data="policies" v-loading="first.loading">
       <el-table-column label="Name" min-width="200">
         <template #default="{ row }">
           <div>{{ row.name }}
@@ -163,7 +162,8 @@ onMounted(load)
         </template>
       </el-table-column>
       <template #empty>
-        <div class="empty muted">
+        <div v-if="first.loading || first.error" class="empty muted">{{ first.emptyText() }}</div>
+        <div v-else class="empty muted">
           No policies.
           <a :href="POLICIES_REPO" target="_blank" rel="noopener">Policies repo</a>
         </div>

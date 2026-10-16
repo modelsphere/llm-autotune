@@ -18,9 +18,10 @@ import type en from './en'
 const zh: typeof en = {
   reports: {
     title: '评测报告',
-    subtitle: 'Agent 根据已完成的运行写出的性能报告：一个 baseline、为它选定的若干优化尝试，'
+    subtitle: '根据已完成的运行写出的性能报告：一个 baseline、为它选定的若干优化尝试，'
       + '以及平台当时算出的对比数据快照。',
-    empty: '还没有报告。Agent 通过 agent API 保存（POST /api/agent/v1/reports），'
+    empty: '还没有报告',
+    how: '报告通过 agent API 保存（POST /api/agent/v1/reports），由 agent 或生成报告的插件提交；'
       + '见 docs/api/agent-api.md。',
     baseline: 'Baseline 运行',
     attempts: '优化尝试',
@@ -103,7 +104,47 @@ const zh: typeof en = {
     addUserFailed: '添加用户失败',
   },
 
+  apiKeys: {
+    title: 'API keys',
+    about: 'Key 以创建者的权限执行操作，在审计记录里显示为 key:<名称>，不会显示 key 本身。'
+      + '平台只保存它的哈希，所以 key 丢了只能重新创建，无法找回。',
+    docs: 'API 文档',
+    mint: '创建 key',
+    mintTitle: '创建 API key',
+    mintButton: '创建',
+    nameHint: '写明用途：审计记录里显示的就是这个名称。',
+    needName: '请给 key 起个名字：审计记录里显示的就是它',
+    mintFailed: '无法创建 key',
+    name: '名称',
+    owner: '所有者',
+    key: 'Key',
+    lastUsed: '最近使用',
+    never: '从未使用',
+    revoked: '已吊销',
+    revoke: '吊销',
+    revokeTitle: '吊销 API key',
+    revokeConfirm: '确定吊销 "{name}"？还在使用它的调用会从下一次请求开始失败。此操作不可撤销，'
+      + '需要时请重新创建。',
+    empty: '还没有 key',
+    copyNow: '现在复制这个 key',
+    shownOnce: '只显示这一次',
+    copyKey: '复制 key',
+    copied: '已复制',
+    saved: '我已保存',
+    tryTitle: '检查 key',
+    tryAbout: '每次调用都在 X-API-Key 请求头里带上 key。下面这个调用只查询 key 属于谁，'
+      + '在哪里运行都不会改动任何东西：',
+    tryPlaceholder: '粘贴一个 key，在这里试一下',
+    tryButton: '试一下',
+    tryOk: '可用：这个 key 以 {user}（{role}）的身份操作',
+    tryBad: '被拒绝：{why}',
+    leaseExample: '之后，例如租用一台机器：',
+  },
+
   common: {
+    loading: '加载中…',
+    loadFailed: '页面加载失败',
+    retry: '重试',
     cancel: '取消',
     save: '保存',
     close: '关闭',

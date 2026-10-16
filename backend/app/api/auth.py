@@ -3,8 +3,10 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.auth import (
+    Principal,
     create_token,
     get_current_user,
+    get_principal,
     hash_password,
     require_admin,
     verify_password,
@@ -70,8 +72,10 @@ def _me_out(user: User) -> UserOut:
 
 
 @router.get("/me", response_model=UserOut)
-async def me(user: User = Depends(get_current_user)):
-    return _me_out(user)
+async def me(principal: Principal = Depends(get_principal)):
+    """Who is calling: a signed-in browser, or the owner of an API key — so
+    `curl -H 'X-API-Key: …' /api/auth/me` is the way to check a key works."""
+    return _me_out(principal.user)
 
 
 @router.put("/me/contributor", response_model=UserOut)

@@ -35,12 +35,14 @@ import NightlyWindow from '../components/NightlyWindow.vue'
 import ConfigChips from '../components/ConfigChips.vue'
 import CopyButton from '../components/CopyButton.vue'
 import FactTile from '../components/FactTile.vue'
+import PageLoading from '../components/PageLoading.vue'
 import ScoreBars from '../components/ScoreBars.vue'
 import SpaceMap from '../components/SpaceMap.vue'
 import { useI18n } from '../i18n'
 import { beatsBaselineRatio, fmtBaselineDelta } from '../utils/baseline'
 import { campaignToYaml } from '../utils/campaignYaml'
 import { copyText } from '../utils/clipboard'
+import { all, useFirstLoad } from '../utils/load'
 import { usePoll } from '../utils/poll'
 import { sweptKeysOf, type SpaceShape } from '../utils/space'
 import { campaignStatus, failureLabel, isLive, runLabel, runStatus } from '../utils/status'
@@ -74,28 +76,42 @@ const runLog = ref('')
 const policy = ref<Policy | null>(null)
 
 async function load() {
-  campaign.value = (await api.get(`/campaigns/${campaignId}`)).data
-  if (campaign.value?.policy_id != null && policy.value?.id !== campaign.value.policy_id) {
-    // The registry only lists; a deleted registration leaves the id showing.
-    try {
-      const all = (await api.get('/policies')).data as Policy[]
-      policy.value = all.find((p) => p.id === campaign.value!.policy_id) ?? null
-    } catch {
-      policy.value = null
-    }
-  }
-  runs.value = (await api.get(`/campaigns/${campaignId}/runs`)).data
-  candidates.value = (await api.get(`/campaigns/${campaignId}/candidates`)).data
-  machines.value = (await api.get('/machines')).data
-  leaderboard.value = (await api.get(`/campaigns/${campaignId}/leaderboard`)).data
-  parity.value = (await api.get(`/campaigns/${campaignId}/parity`)).data
-  const stages = (await api.get('/machines/lifecycle')).data
-  lifecycle.value = Object.fromEntries(
-    (stages.machines as MachineLifecycle[]).map((m) => [m.machine_id, m]),
+  // At once, not one after another: on a slow link each request in a row
+  // added a whole round trip, and this runs again on every poll.
+  const [c, r, cands, ms, board, par, stages, sched] = await all(
+    api.get(`/campaigns/${campaignId}`),
+    api.get(`/campaigns/${campaignId}/runs`),
+    api.get(`/campaigns/${campaignId}/candidates`),
+    api.get('/machines'),
+    api.get(`/campaigns/${campaignId}/leaderboard`),
+    api.get(`/campaigns/${campaignId}/parity`),
+    api.get('/machines/lifecycle'),
+    api.get(`/campaigns/${campaignId}/schedule`),
   )
-  schedule.value = (await api.get(`/campaigns/${campaignId}/schedule`)).data
-  await loadSession()
+  campaign.value = c.data
+  runs.value = r.data
+  candidates.value = cands.data
+  machines.value = ms.data
+  leaderboard.value = board.data
+  parity.value = par.data
+  lifecycle.value = Object.fromEntries(
+    (stages.data.machines as MachineLifecycle[]).map((m) => [m.machine_id, m]),
+  )
+  schedule.value = sched.data
+  await Promise.all([loadPolicy(), loadSession()])
 }
+
+async function loadPolicy() {
+  if (campaign.value?.policy_id == null || policy.value?.id === campaign.value.policy_id) return
+  // The registry only lists; a deleted registration leaves the id showing.
+  try {
+    const listed = (await api.get('/policies')).data as Policy[]
+    policy.value = listed.find((p) => p.id === campaign.value!.policy_id) ?? null
+  } catch {
+    policy.value = null
+  }
+}
+const first = useFirstLoad(load)
 
 // -- the policy's night: what the search container is doing ------------------
 /** The latest policy session of a policy campaign, with what it is waiting on.
@@ -1167,7 +1183,7 @@ const retryableCount = computed(() => {
 
 const poll = usePoll(load, 10000) // polling for PoC; SSE later
 onMounted(() => {
-  load()
+  void first.run()
   // Linked from the Runs page: open that run's details.
   const linked = Number(route.query.run)
   if (linked) void openRun({ id: linked } as Run)
@@ -1889,6 +1905,7 @@ onMounted(() => {
     <LogDialog v-model="logOpen" :title="`${campaign?.name ?? ''} — ${t('campaign.logs')}`"
       :sources="logSources" />
   </div>
+  <PageLoading v-else :error="first.error" @retry="first.run" />
 </template>
 
 <style scoped>

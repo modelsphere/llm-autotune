@@ -231,12 +231,20 @@ export default plugin
 - **`slots`** fill the places the app marks with `<PluginSlot>`:
   - `account.cards`: cards on the account page, with props `me` and `reload`;
   - `campaign-detail.sections`: sections above a campaign's tabs, with props
-    `campaign` and `reload`.
+    `campaign` and `reload`;
+  - `reports.actions`: buttons in the Reports page's header, and
+    `reports.sections`: sections above its list, both with prop `reload`
+    (refreshes the list).
+
 A frontend plugin imports from `@/plugins/api` only: the API client, `useI18n`,
 `usePoll`, the link and list-filter helpers, the report renderer, and the
 building blocks of the platform's own pages, so a plugin's pages look and
 behave like them:
 - **Lists:** `ListFilters` with `useQueryFilters` and `countOptions`;
+- **Loading:** `useFirstLoad` (a page's first load as `loading` and
+  `error`, and a table's empty text while it loads), `PageLoading` (a
+  spinner, or the error with a retry) and `all` (requests at once, not in a
+  row);
 - **At a glance:** `FactTile`, `ScoreBars`, `ConfigChips`, `FlagChips`, the
   status helpers (`campaignStatus`, `runStatus`, `failureLabel`);
 - **Forms:** `WorkloadPicker`, `NightlyWindow`, `InfoHint`;

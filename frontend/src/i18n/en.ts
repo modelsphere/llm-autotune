@@ -12,10 +12,11 @@
 export default {
   reports: {
     title: 'Reports',
-    subtitle: 'Performance reports an agent wrote from finished runs: one baseline, the '
-      + 'attempts chosen for it, and the platform\'s own comparison frozen alongside.',
-    empty: 'No reports yet. Agents save them through the agent API '
-      + '(POST /api/agent/v1/reports); see docs/api/agent-api.md.',
+    subtitle: 'Performance reports written from finished runs: one baseline, the attempts '
+      + 'chosen for it, and the platform\'s own comparison frozen alongside.',
+    empty: 'No reports yet',
+    how: 'A report is saved through the agent API (POST /api/agent/v1/reports), by an agent '
+      + 'or by a plugin that writes reports; see docs/api/agent-api.md.',
     baseline: 'Baseline run',
     attempts: 'Attempts',
     campaign: 'Campaign',
@@ -101,7 +102,48 @@ export default {
     addUserFailed: 'Could not add the user',
   },
 
+  apiKeys: {
+    title: 'API keys',
+    about: 'A key acts with the authority of whoever minted it, and appears in the audit '
+      + 'trail as key:<name>, never the key itself. Only its hash is stored, so a lost key '
+      + 'is replaced, not recovered.',
+    docs: 'API docs',
+    mint: 'Mint a key',
+    mintTitle: 'Mint an API key',
+    mintButton: 'Mint',
+    nameHint: 'What it is for: it is what the audit trail shows.',
+    needName: 'Give the key a name: it is what appears in the audit trail',
+    mintFailed: 'Could not mint a key',
+    name: 'Name',
+    owner: 'Owner',
+    key: 'Key',
+    lastUsed: 'Last used',
+    never: 'never',
+    revoked: 'revoked',
+    revoke: 'Revoke',
+    revokeTitle: 'Revoke API key',
+    revokeConfirm: 'Revoke "{name}"? Anything still using it starts failing on its next '
+      + 'request. This cannot be undone: mint a new key instead.',
+    empty: 'No keys yet',
+    copyNow: 'Copy this key now',
+    shownOnce: 'Shown once and never again',
+    copyKey: 'Copy key',
+    copied: 'Key copied',
+    saved: 'Done, I have saved it',
+    tryTitle: 'Check a key',
+    tryAbout: 'Every call sends the key in the X-API-Key header. This one only asks who the key '
+      + 'belongs to, so it is safe to run anywhere:',
+    tryPlaceholder: 'Paste a key to try it here',
+    tryButton: 'Try it',
+    tryOk: 'Works: this key acts as {user} ({role})',
+    tryBad: 'Refused: {why}',
+    leaseExample: 'Then, for example, lease a machine:',
+  },
+
   common: {
+    loading: 'Loading…',
+    loadFailed: 'Could not load this page',
+    retry: 'Try again',
     cancel: 'Cancel',
     save: 'Save',
     close: 'Close',

@@ -31,9 +31,15 @@ import {
   diffTable, esc, qualityTable, scenariosTable, setupTable, sloTable, summaryTable,
 } from './tables'
 
-hljs.registerLanguage('json', json)
-hljs.registerLanguage('python', python)
-hljs.registerLanguage('yaml', yaml)
+// On first use, not on import, for the same reason as the charts' (charts.ts).
+let highlighting = false
+function registerLanguages() {
+  if (highlighting) return
+  hljs.registerLanguage('json', json)
+  hljs.registerLanguage('python', python)
+  hljs.registerLanguage('yaml', yaml)
+  highlighting = true
+}
 const SHELL = new Set(['bash', 'shell', 'sh'])
 
 export interface ReportInput {
@@ -67,6 +73,7 @@ function parseParams(body: string): Record<string, string> {
 }
 
 function markdownIt(resolveAsset: (name: string) => string): MarkdownIt {
+  registerLanguages()
   const md = new MarkdownIt({ html: false, linkify: true, typographer: false })
   md.renderer.rules.fence = (tokens, idx) => {
     const token = tokens[idx]

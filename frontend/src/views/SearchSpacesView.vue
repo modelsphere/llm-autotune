@@ -8,6 +8,7 @@ import SpaceMap from '../components/SpaceMap.vue'
 import { copyText } from '../utils/clipboard'
 import { exactTime, relativeTime } from '../utils/time'
 import { fromYaml, toYaml, YamlError } from '../utils/yaml'
+import { useFirstLoad } from '../utils/load'
 
 const spaces = ref<SearchSpace[]>([])
 const catalog = ref<CatalogParam[]>([])
@@ -66,6 +67,7 @@ async function loadCatalog() {
 async function load() {
   spaces.value = (await api.get('/search-spaces')).data
 }
+const first = useFirstLoad(load)
 
 function addRow(name: string) {
   const clean = name.trim()
@@ -396,8 +398,8 @@ function summarize(space: SearchSpace): string {
 }
 
 onMounted(() => {
-  load()
-  loadCatalog()
+  void first.run()
+  void loadCatalog()
 })
 </script>
 
@@ -419,7 +421,7 @@ onMounted(() => {
       <el-button type="primary" @click="openNew">New search space</el-button>
     </div>
 
-    <el-table :data="spaces">
+    <el-table :data="spaces" v-loading="first.loading" :empty-text="first.emptyText()">
       <el-table-column label="Name" min-width="200">
         <template #default="{ row }">
           <div>{{ row.name }}</div>
