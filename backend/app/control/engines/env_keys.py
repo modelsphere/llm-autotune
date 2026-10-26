@@ -3,7 +3,7 @@
 Some engine switches exist only as environment variables (sglang reads
 hundreds of `SGLANG_*`, vllm as many `VLLM_*`), so a config that can only
 hold command-line flags cannot reach them. A config names one as
-`env.SGLANG_ENABLE_SPEC_V2: true` — still a flat dict of scalars, so it
+`env.SGLANG_ENABLE_OVERLAP_PLAN_STREAM: true` — still a flat dict of scalars, so it
 hashes, compares, sweeps in a search space and deviates like any flag — and
 the platform splits those keys off at the launch boundary into the
 container's environment, over the campaign's own `extra_env`.

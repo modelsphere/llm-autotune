@@ -46,6 +46,10 @@ class Entry:
     # reads it, when nothing else describes it).
     help_source: str = ""
     where: str = ""  # file:line in the engine where it is read
+    section: str = ""  # the engine's own grouping ("DeepGEMM", "AMD & ROCm")
+    # Vendor/architecture tags it only applies to, as read from its name and
+    # section ("amd" for an AITER or ROCm switch); empty = any hardware.
+    hardware: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -76,6 +80,7 @@ def from_row(row: Any) -> Vocabulary:
         Entry(**{
             **{k: v for k, v in e.items() if k in fields},
             "choices": tuple(e.get("choices") or ()),
+            "hardware": tuple(e.get("hardware") or ()),
         })
         for e in row.entries or []
     ]
@@ -110,8 +115,9 @@ def _applies(label: Label, tags: frozenset[str]) -> bool:
 
 
 def annotate(vocab: Vocabulary, gpu_type: str = "") -> list[dict[str, Any]]:
-    """Every entry with its recommendation level, best first. An entry
-    labeled only for other hardware is left out: it cannot help here."""
+    """Every entry with its recommendation level, best first. An entry for
+    other hardware (by its label, or by what the engine says it is for) is
+    left out: it cannot help here."""
     tags = hardware_tags(gpu_type)
     labels = {(lb.kind, lb.name): lb for lb in load_labels(vocab.engine)}
     out: list[dict[str, Any]] = []
@@ -119,8 +125,11 @@ def annotate(vocab: Vocabulary, gpu_type: str = "") -> list[dict[str, Any]]:
         label = labels.get((entry.kind, entry.name))
         if label is not None and not _applies(label, tags):
             continue
+        if label is None and tags and entry.hardware and not tags & set(entry.hardware):
+            continue
         row = asdict(entry)
         row["choices"] = list(entry.choices)
+        row["hardware"] = list(entry.hardware)
         row["level"] = label.level if label else "unknown"
         row["when"] = label.when if label else ""
         out.append(row)

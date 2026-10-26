@@ -378,6 +378,25 @@ DEFAULT_FORBIDDEN_PARAMS: tuple[str, ...] = (
     "override_generation_config",
     "preferred_sampling_params",
     "sampling_defaults",
+    # Environment variables (env.<NAME> keys) that change what the model
+    # answers rather than how fast: reasoning budgets and defaults, clipped
+    # outputs, approximate attention, weight/activation/state precision.
+    "env.*THINK*",
+    "env.*REASONING*",
+    "env.*MAX_NEW_TOKENS_LIMIT*",
+    "env.*SKIP_SOFTMAX*",
+    "env.*GREEDY*",
+    "env.*_DTYPE",
+    "env.*PRECISION*",
+    "env.*QUANT*",
+    "env.*FP4*",
+    "env.*INT4*",
+    "env.*MXFP*",
+    "env.*IGNORED_LAYERS*",
+    "env.*LOW_PRECISION*",
+    "env.*MULTIPLE_REDUCTION*",
+    "env.*CONTEXT_LEN*",
+    "env.*CHAT_TEMPLATE*",
 )
 
 

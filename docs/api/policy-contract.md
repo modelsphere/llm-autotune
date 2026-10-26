@@ -363,7 +363,7 @@ reported without refusing by `POST /configs/check` below.
 **Environment variables (1.5).** Some engine switches exist only as
 environment variables (`SGLANG_*`, `VLLM_*`). A config sets one as an
 `env.<NAME>` key, still a flat scalar: `{"tp_size": 2,
-"env.SGLANG_ENABLE_SPEC_V2": true}`. The platform keeps these keys off the
+"env.SGLANG_ENABLE_OVERLAP_PLAN_STREAM": true}`. The platform keeps these keys off the
 command line and puts them into the engine container's environment, over the
 campaign's `extra_env`; a boolean becomes `1`/`0`, anything else its string. A
 search space can sweep them like any parameter, and they travel with a winner
@@ -593,7 +593,7 @@ its docs have one, and the platform's recommendation:
 GET /api/policy/v1/engine/vocabulary?kind=env&level=mid&query=spec
 → {"status": "ok", "engine": "sglang", "engine_version": "0.5.19", "total": 1,
    "notes": [], "entries": [
-     {"kind": "env", "name": "SGLANG_ENABLE_SPEC_V2", "type": "bool", "default": false,
+     {"kind": "env", "name": "SGLANG_ENABLE_OVERLAP_PLAN_STREAM", "type": "bool", "default": false,
       "choices": [], "help": "…", "help_source": "docs", "where": "…",
       "level": "high", "when": "speculative decoding on"}]}
 ```

@@ -132,7 +132,7 @@ Use these only if you need them.
 
 - **Environment variables (contract 1.5).** Set an engine switch that exists
   only as an environment variable with an `env.<NAME>` key in the settings,
-  e.g. `"env.SGLANG_ENABLE_SPEC_V2": true`. `GET /engine/vocabulary` lists the
+  e.g. `"env.SGLANG_ENABLE_OVERLAP_PLAN_STREAM": true`. `GET /engine/vocabulary` lists the
   flags and variables the campaign's engine image reads, with what each does
   and a recommendation (`high`, `mid`, `low`, `unknown`) of which are worth
   trying. A variable the image does not read is refused, since the engine

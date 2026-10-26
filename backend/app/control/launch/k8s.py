@@ -1719,6 +1719,39 @@ class K8sDriver(DeploymentDriver):
         checks.extend(self._probe_job(api, machine, image, model_path, policy_images, timeout))
         return checks
 
+    def run_in_image(
+        self, machine: MachineInfo, image: str, command: str, timeout: int
+    ) -> tuple[str, str]:
+        """A Job on the machine's node (render_image_job): its log, and the
+        digest the node resolved the image to."""
+        api = self.api
+        name = f"autotune-vocab-{secrets.token_hex(4)}"
+        api.apply(render_image_job(name, machine, image, command, self.settings))
+        try:
+            deadline = time.monotonic() + timeout
+            while True:
+                pods = api.list("pods", label_selector=f"{PREFLIGHT_LABEL}={name}")
+                phase = ((pods[0].get("status") or {}).get("phase") if pods else "") or ""
+                if phase in ("Succeeded", "Failed"):
+                    break
+                if time.monotonic() >= deadline:
+                    raise RuntimeError(
+                        f"did not finish in {timeout}s (pod phase {phase or 'none'})"
+                    )
+                time.sleep(3)
+            statuses = (pods[0].get("status") or {}).get("containerStatuses") or []
+            digest = str((statuses[0] if statuses else {}).get("imageID") or "")
+            digest = digest.removeprefix("docker-pullable://")
+            out = api.logs(f"{PREFLIGHT_LABEL}={name}", tail=100)
+            if phase == "Failed":
+                raise RuntimeError(f"the job failed: {out.strip()[-1500:]}")
+            return out, digest
+        finally:
+            try:
+                api.delete("job", name)
+            except Exception:  # noqa: BLE001 — labelled; it reaps itself after 600 s
+                logger.warning("could not delete vocabulary job %s", name)
+
     def model_presence(
         self,
         machine: MachineInfo,
@@ -2001,6 +2034,53 @@ def render_preflight_job(
         },
     }
     return job, reads_log
+
+
+def render_image_job(
+    name: str, machine: MachineInfo, image: str, command: str, settings: Settings
+) -> dict:
+    """A Job that runs one shell line in `image` on the machine's node, with
+    no cards: how the engine vocabulary is read from the image itself. Room
+    for importing an engine (torch included), nothing more."""
+    container: dict[str, Any] = {
+        "name": "engine",
+        "image": image,
+        "command": ["sh", "-c", command],
+        "env": ([{"name": "NVIDIA_VISIBLE_DEVICES", "value": "void"},
+                 {"name": "NVIDIA_DISABLE_REQUIRE", "value": "1"}]
+                if settings.k8s_gpu_resource.startswith("nvidia.com/") else []),
+        "resources": {
+            "requests": {"cpu": "500m", "memory": "2Gi"},
+            "limits": {"cpu": "2", "memory": "8Gi"},
+        },
+    }
+    pod_spec: dict[str, Any] = {
+        "restartPolicy": "Never",
+        "automountServiceAccountToken": False,
+        "terminationGracePeriodSeconds": 0,
+        "containers": [container],
+    }
+    selector = _node_selector_pairs(machine.node_selector, settings)
+    if selector:
+        pod_spec["nodeSelector"] = selector
+    tolerations = _tolerations(1, settings)
+    if tolerations:
+        pod_spec["tolerations"] = tolerations
+    pull_secrets = _image_pull_secrets(settings)
+    if pull_secrets:
+        pod_spec["imagePullSecrets"] = pull_secrets
+    labels = {MANAGED_LABEL: "true", PREFLIGHT_LABEL: name}
+    return {
+        "apiVersion": "batch/v1",
+        "kind": "Job",
+        "metadata": {"name": name, "labels": labels},
+        "spec": {
+            "backoffLimit": 0,
+            "ttlSecondsAfterFinished": 600,
+            "activeDeadlineSeconds": 3600,
+            "template": {"metadata": {"labels": labels}, "spec": pod_spec},
+        },
+    }
 
 
 class ProbeVerdict:

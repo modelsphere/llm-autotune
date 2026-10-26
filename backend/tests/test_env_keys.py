@@ -16,8 +16,8 @@ from app.db.models import Campaign, EngineVocabulary
 from tests.test_policy_sessions import _boot, night  # noqa: F401  (night is a fixture)
 
 ENTRIES = [
-    {"kind": "env", "name": "SGLANG_ENABLE_SPEC_V2", "type": "bool", "default": False,
-     "help": "Use the v2 speculative decoding loop.", "help_source": "docs"},
+    {"kind": "env", "name": "SGLANG_ENABLE_OVERLAP_PLAN_STREAM", "type": "bool", "default": False,
+     "help": "Plan the next step on a separate stream (Overlap Spec V2).", "help_source": "docs"},
     {"kind": "env", "name": "SGLANG_USE_1STAGE_ALLREDUCE", "type": "bool", "default": False,
      "help": "1-stage all-reduce kernel.", "help_source": "docs"},
     {"kind": "env", "name": "SGLANG_LOG_GC", "type": "bool", "default": False},
@@ -25,7 +25,7 @@ ENTRIES = [
      "help": "Tokens per prefill chunk.", "help_source": "engine"},
 ]
 LABELS = (
-    vocab_mod.Label("env", "SGLANG_ENABLE_SPEC_V2", "high", when="speculative decoding on"),
+    vocab_mod.Label("env", "SGLANG_ENABLE_OVERLAP_PLAN_STREAM", "high", when="speculative decoding on"),
     vocab_mod.Label("env", "SGLANG_USE_1STAGE_ALLREDUCE", "mid", hardware=("amd",)),
     vocab_mod.Label("flag", "chunked_prefill_size", "mid"),
     vocab_mod.Label("env", "SGLANG_NOT_IN_THIS_IMAGE", "high"),
@@ -43,19 +43,19 @@ async def _store_vocabulary(http, image="sglang:test"):
 
 def test_env_keys_split_off_and_render_as_the_engines_read_them():
     args, env = split_env({
-        "tp": 2, "env.SGLANG_ENABLE_SPEC_V2": True, "env.SGLANG_OFF": False,
+        "tp": 2, "env.SGLANG_ENABLE_OVERLAP_PLAN_STREAM": True, "env.SGLANG_OFF": False,
         "env.SGLANG_INIT_NEW_TOKEN_RATIO": 0.5, "env.VLLM_ALL2ALL_BACKEND": "deepep",
     })
     assert args == {"tp": 2}
     # Booleans as 1/0: vllm reads several of its switches with int().
     assert env == {
-        "SGLANG_ENABLE_SPEC_V2": "1", "SGLANG_OFF": "0",
+        "SGLANG_ENABLE_OVERLAP_PLAN_STREAM": "1", "SGLANG_OFF": "0",
         "SGLANG_INIT_NEW_TOKEN_RATIO": "0.5", "VLLM_ALL2ALL_BACKEND": "deepep",
     }
 
 
 def test_env_keys_never_reach_the_command_line():
-    argv = render_args({"tp": 2, "env.SGLANG_ENABLE_SPEC_V2": True}, "sglang")
+    argv = render_args({"tp": 2, "env.SGLANG_ENABLE_OVERLAP_PLAN_STREAM": True}, "sglang")
     assert argv == ["--tp-size", "2"]
 
 
@@ -79,7 +79,7 @@ def test_placement_credentials_and_bad_names_are_refused():
 def test_the_platforms_own_search_refuses_placement_env_too():
     ctx = ValidationContext(gpu_count=8, engine="sglang")
     assert "placement" in validate_config({"env.CUDA_VISIBLE_DEVICES": "0"}, ctx)
-    assert validate_config({"tp": 2, "env.SGLANG_ENABLE_SPEC_V2": True}, ctx) is None
+    assert validate_config({"tp": 2, "env.SGLANG_ENABLE_OVERLAP_PLAN_STREAM": True}, ctx) is None
 
 
 def test_a_winners_env_keys_land_in_its_deployable_env():
@@ -107,10 +107,10 @@ async def test_check_launch_and_the_container_env(night):  # noqa: F811
     policy = await _boot(supervisor, driver, http)
     assert (await policy.get("/session")).json()["services"]["env_keys"] is True
 
-    config = {"tp_size": 2, "env.SGLANG_ENABLE_SPEC_V2": True}
+    config = {"tp_size": 2, "env.SGLANG_ENABLE_OVERLAP_PLAN_STREAM": True}
     checked = (await policy.post("/configs/check", json={"engine_args": config})).json()
     assert checked["ok"] is True, checked["problems"]
-    assert checked["env"] == {"SGLANG_ENABLE_SPEC_V2": "1"}
+    assert checked["env"] == {"SGLANG_ENABLE_OVERLAP_PLAN_STREAM": "1"}
     assert not any(a.startswith("--env") for a in checked["command"])
 
     bad = await policy.post("/configs/check", json={"engine_args": {
@@ -123,11 +123,11 @@ async def test_check_launch_and_the_container_env(night):  # noqa: F811
 
     launched = await policy.post("/launches", json={"engine_args": config, "gpu_indices": [0, 1]})
     assert launched.status_code == 201, launched.text
-    assert launched.json()["config"]["env.SGLANG_ENABLE_SPEC_V2"] is True
+    assert launched.json()["config"]["env.SGLANG_ENABLE_OVERLAP_PLAN_STREAM"] is True
     for _ in range(3):
         supervisor.tick()
     [spec] = [s for s in specs if s.run_id == launched.json()["id"]]
-    assert spec.env["SGLANG_ENABLE_SPEC_V2"] == "1"
+    assert spec.env["SGLANG_ENABLE_OVERLAP_PLAN_STREAM"] == "1"
     assert not any(k.startswith("env.") for k in spec.engine_args)
 
 
@@ -140,7 +140,7 @@ def test_labels_rank_entries_and_drop_what_does_not_apply(monkeypatch):
     # The AMD-only switch is gone on an H100; a label for a switch the image
     # lacks never appears; unlabeled entries are "unknown", last.
     assert [(r["name"], r["level"]) for r in rows] == [
-        ("SGLANG_ENABLE_SPEC_V2", "high"),
+        ("SGLANG_ENABLE_OVERLAP_PLAN_STREAM", "high"),
         ("chunked_prefill_size", "mid"),
         ("SGLANG_LOG_GC", "unknown"),
     ]
@@ -149,7 +149,7 @@ def test_labels_rank_entries_and_drop_what_does_not_apply(monkeypatch):
         r["name"] for r in vocab_mod.annotate(vocab, "")  # unknown card keeps it
     }
     assert [r["name"] for r in vocab_mod.lookup(rows, kind="env", level="mid")] == [
-        "SGLANG_ENABLE_SPEC_V2"
+        "SGLANG_ENABLE_OVERLAP_PLAN_STREAM"
     ]
     assert [r["name"] for r in vocab_mod.lookup(rows, query="prefill")] == [
         "chunked_prefill_size"
@@ -167,17 +167,17 @@ async def test_an_env_var_the_image_does_not_read_is_refused_with_the_near_names
     await _store_vocabulary(http)
     policy = await _boot(supervisor, driver, http)
     body = (await policy.post("/configs/check", json={"engine_args": {
-        "tp_size": 2, "env.SGLANG_ENABLE_SPECV2": True}})).json()
+        "tp_size": 2, "env.SGLANG_ENABLE_OVERLAP_PLAN_STREEM": True}})).json()
     assert body["ok"] is False
     [problem] = body["problems"]
     assert problem["kind"] == "unknown_env"
-    assert "env.SGLANG_ENABLE_SPEC_V2" in problem["message"]
+    assert "env.SGLANG_ENABLE_OVERLAP_PLAN_STREAM" in problem["message"]
 
 
 async def test_without_a_vocabulary_env_keys_are_refused_unless_the_campaign_says_warn(night):  # noqa: F811
     supervisor, driver, http = night
     policy = await _boot(supervisor, driver, http)
-    config = {"tp_size": 2, "env.SGLANG_ENABLE_SPEC_V2": True}
+    config = {"tp_size": 2, "env.SGLANG_ENABLE_OVERLAP_PLAN_STREAM": True}
     refused = (await policy.post("/configs/check", json={"engine_args": config})).json()
     assert refused["ok"] is False and refused["problems"][0]["kind"] == "unknown_env"
 
@@ -199,6 +199,6 @@ async def test_the_vocabulary_endpoint(night, monkeypatch):  # noqa: F811
     body = (await policy.get("/engine/vocabulary?kind=env")).json()
     assert body["status"] == "ok" and body["engine_version"] == "0.5.19"
     # The fixture's machine is an H100: the AMD-only switch is left out.
-    assert [e["name"] for e in body["entries"]] == ["SGLANG_ENABLE_SPEC_V2", "SGLANG_LOG_GC"]
+    assert [e["name"] for e in body["entries"]] == ["SGLANG_ENABLE_OVERLAP_PLAN_STREAM", "SGLANG_LOG_GC"]
     high = (await policy.get("/engine/vocabulary?level=high")).json()
-    assert [e["name"] for e in high["entries"]] == ["SGLANG_ENABLE_SPEC_V2"]
+    assert [e["name"] for e in high["entries"]] == ["SGLANG_ENABLE_OVERLAP_PLAN_STREAM"]

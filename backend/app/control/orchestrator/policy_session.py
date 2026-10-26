@@ -587,6 +587,26 @@ class PolicySessionEngine:
         logger.info(
             "policy session %d launched %s on %s", session.id, policy.image, target.name
         )
+        self._read_vocabulary(db, campaign, target)
+
+    def _read_vocabulary(self, db: Session, campaign: Campaign, target) -> None:
+        """Read the engine image's flags and env vars, in the background, if
+        the platform has none for it yet: what a policy's env keys are checked
+        against, and what GET /engine/vocabulary serves."""
+        from app.control.engines import vocabulary_store
+
+        try:
+            if not campaign.image or not vocabulary_store.needs_reading(
+                db, campaign.engine, campaign.image
+            ):
+                return
+            info = self.sup._machine_info(target)
+            vocabulary_store.read_in_background(
+                self.sup.session_factory, self.sup._driver_for(info), info,
+                campaign.engine, campaign.image,
+            )
+        except Exception:  # noqa: BLE001 — an extra, never a reason to fail a launch
+            logger.exception("could not start reading the vocabulary of %s", campaign.image)
 
     # -- STARTING: wait for the first heartbeat --------------------------------
 

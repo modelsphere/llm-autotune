@@ -12,7 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Environment variables in configs (contract 1.5).** Some engine switches
   exist only as environment variables, which a config of command-line flags
   could not reach. A config, a search space or an agent's proposal now sets
-  one as an `env.<NAME>` key (`"env.SGLANG_ENABLE_SPEC_V2": true`). The
+  one as an `env.<NAME>` key (`"env.SGLANG_ENABLE_OVERLAP_PLAN_STREAM": true`). The
   platform puts it into the engine container's env over the campaign's
   `extra_env`, keeps it off the command line, and carries it into a winner's
   deployable config. Placement and credentials are refused (device
