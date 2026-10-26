@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Environment variables in configs (contract 1.5).** Some engine switches
+  exist only as environment variables, which a config of command-line flags
+  could not reach. A config, a search space or an agent's proposal now sets
+  one as an `env.<NAME>` key (`"env.SGLANG_ENABLE_SPEC_V2": true`). The
+  platform puts it into the engine container's env over the campaign's
+  `extra_env`, keeps it off the command line, and carries it into a winner's
+  deployable config. Placement and credentials are refused (device
+  visibility, rendezvous, fabric, ports, tokens), and so is a name the
+  campaign's image does not read, since the engine would ignore it silently.
+- **Engine vocabulary** (`GET /api/policy/v1/engine/vocabulary`, migration
+  `021_engine_vocabularies`). The flags and environment variables an engine
+  image reads, read from that image, with each one's description and a
+  hand-written recommendation (`high`, `mid`, `low`, `unknown`, from
+  `backend/app/control/engines/labels/`) so a policy finds the few worth
+  trying among hundreds. A label applies only to a switch the image has and
+  hardware it names.
+
 - **Where a delegated policy pod runs** (`AUTOTUNE_K8S_POLICY_NODE_SELECTOR`,
   `k=v,k2=v2`). Such a pod asks for no cards and had no node selector, so it
   could land on any node, including one that cannot reach what the policy

@@ -140,8 +140,10 @@ def _with_named(result: Result, campaign: Campaign, candidate: Candidate) -> Res
 
 
 def _serve_command(run: Run, candidate: Candidate, campaign: Campaign) -> str:
-    """The engine command the run's config renders to, single-node."""
+    """The engine command the run's config renders to, single-node, led by
+    the env vars the config sets."""
     from app.control.engines import get_adapter
+    from app.control.engines.env_keys import split_env
 
     if is_baseline_config(candidate.config):
         return ""
@@ -153,10 +155,11 @@ def _serve_command(run: Run, candidate: Candidate, campaign: Campaign) -> str:
             image=campaign.image,
             model_path=campaign.model_path,
             served_model_name=campaign.served_model_name,
-            engine_args=candidate.config,
+            engine_args=split_env(candidate.config or {})[0],
             port=run.service_port or campaign.service_port,
         )
-        return shlex.join(get_adapter(campaign.engine).build_command(spec))
+        env = [f"{k}={v}" for k, v in sorted(split_env(candidate.config or {})[1].items())]
+        return shlex.join([*env, *get_adapter(campaign.engine).build_command(spec)])
     except Exception:  # noqa: BLE001 — a display aid; the run detail never fails on it
         return ""
 

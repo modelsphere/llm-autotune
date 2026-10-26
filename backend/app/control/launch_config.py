@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, Field
 
+from app.control.engines.env_keys import split_env
 from app.control.engines.flags import normalize_args
 from app.control.search.validation import cards_used
 
@@ -74,6 +75,8 @@ class LaunchConfig(BaseModel):
         if engine_args is None:
             space = getattr(campaign, "search_space", None) or {}
             engine_args = dict(space.get("base") or {})
+        # A config's `env.<NAME>` keys are part of the deployment's env.
+        engine_args, config_env = split_env(engine_args or {})
         return cls(
             engine=campaign.engine,
             image=campaign.image or "",
@@ -81,7 +84,7 @@ class LaunchConfig(BaseModel):
             served_model_name=campaign.served_model_name or "",
             service_port=int(campaign.service_port or 0),
             engine_args=dict(engine_args or {}),
-            extra_env=dict(campaign.extra_env or {}),
+            extra_env={**(campaign.extra_env or {}), **config_env},
             extra_volumes=dict(campaign.extra_volumes or {}),
             gpu_type=gpu_type,
         ).normalized()

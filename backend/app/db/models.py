@@ -1619,3 +1619,26 @@ class AgentReport(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
+
+
+class EngineVocabulary(Base):
+    """The flags and environment variables one engine image reads, dumped from
+    the image itself (control/engines/vocabulary.py). One row per image digest;
+    a moved tag dumps again. `status` "partial" keeps what could be read (the
+    flags without the env list, say); "failed" keeps only the reason."""
+
+    __tablename__ = "engine_vocabularies"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    engine: Mapped[str] = mapped_column(String(16))
+    image: Mapped[str] = mapped_column(String(512), index=True)
+    image_digest: Mapped[str] = mapped_column(String(128), default="", server_default="")
+    engine_version: Mapped[str] = mapped_column(String(64), default="", server_default="")
+    status: Mapped[str] = mapped_column(String(16), default="ok", server_default="ok")
+    # [{kind, name, type, default, choices, help, help_source, where}, ...]
+    entries: Mapped[list] = mapped_column(JsonCol, default=list)
+    # What could not be read, and where descriptions came from.
+    notes: Mapped[list] = mapped_column(JsonCol, default=list)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )

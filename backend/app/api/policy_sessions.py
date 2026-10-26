@@ -32,7 +32,9 @@ from app.agent.loader import load_run
 from app.agent.parts import environment_part, results_part
 from app.control.baseline import resolve_baseline
 from app.control.engine_command import PLACEMENT_FLAGS, round_trip_problems
+from app.control.engines import vocabulary as vocab_mod
 from app.control.engines.base import render_args
+from app.control.engines.env_keys import env_problems, is_env_key, split_env
 from app.control.engines.flags import known_flags, normalize_args
 from app.control.orchestrator.policy_lifecycle import (
     PENDING_CONTENDER_STATES,
@@ -56,6 +58,7 @@ from app.db.models import (
     CandidateKind,
     CandidateStatus,
     ContenderStatus,
+    EngineVocabulary,
     Event,
     Machine,
     Policy,
@@ -110,6 +113,7 @@ from app.schemas.policy import (
     SessionManifest,
     TrialIn,
     TrialOut,
+    VocabularyOut,
 )
 from app.staging import SCREEN, VERIFY
 from app.staging import objective as stage_objective
@@ -164,8 +168,50 @@ def _canonical(config: dict[str, Any], campaign: Campaign) -> dict[str, Any]:
     return prune_inactive(merged, space)
 
 
+async def _vocabulary(db: AsyncSession, campaign: Campaign) -> vocab_mod.Vocabulary | None:
+    """The newest usable vocabulary dumped from the campaign's image."""
+    row = (
+        await db.execute(
+            select(EngineVocabulary)
+            .where(
+                EngineVocabulary.image == campaign.image,
+                EngineVocabulary.engine == campaign.engine,
+                EngineVocabulary.status != "failed",
+            )
+            .order_by(EngineVocabulary.id.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    return vocab_mod.from_row(row) if row is not None else None
+
+
+def _env_vocabulary_problems(
+    canonical: dict[str, Any], campaign: Campaign, vocab: vocab_mod.Vocabulary | None
+) -> list[ConfigProblem]:
+    """Env keys the image does not read; with no env vocabulary for the image,
+    every env key unless the campaign lets them through unchecked."""
+    if not any(is_env_key(k) for k in canonical):
+        return []
+    if vocab is not None and vocab.names("env"):
+        return [ConfigProblem(**p) for p in vocab_mod.unknown_env_problems(canonical, vocab)]
+    if settings_of(campaign).env_without_vocabulary == "warn":
+        return []
+    return [
+        ConfigProblem(
+            kind="unknown_env", param=k,
+            message=f"{k}: the platform has no list of the environment variables "
+            f"{campaign.image} reads yet, so it cannot tell whether the engine would "
+            "ignore this one",
+        )
+        for k in sorted(canonical) if is_env_key(k)
+    ]
+
+
 def _config_problems(
-    config: dict[str, Any], campaign: Campaign, machine: Machine | None
+    config: dict[str, Any],
+    campaign: Campaign,
+    machine: Machine | None,
+    vocab: vocab_mod.Vocabulary | None = None,
 ) -> tuple[dict[str, Any], list[ConfigProblem]]:
     """The canonical config, and every reason a launch of it would be refused.
 
@@ -189,12 +235,17 @@ def _config_problems(
             message=f"{hit['param']} is forbidden for this campaign (matches "
             f"{hit['pattern']!r}): leave it at the campaign's value",
         ))
+    args, _env = split_env(canonical)
     for found in round_trip_problems(
-        {k: v for k, v in canonical.items() if k not in PLACEMENT_FLAGS}, campaign.engine
+        {k: v for k, v in args.items() if k not in PLACEMENT_FLAGS}, campaign.engine
     ):
         problems.append(ConfigProblem(**found))
+    for found in env_problems(canonical):
+        problems.append(ConfigProblem(**found))
+    if not any(p.param.startswith("env.") for p in problems):
+        problems += _env_vocabulary_problems(canonical, campaign, vocab)
     error = validate_config(
-        canonical,
+        args,
         ValidationContext(
             gpu_count=(machine.gpu_count if machine else 0) or 0, engine=campaign.engine
         ),
@@ -205,12 +256,15 @@ def _config_problems(
 
 
 def _validated(
-    config: dict[str, Any], campaign: Campaign, machine: Machine | None
+    config: dict[str, Any],
+    campaign: Campaign,
+    machine: Machine | None,
+    vocab: vocab_mod.Vocabulary | None = None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     """Canonical config + deviations, or a 422 saying everything that is wrong
     with it: placement, a forbidden parameter, a value that cannot round-trip
     through a command line, or a safety failure."""
-    canonical, problems = _config_problems(config, campaign, machine)
+    canonical, problems = _config_problems(config, campaign, machine, vocab)
     if problems:
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_ENTITY, "; ".join(p.message for p in problems)
@@ -229,7 +283,7 @@ async def _validated_or_audit(
     refused config never becomes a trial, so without this the only trace of
     what a policy tried and was told no is the policy's own log."""
     try:
-        return _validated(config, campaign, machine)
+        return _validated(config, campaign, machine, await _vocabulary(db, campaign))
     except HTTPException as exc:
         _audit(
             db, caller, "policy_config_refused",
@@ -659,6 +713,8 @@ async def manifest(
             },
             state=True,
             diagnostics=True,
+            env_keys=True,
+            vocabulary=True,
             history=True,
         ),
         prior=prior,
@@ -1100,9 +1156,11 @@ async def check_config(
     echo, the rendered command, catalog warnings, deviations — without
     spending a launch. Never 422s: the answer is the point."""
     _session, campaign, machine = await _context(db, caller)
-    canonical, problems = _config_problems(body.engine_args, campaign, machine)
+    vocab = await _vocabulary(db, campaign)
+    canonical, problems = _config_problems(body.engine_args, campaign, machine, vocab)
     known = known_flags(campaign.engine)
-    normalized, _ = normalize_args(campaign.engine, canonical)
+    args, env = split_env(canonical)
+    normalized, _ = normalize_args(campaign.engine, args)
     # Only what the policy chose: a key the campaign itself sets to this value
     # (the base config) is the operator's, and repeating its warning on every
     # check buries the ones about the policy's own flags.
@@ -1115,15 +1173,55 @@ async def check_config(
     ]
     command: list[str] = []
     if not any(p.kind in ("not_renderable", "bad_key") for p in problems):
-        command = render_args(canonical, campaign.engine)
+        command = render_args(args, campaign.engine)
     return ConfigCheckOut(
         ok=not problems,
         config=canonical,
-        cards=cards_used(canonical),
+        cards=cards_used(args),
         command=command,
+        env=env,
         problems=problems,
         warnings=warnings,
         deviations=space_deviations(canonical, campaign.search_space or {}),
+    )
+
+
+@router.get("/engine/vocabulary", response_model=VocabularyOut)
+async def engine_vocabulary(
+    kind: str = Query("", pattern="^(|flag|env)$"),
+    query: str = Query("", max_length=200),
+    level: str = Query("", pattern="^(|high|mid|low|unknown)$"),
+    limit: int = Query(100, ge=1, le=1000),
+    caller: PolicyCaller = Depends(get_policy_session),
+    db: AsyncSession = Depends(get_async_session),
+):
+    """What the campaign's engine image reads, filtered: `kind`, a substring
+    of the name or help (`query`), and the lowest `level` wanted ("mid" =
+    high and mid)."""
+    _session, campaign, machine = await _context(db, caller)
+    row = (
+        await db.execute(
+            select(EngineVocabulary)
+            .where(
+                EngineVocabulary.image == campaign.image,
+                EngineVocabulary.engine == campaign.engine,
+            )
+            .order_by(EngineVocabulary.id.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if row is None or row.status == "failed":
+        return VocabularyOut(
+            status="none", engine=campaign.engine, image=campaign.image,
+            notes=list(row.notes or []) if row is not None else [],
+        )
+    rows = vocab_mod.lookup(
+        vocab_mod.annotate(vocab_mod.from_row(row), (machine.gpu_type if machine else "") or ""),
+        kind=kind, query=query, level=level,
+    )
+    return VocabularyOut(
+        status=row.status, engine=row.engine, engine_version=row.engine_version or "",
+        image=row.image, total=len(rows), notes=list(row.notes or []), entries=rows[:limit],
     )
 
 
@@ -1231,6 +1329,7 @@ async def put_contenders(
             f"contenders are frozen once the session is {session.status}",
         )
     knobs = settings_of(campaign)
+    vocab = await _vocabulary(db, campaign)
     accepted_rows: list[PolicyContender] = []
     rejected: list[dict[str, Any]] = []
     seen_ranks: set[int] = set()
@@ -1245,7 +1344,7 @@ async def put_contenders(
             )
             continue
         try:
-            canonical, dev = _validated(entry.launch_spec.engine_args, campaign, machine)
+            canonical, dev = _validated(entry.launch_spec.engine_args, campaign, machine, vocab)
         except HTTPException as exc:
             rejected.append({"rank": entry.rank, "reason": str(exc.detail)})
             continue

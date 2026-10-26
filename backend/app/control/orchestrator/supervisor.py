@@ -21,6 +21,7 @@ from sqlalchemy.orm import Session
 
 from app import plugins
 from app.control.baseline import resolve_baseline
+from app.control.engines.env_keys import split_env
 from app.control.launch import (
     DeploymentDriver,
     DeploymentState,
@@ -2105,7 +2106,10 @@ class Supervisor:
         # The group is the fabric authority: its env and mounts apply to every
         # rank, and its NCCL settings win over a campaign's because they describe
         # the interconnect the boxes are actually wired with.
-        env = dict(campaign.extra_env or {})
+        # The config's own `env.<NAME>` keys go over the campaign's env; the
+        # group's fabric settings still win over both.
+        engine_args, config_env = split_env(run.candidate.config or {})
+        env = {**(campaign.extra_env or {}), **config_env}
         volumes = dict(campaign.extra_volumes or {})
         group = self._group_for_run(session, run)
         if group is not None:
@@ -2132,7 +2136,7 @@ class Supervisor:
             image=campaign.image,
             model_path=campaign.model_path,
             served_model_name=campaign.served_model_name,
-            engine_args=run.candidate.config,
+            engine_args=engine_args,
             gpu_indices=list(nodes[0].gpu_indices) if nodes else list(run.gpu_indices or []),
             port=run.service_port or campaign.service_port,
             env=env,

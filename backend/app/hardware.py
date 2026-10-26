@@ -55,6 +55,26 @@ def normalize_gpu_type(raw: str) -> str:
     return ""
 
 
+# What a card is, in the words engine docs use when a switch only applies to
+# some hardware ("AMD only", "Hopper and newer"): vendor and architecture.
+_HARDWARE_TAGS: dict[str, frozenset[str]] = {
+    "A100": frozenset({"nvidia", "ampere"}),
+    "A800": frozenset({"nvidia", "ampere"}),
+    "H100": frozenset({"nvidia", "hopper"}),
+    "H800": frozenset({"nvidia", "hopper"}),
+    "H200": frozenset({"nvidia", "hopper"}),
+    "H20": frozenset({"nvidia", "hopper"}),
+    "B200": frozenset({"nvidia", "blackwell"}),
+    "B300": frozenset({"nvidia", "blackwell"}),
+    "ASCEND-910B4-1": frozenset({"npu", "ascend"}),
+}
+
+
+def hardware_tags(gpu_type: str) -> frozenset[str]:
+    """Vendor and architecture of a canonical GPU type; empty when unknown."""
+    return _HARDWARE_TAGS.get(normalize_gpu_type(gpu_type), frozenset())
+
+
 def is_known_gpu_type(value: str) -> bool:
     """True for a canonical entry. "" (any card) is not a type, so it is False —
     callers that allow the wildcard check for it themselves."""

@@ -1,0 +1,24 @@
+# Recommendation labels for sglang switches: which are worth a policy's trials.
+#
+# Hand-written, optional. Anything not listed is "unknown". A label applies
+# only when the campaign's image actually reads the switch (its vocabulary,
+# dumped from the image) and the card matches `hardware`, so a label for a
+# switch an image lacks, or for other hardware, is dropped, never shown.
+#
+#   level     high | mid | low   (high: try early; mid: worth a trial when
+#                                 the record points at it; low: rarely helps)
+#   when      when it is worth trying, in a few words ("MoE models")
+#   hardware  vendor/architecture tags it applies to (nvidia, amd, npu,
+#             ampere, hopper, blackwell); omit for any hardware
+#
+# flag:
+#   - name: <canonical snake_case flag>
+#     level: high
+#     when: ...
+# env:
+#   - name: <VARIABLE_NAME>
+#     level: mid
+#     when: ...
+#     hardware: [nvidia]
+flag: []
+env: []

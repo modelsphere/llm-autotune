@@ -130,6 +130,14 @@ Use these only if you need them.
     level, latency percentiles, the best level that met the limits.
     `/results/raw` is the benchmark platform's own payload.
 
+- **Environment variables (contract 1.5).** Set an engine switch that exists
+  only as an environment variable with an `env.<NAME>` key in the settings,
+  e.g. `"env.SGLANG_ENABLE_SPEC_V2": true`. `GET /engine/vocabulary` lists the
+  flags and variables the campaign's engine image reads, with what each does
+  and a recommendation (`high`, `mid`, `low`, `unknown`) of which are worth
+  trying. A variable the image does not read is refused, since the engine
+  would ignore it.
+
 ---
 
 ## The final result
