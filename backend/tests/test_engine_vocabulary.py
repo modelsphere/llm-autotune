@@ -130,11 +130,16 @@ def test_ingest_keeps_what_a_config_may_set_and_says_what_it_is_for(tmp_path):
     payload["entries"] += [
         {"kind": "flag", "name": "tensor_parallel_size", "type": "int", "help": "TP size."},
         {"kind": "flag", "name": "port", "type": "int", "help": "Port."},
+        {"kind": "flag", "name": "max_num_seqs", "flag": "--max-num-seqs", "help": "Seqs."},
+        {"kind": "flag", "name": "max_num_seqs", "flag": "--max-seqs", "help": "Deprecated alias."},
     ]
     entries, notes = vs.ingest("vllm", payload, None)
     names = {(e["kind"], e["name"]): e for e in entries}
     assert ("flag", "tp") in names  # the platform's canonical key
     assert ("flag", "port") not in names  # placement
+    # A deprecated spelling sharing the flag's name stays a note on it.
+    assert names[("flag", "max_num_seqs")]["help"] == "Seqs."
+    assert names[("flag", "max_num_seqs")]["deprecated_flags"] == ["--max-seqs"]
     assert ("env", "VLLM_PORT") not in names
     assert notes == ["1 env vars left out: credentials or placement"]
     assert names[("env", "VLLM_ROCM_USE_AITER")]["hardware"] == ["amd"]

@@ -165,7 +165,13 @@ def ingest(
             ))
         else:
             continue
-        out.setdefault((kind, name), entry)
+        if (kind, name) in out:
+            # A deprecated spelling of a flag already read ("--cuda-graph-max-bs"
+            # for --cuda-graph-max-bs-decode): the engine still takes it.
+            if kind == "flag" and entry.get("flag"):
+                out[(kind, name)].setdefault("deprecated_flags", []).append(entry["flag"])
+            continue
+        out[(kind, name)] = entry
     if dropped:
         notes.append(f"{dropped} env vars left out: credentials or placement")
     return list(out.values()), notes

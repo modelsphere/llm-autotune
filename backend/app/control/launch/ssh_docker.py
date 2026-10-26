@@ -339,7 +339,7 @@ class SshDockerDriver(DeploymentDriver):
             f"docker image inspect {q} >/dev/null 2>&1 || {{ echo @@NO_IMAGE@@; exit 0; }}; "
             f"echo \"@@DIGEST@@$(docker image inspect --format '{{{{index .RepoDigests 0}}}}' {q} "
             "2>/dev/null)\"; "
-            f"docker run --rm --network none --entrypoint sh -e NVIDIA_VISIBLE_DEVICES=void "
+            f"docker run --rm --network none --entrypoint sh -e NVIDIA_VISIBLE_DEVICES=none "
             f"{q} -c {shlex.quote(command)}"
         )
         result = self._ssh(machine, script, timeout=timeout)

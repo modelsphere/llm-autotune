@@ -600,10 +600,17 @@ class PolicySessionEngine:
                 db, campaign.engine, campaign.image
             ):
                 return
+            from app.control.launch.base import DeploymentDriver
+
             info = self.sup._machine_info(target)
+            driver = self.sup._driver_for(info)
+            # A substrate that cannot run a command in an image has nothing to read.
+            if getattr(type(driver), "run_in_image", None) in (
+                None, DeploymentDriver.run_in_image
+            ):
+                return
             vocabulary_store.read_in_background(
-                self.sup.session_factory, self.sup._driver_for(info), info,
-                campaign.engine, campaign.image,
+                self.sup.session_factory, driver, info, campaign.engine, campaign.image,
             )
         except Exception:  # noqa: BLE001 — an extra, never a reason to fail a launch
             logger.exception("could not start reading the vocabulary of %s", campaign.image)

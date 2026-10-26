@@ -2046,7 +2046,9 @@ def render_image_job(
         "name": "engine",
         "image": image,
         "command": ["sh", "-c", command],
-        "env": ([{"name": "NVIDIA_VISIBLE_DEVICES", "value": "void"},
+        # "none", not "void": no cards, but the driver libraries, which an
+        # engine's parser may load (vllm's CUDA platform needs libcuda).
+        "env": ([{"name": "NVIDIA_VISIBLE_DEVICES", "value": "none"},
                  {"name": "NVIDIA_DISABLE_REQUIRE", "value": "1"}]
                 if settings.k8s_gpu_resource.startswith("nvidia.com/") else []),
         "resources": {

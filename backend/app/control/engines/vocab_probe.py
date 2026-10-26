@@ -150,7 +150,7 @@ def sglang_env(root, notes):
     return entries + sorted(extra.values(), key=lambda e: e["name"])
 
 
-def sglang_parser():
+def sglang_parser(notes):
     from sglang.srt.server_args import ServerArgs
 
     parser = argparse.ArgumentParser(prog="sglang serve")
@@ -234,7 +234,28 @@ def vllm_env(root, notes):
     return entries
 
 
-def vllm_parser():
+def vllm_parser(notes):
+    # vllm writes help text only when the command line asks for help, and
+    # decides on import: ask, before anything of vllm is imported.
+    if not any("--help" in a for a in sys.argv):
+        sys.argv.append("--help")
+    # vllm's parser asks the platform for its defaults, and with no card
+    # visible (this probe never takes one) nothing is detected: read them as
+    # the CUDA platform would, which is what campaigns run on.
+    import vllm.platforms as platforms
+
+    if not getattr(platforms.current_platform, "device_type", ""):
+        try:
+            from vllm.platforms.cuda import CudaPlatform
+
+            platforms.current_platform = CudaPlatform()
+            notes.append("no GPU in the probe: flags read with the CUDA platform's defaults")
+        except Exception:  # no CUDA driver library in the container either
+            from vllm.platforms.cpu import CpuPlatform
+
+            platforms.current_platform = CpuPlatform()
+            notes.append("no CUDA driver in the probe: flags read with the CPU platform's "
+                         "defaults, a few of which differ on GPUs")
     try:
         from vllm.utils.argparse_utils import FlexibleArgumentParser
     except ImportError:
@@ -318,7 +339,7 @@ def main(engine):
         status = "partial"
         notes.append(f"env vars unreadable: {type(exc).__name__}: {exc}")
     try:
-        parser = (sglang_parser if engine == "sglang" else vllm_parser)()
+        parser = (sglang_parser if engine == "sglang" else vllm_parser)(notes)
         flags = flags_of(parser)
         entries += flags
         notes.append(f"{len(flags)} flags from the serve parser")

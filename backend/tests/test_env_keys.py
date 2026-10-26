@@ -25,7 +25,9 @@ ENTRIES = [
      "help": "Tokens per prefill chunk.", "help_source": "engine"},
 ]
 LABELS = (
-    vocab_mod.Label("env", "SGLANG_ENABLE_OVERLAP_PLAN_STREAM", "high", when="speculative decoding on"),
+    vocab_mod.Label(
+        "env", "SGLANG_ENABLE_OVERLAP_PLAN_STREAM", "high", when="speculative decoding on"
+    ),
     vocab_mod.Label("env", "SGLANG_USE_1STAGE_ALLREDUCE", "mid", hardware=("amd",)),
     vocab_mod.Label("flag", "chunked_prefill_size", "mid"),
     vocab_mod.Label("env", "SGLANG_NOT_IN_THIS_IMAGE", "high"),
@@ -199,6 +201,8 @@ async def test_the_vocabulary_endpoint(night, monkeypatch):  # noqa: F811
     body = (await policy.get("/engine/vocabulary?kind=env")).json()
     assert body["status"] == "ok" and body["engine_version"] == "0.5.19"
     # The fixture's machine is an H100: the AMD-only switch is left out.
-    assert [e["name"] for e in body["entries"]] == ["SGLANG_ENABLE_OVERLAP_PLAN_STREAM", "SGLANG_LOG_GC"]
+    assert [e["name"] for e in body["entries"]] == [
+        "SGLANG_ENABLE_OVERLAP_PLAN_STREAM", "SGLANG_LOG_GC"
+    ]
     high = (await policy.get("/engine/vocabulary?level=high")).json()
     assert [e["name"] for e in high["entries"]] == ["SGLANG_ENABLE_OVERLAP_PLAN_STREAM"]
