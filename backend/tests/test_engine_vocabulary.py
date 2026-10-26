@@ -218,3 +218,67 @@ def test_reading_an_image(tmp_path, monkeypatch):
     assert failed["status"] == "failed" and "no python" in failed["notes"][0]
     with pytest.raises(LaunchDeferred):
         vs.read_image(_Driver(LaunchDeferred("not pulled")), object(), "vllm", "x")
+
+
+# -- the rules and the label hints ---------------------------------------------------
+
+
+def test_never_and_forbidden_come_from_the_common_rules_file():
+    from app.control.engines.env_keys import PLACEMENT_ENV
+    from app.control.engines.rules import default_forbidden, never
+    from app.control.search.space import DEFAULT_FORBIDDEN_PARAMS
+
+    assert "env.CUDA_VISIBLE_DEVICES" in never() and "CUDA_VISIBLE_DEVICES" in PLACEMENT_ENV
+    assert DEFAULT_FORBIDDEN_PARAMS == default_forbidden()
+    assert {"kv_cache_dtype", "env.*THINK*"} <= set(DEFAULT_FORBIDDEN_PARAMS)
+
+
+def test_label_hints_apply_to_this_card_and_this_image(monkeypatch):
+    from app.control.engines import vocabulary as v
+
+    labels = (
+        v.Label("flag", "attention_backend", "high", values=(
+            ("fa3", ("hopper",)), ("flashinfer", ()), ("trtllm_mha", ("blackwell",)),
+            ("retired_backend", ()),
+        )),
+        v.Label("flag", "mem_fraction_static", "mid", range={"min": 0.75, "max": 0.93}),
+        v.Label("flag", "speculative_algorithm", "high", values=(("NEXTN", ()),)),
+    )
+    monkeypatch.setattr(v, "load_labels", lambda engine: labels)
+    vocab = v.Vocabulary("sglang", "0.5.19", [
+        v.Entry("flag", "attention_backend", "str",
+                choices=("fa3", "flashinfer", "trtllm_mha", "triton")),
+        v.Entry("flag", "mem_fraction_static", "float"),
+        # An open registry: no choices to check against, so the hint stands.
+        v.Entry("flag", "speculative_algorithm", "str"),
+    ])
+    h100 = {r["name"]: r["suggested"] for r in v.annotate(vocab, "H100")}
+    # Blackwell's backend is gone on an H100; one the image no longer has is gone anywhere.
+    assert h100["attention_backend"] == {"values": ["fa3", "flashinfer"]}
+    assert h100["mem_fraction_static"] == {"range": {"min": 0.75, "max": 0.93}}
+    assert h100["speculative_algorithm"] == {"values": ["NEXTN"]}
+    b300 = {r["name"]: r["suggested"] for r in v.annotate(vocab, "B300")}
+    assert b300["attention_backend"] == {"values": ["flashinfer", "trtllm_mha"]}
+
+
+def test_a_bad_hint_in_a_label_file_is_refused(tmp_path, monkeypatch):
+    from app.control.engines import vocabulary as v
+
+    (tmp_path / "x.yaml").write_text(
+        "flag:\n  - name: a\n    level: mid\n    range: {min: 2, max: 1}\n"
+    )
+    monkeypatch.setattr(v, "_LABELS_DIR", tmp_path)
+    v.load_labels.cache_clear()
+    with pytest.raises(ValueError, match="min above max"):
+        v.load_labels("x")
+    v.load_labels.cache_clear()
+
+
+def test_the_shipped_label_files_name_real_switches_shapes():
+    from app.control.engines import vocabulary as v
+
+    v.load_labels.cache_clear()
+    for engine in ("sglang", "vllm"):
+        for label in v.load_labels(engine):
+            assert label.level in v.LEVELS
+            assert not (label.values and label.range), label.name

@@ -22,24 +22,17 @@ import fnmatch
 import re
 from typing import Any
 
+from app.control.engines.rules import never
+
 ENV_PREFIX = "env."
 
 _NAME_SHAPE = re.compile(r"^[A-Z_][A-Z0-9_]*$")
 
 # What a config may never set through the environment: where the engine runs
-# and who it talks to (the launch driver and a node group's fabric settings
-# own those), the process's own search paths, and credentials. Patterns are
-# fnmatch, matched against the variable's name.
-PLACEMENT_ENV: tuple[str, ...] = (
-    "CUDA_VISIBLE_DEVICES", "NVIDIA_VISIBLE_DEVICES", "HIP_VISIBLE_DEVICES",
-    "ROCR_VISIBLE_DEVICES", "ASCEND_RT_VISIBLE_DEVICES",
-    "MASTER_ADDR", "MASTER_PORT", "RANK", "LOCAL_RANK", "WORLD_SIZE", "NODE_RANK",
-    "NCCL_SOCKET_IFNAME", "GLOO_SOCKET_IFNAME", "NCCL_IB_HCA",
-    "*_HOST_IP", "*_PORT",
-    "PATH", "LD_LIBRARY_PATH", "PYTHONPATH", "HOME",
-    # Credentials. Not "*TOKEN*": SGLANG_CLIP_MAX_NEW_TOKENS_ESTIMATION and
-    # its kind are tuning knobs.
-    "*_TOKEN", "*SECRET*", "*PASSWORD*", "*_API_KEY", "*ACCESS_KEY*",
+# and who it talks to, the process's own search paths, and credentials
+# (labels/common.yaml, `never`), as fnmatch patterns over the variable's name.
+PLACEMENT_ENV: tuple[str, ...] = tuple(
+    p[len(ENV_PREFIX):] for p in never() if p.startswith(ENV_PREFIX)
 )
 
 

@@ -52,6 +52,8 @@ from dataclasses import dataclass
 from itertools import product
 from typing import Any
 
+from app.control.engines.rules import default_forbidden
+
 # A range is enumerated as min, min+step, … up to max. Bounded so a typo like
 # {"min": 0, "max": 1, "step": 0.0001} is a validation error rather than a
 # ten-thousand-candidate campaign nobody asked for.
@@ -350,54 +352,12 @@ def deviations(config: dict[str, Any], search_space: dict[str, Any]) -> list[dic
     return out
 
 
-# Parameters a policy may not change on its own, by default. Both benchmark
-# suites measure speed, not answers, so every flag here would score as a "win"
-# while changing what the deployment returns or can do: a lower-precision KV
-# cache or weights, a shorter context, a different chat template or parser,
-# different default sampling, a different tokenizer. Patterns are fnmatch
-# globs over canonical keys. A campaign replaces the list in its policy
-# settings (`forbidden_params`), and an empty list forbids nothing.
-DEFAULT_FORBIDDEN_PARAMS: tuple[str, ...] = (
-    "quantization*",
-    "modelopt_quant*",
-    "kv_cache_dtype",
-    "dtype",
-    "context_length",
-    "max_model_len",
-    "chat_template*",
-    "*_parser",
-    "enable_auto_tool_choice",
-    "trust_remote_code",
-    "load_format",
-    "tokenizer*",
-    "skip_tokenizer_init",
-    "revision",
-    "json_model_override_args",
-    "hf_overrides",
-    "generation_config",
-    "override_generation_config",
-    "preferred_sampling_params",
-    "sampling_defaults",
-    # Environment variables (env.<NAME> keys) that change what the model
-    # answers rather than how fast: reasoning budgets and defaults, clipped
-    # outputs, approximate attention, weight/activation/state precision.
-    "env.*THINK*",
-    "env.*REASONING*",
-    "env.*MAX_NEW_TOKENS_LIMIT*",
-    "env.*SKIP_SOFTMAX*",
-    "env.*GREEDY*",
-    "env.*_DTYPE",
-    "env.*PRECISION*",
-    "env.*QUANT*",
-    "env.*FP4*",
-    "env.*INT4*",
-    "env.*MXFP*",
-    "env.*IGNORED_LAYERS*",
-    "env.*LOW_PRECISION*",
-    "env.*MULTIPLE_REDUCTION*",
-    "env.*CONTEXT_LEN*",
-    "env.*CHAT_TEMPLATE*",
-)
+# Parameters a policy may not change on its own, by default: both benchmark
+# suites measure speed, not answers, so each would score as a "win" while
+# changing what the deployment returns or can do. The list is data
+# (control/engines/labels/common.yaml, `forbidden`); a campaign replaces it in
+# its policy settings (`forbidden_params`), and an empty list forbids nothing.
+DEFAULT_FORBIDDEN_PARAMS: tuple[str, ...] = default_forbidden()
 
 
 def forbidden_hits(

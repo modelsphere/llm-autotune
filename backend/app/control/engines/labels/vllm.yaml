@@ -1,81 +1,120 @@
-# Recommendation labels for vllm switches: which are worth a policy's trials.
+# Recommendation labels for vllm switches: which are worth a policy's
+# trials, and where to search them.
 #
 # Hand-written, optional. Anything not listed is "unknown". A label applies
 # only when the campaign's image actually reads the switch (its vocabulary,
 # dumped from the image) and the card matches `hardware`, so a label for a
 # switch an image lacks, or for other hardware, is dropped, never shown.
+# What may not be set at all lives in common.yaml.
 #
 #   level     high | mid | low   (high: try early; mid: worth a trial when
 #                                 the record points at it; low: rarely helps)
 #   when      when it is worth trying, in a few words ("MoE models")
 #   hardware  vendor/architecture tags it applies to (nvidia, amd, npu,
 #             ampere, hopper, blackwell); omit for any hardware
+#   values    the values worth a trial, a hint, not a limit. Each is a value
+#             or {value: …, hardware: [...]}. Checked against the choices the
+#             image declares: a value the engine would refuse is dropped.
+#   range     {min, max, step} for a number worth searching over an interval
 #
-# flag:
-#   - name: <canonical snake_case flag>
-#     level: high
-#     when: ...
-# env:
-#   - name: <VARIABLE_NAME>
-#     level: mid
-#     when: ...
-#     hardware: [nvidia]
+# The engine's own type, default and full list of choices come from the
+# image, not from here.
 flag:
-  - name: speculative_config
-    level: high
-    when: decode-heavy traffic; first find which methods the model supports (a draft model, its own MTP layers, or ngram, which needs none)
-  - name: max_num_batched_tokens
-    level: mid
-    when: long prompts, or TTFT spikes under load
-  - name: max_num_seqs
-    level: mid
-    when: high concurrency; KV-cache or batch-size bound
-  - name: enable_chunked_prefill
-    level: mid
-    when: long prompts mixed with decode
-  - name: enable_prefix_caching
-    level: mid
-    when: prefix-heavy traffic
-  - name: enable_expert_parallel
-    level: mid
-    when: MoE models on several cards
-  - name: async_scheduling
-    level: mid
-    when: CPU scheduling overhead shows between decode steps
-  - name: compilation_config
-    level: low
-    when: CUDA-graph sizes or compile options; one JSON string
+- name: speculative_config
+  level: high
+  when: decode-heavy traffic; first find which methods the model supports (a draft model, its own MTP
+    layers, or ngram, which needs none)
+- name: gpu_memory_utilization
+  level: mid
+  when: KV-cache bound at high concurrency, or OOM at load
+  range:
+    min: 0.8
+    max: 0.95
+    step: 0.01
+- name: max_num_batched_tokens
+  level: mid
+  when: long prompts, or TTFT spikes under load
+  values:
+  - 2048
+  - 4096
+  - 8192
+  - 16384
+- name: max_num_seqs
+  level: mid
+  when: high concurrency; KV-cache or batch-size bound
+  values:
+  - 64
+  - 128
+  - 256
+  - 512
+- name: enable_chunked_prefill
+  level: mid
+  when: long prompts mixed with decode
+- name: enable_prefix_caching
+  level: mid
+  when: prefix-heavy traffic
+- name: enable_expert_parallel
+  level: mid
+  when: MoE models on several cards
+- name: async_scheduling
+  level: mid
+  when: CPU scheduling overhead shows between decode steps
+- name: compilation_config
+  level: low
+  when: CUDA-graph sizes or compile options; one JSON string
+
 env:
-  - name: VLLM_GDN_DECODE_KERNEL
-    level: mid
-    when: Gated DeltaNet models (Qwen3-Next lineage) with MTP
-  - name: VLLM_ALLREDUCE_USE_FLASHINFER
-    level: mid
-    when: tensor parallel
-    hardware: [nvidia]
-  - name: VLLM_ALLREDUCE_USE_SYMM_MEM
-    level: mid
-    when: tensor parallel
-    hardware: [nvidia]
-  - name: VLLM_USE_NCCL_SYMM_MEM
-    level: mid
-    when: tensor parallel
-    hardware: [nvidia]
-  - name: VLLM_FLASHINFER_ALLREDUCE_BACKEND
-    level: mid
-    when: tensor parallel
-    hardware: [nvidia]
-  - name: VLLM_MOE_USE_DEEP_GEMM
-    level: mid
-    when: FP8 MoE models
-    hardware: [hopper, blackwell]
-  - name: VLLM_SHARED_EXPERTS_STREAM_TOKEN_THRESHOLD
-    level: mid
-    when: MoE models with shared experts
-  - name: VLLM_BLOCKSCALE_FP8_GEMM_FLASHINFER
-    level: low
-    when: FP8 block-scaled models
-    hardware: [hopper, blackwell]
-  - name: VLLM_USE_V2_MODEL_RUNNER
-    level: low
-    when: try once; experimental
+- name: VLLM_GDN_DECODE_KERNEL
+  level: mid
+  when: Gated DeltaNet models (Qwen3-Next lineage) with MTP
+  values:
+  - cuda
+  - triton
+- name: VLLM_ALLREDUCE_USE_FLASHINFER
+  level: mid
+  when: tensor parallel
+  hardware:
+  - nvidia
+- name: VLLM_ALLREDUCE_USE_SYMM_MEM
+  level: mid
+  when: tensor parallel
+  hardware:
+  - nvidia
+- name: VLLM_USE_NCCL_SYMM_MEM
+  level: mid
+  when: tensor parallel
+  hardware:
+  - nvidia
+- name: VLLM_FLASHINFER_ALLREDUCE_BACKEND
+  level: mid
+  when: tensor parallel
+  hardware:
+  - nvidia
+  values:
+  - auto
+  - trtllm
+  - value: mnnvl
+    hardware:
+    - blackwell
+- name: VLLM_MOE_USE_DEEP_GEMM
+  level: mid
+  when: FP8 MoE models
+  hardware:
+  - hopper
+  - blackwell
+- name: VLLM_SHARED_EXPERTS_STREAM_TOKEN_THRESHOLD
+  level: mid
+  when: MoE models with shared experts
+  values:
+  - 64
+  - 256
+  - 1024
+- name: VLLM_BLOCKSCALE_FP8_GEMM_FLASHINFER
+  level: low
+  when: FP8 block-scaled models
+  hardware:
+  - hopper
+  - blackwell
+- name: VLLM_USE_V2_MODEL_RUNNER
+  level: low
+  when: try once; experimental

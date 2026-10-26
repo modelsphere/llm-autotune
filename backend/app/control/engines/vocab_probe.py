@@ -150,6 +150,28 @@ def sglang_env(root, notes):
     return entries + sorted(extra.values(), key=lambda e: e["name"])
 
 
+def sglang_open_choices(flags, notes):
+    """Choices sglang keeps in a registry rather than on the parser: the
+    speculative algorithms (an enum, plus aliases such as NEXTN its help names,
+    plus any a plugin registers — so the list is marked open)."""
+    for flag in flags:
+        if flag["name"] != "speculative_algorithm" or flag["choices"]:
+            continue
+        names = set()
+        try:
+            from sglang.srt.speculative.spec_info import SpeculativeAlgorithm
+
+            names |= {m.name for m in SpeculativeAlgorithm if m.name != "NONE"}
+        except Exception as exc:
+            notes.append(f"speculative algorithms not read from the registry: {exc}")
+        builtins = re.search(r"Builtins?:\s*([A-Z0-9_,\s]+)", flag["help"] or "")
+        if builtins:
+            names |= {n.strip() for n in builtins.group(1).split(",") if n.strip()}
+        if names:
+            flag["choices"] = sorted(names)
+            flag["choices_open"] = True
+
+
 def sglang_parser(notes):
     from sglang.srt.server_args import ServerArgs
 
@@ -341,6 +363,8 @@ def main(engine):
     try:
         parser = (sglang_parser if engine == "sglang" else vllm_parser)(notes)
         flags = flags_of(parser)
+        if engine == "sglang":
+            sglang_open_choices(flags, notes)
         entries += flags
         notes.append(f"{len(flags)} flags from the serve parser")
     except Exception as exc:
