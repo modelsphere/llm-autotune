@@ -331,7 +331,9 @@ class SshDockerDriver(DeploymentDriver):
     def _q(parts: list[str]) -> str:
         return " ".join(shlex.quote(part) for part in parts)
 
-    def run_in_image(self, machine, image: str, command: str, timeout: int) -> tuple[str, str]:
+    def run_in_image(
+        self, machine, image: str, command: str, timeout: int, model_path: str = ""
+    ) -> tuple[str, str]:
         """`docker run --rm` on the machine, only once the image is there (an
         engine launch pulls it; this never does)."""
         q = shlex.quote(image)
@@ -340,7 +342,9 @@ class SshDockerDriver(DeploymentDriver):
             f"echo \"@@DIGEST@@$(docker image inspect --format '{{{{index .RepoDigests 0}}}}' {q} "
             "2>/dev/null)\"; "
             f"docker run --rm --network none --entrypoint sh -e NVIDIA_VISIBLE_DEVICES=none "
-            f"{q} -c {shlex.quote(command)}"
+            + (f"-v {shlex.quote(model_path)}:{MODEL_MOUNT}:ro -e MODEL_DIR={MODEL_MOUNT} "
+               if model_path else "")
+            + f"{q} -c {shlex.quote(command)}"
         )
         result = self._ssh(machine, script, timeout=timeout)
         out = result.stdout or ""

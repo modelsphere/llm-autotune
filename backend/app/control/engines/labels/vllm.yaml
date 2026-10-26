@@ -1,7 +1,9 @@
 # Recommendation labels for vllm switches: which are worth a policy's
 # trials first.
 #
-# Hand-written, optional. Anything not listed is "unknown". A label applies
+# Hand-written, optional, and only from experience: a switch that measurably
+# helped on real runs, with the situation it helped in. Anything not listed
+# is "unknown"; an empty file is fine. A label applies
 # only when the campaign's image actually reads the switch (its vocabulary,
 # dumped from the image) and the card matches `hardware`, so a label for a
 # switch an image lacks, or for other hardware, is dropped, never shown.
@@ -14,75 +16,6 @@
 #   hardware  vendor/architecture tags it applies to (nvidia, amd, npu,
 #             ampere, hopper, blackwell); omit for any hardware
 
-flag:
-- name: speculative_config
-  level: high
-  when: decode-heavy traffic; first find which methods the model supports (a draft model, its own MTP
-    layers, or ngram, which needs none)
-- name: gpu_memory_utilization
-  level: mid
-  when: KV-cache bound at high concurrency, or OOM at load
-- name: max_num_batched_tokens
-  level: mid
-  when: long prompts, or TTFT spikes under load
-- name: max_num_seqs
-  level: mid
-  when: high concurrency; KV-cache or batch-size bound
-- name: enable_chunked_prefill
-  level: mid
-  when: long prompts mixed with decode
-- name: enable_prefix_caching
-  level: mid
-  when: prefix-heavy traffic
-- name: enable_expert_parallel
-  level: mid
-  when: MoE models on several cards
-- name: async_scheduling
-  level: mid
-  when: CPU scheduling overhead shows between decode steps
-- name: compilation_config
-  level: low
-  when: CUDA-graph sizes or compile options; one JSON string
 
-env:
-- name: VLLM_GDN_DECODE_KERNEL
-  level: mid
-  when: Gated DeltaNet models (Qwen3-Next lineage) with MTP
-- name: VLLM_ALLREDUCE_USE_FLASHINFER
-  level: mid
-  when: tensor parallel
-  hardware:
-  - nvidia
-- name: VLLM_ALLREDUCE_USE_SYMM_MEM
-  level: mid
-  when: tensor parallel
-  hardware:
-  - nvidia
-- name: VLLM_USE_NCCL_SYMM_MEM
-  level: mid
-  when: tensor parallel
-  hardware:
-  - nvidia
-- name: VLLM_FLASHINFER_ALLREDUCE_BACKEND
-  level: mid
-  when: tensor parallel
-  hardware:
-  - nvidia
-- name: VLLM_MOE_USE_DEEP_GEMM
-  level: mid
-  when: FP8 MoE models
-  hardware:
-  - hopper
-  - blackwell
-- name: VLLM_SHARED_EXPERTS_STREAM_TOKEN_THRESHOLD
-  level: mid
-  when: MoE models with shared experts
-- name: VLLM_BLOCKSCALE_FP8_GEMM_FLASHINFER
-  level: low
-  when: FP8 block-scaled models
-  hardware:
-  - hopper
-  - blackwell
-- name: VLLM_USE_V2_MODEL_RUNNER
-  level: low
-  when: try once; experimental
+flag: []
+env: []

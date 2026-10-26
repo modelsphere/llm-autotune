@@ -1720,13 +1720,14 @@ class K8sDriver(DeploymentDriver):
         return checks
 
     def run_in_image(
-        self, machine: MachineInfo, image: str, command: str, timeout: int
+        self, machine: MachineInfo, image: str, command: str, timeout: int,
+        model_path: str = "",
     ) -> tuple[str, str]:
         """A Job on the machine's node (render_image_job): its log, and the
         digest the node resolved the image to."""
         api = self.api
         name = f"autotune-vocab-{secrets.token_hex(4)}"
-        api.apply(render_image_job(name, machine, image, command, self.settings))
+        api.apply(render_image_job(name, machine, image, command, self.settings, model_path))
         try:
             deadline = time.monotonic() + timeout
             while True:
@@ -1950,6 +1951,28 @@ class K8sDriver(DeploymentDriver):
 _FILE_SUFFIXES = (".gguf", ".safetensors", ".bin", ".pt", ".pth")
 
 
+def _weights_mount(
+    model_path: str, settings: Settings
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], str]:
+    """(volumes, mounts, where the weights are in the container), mounted as a
+    run mounts them: the shared weights claim at its subpath, else a hostPath
+    with a type check, so a missing path fails the mount rather than appearing
+    as an empty directory."""
+    pvc = (settings.k8s_model_pvc or "").strip()
+    if pvc:
+        return (
+            [{"name": "weights", "persistentVolumeClaim": {"claimName": pvc, "readOnly": True}}],
+            [{"name": "weights", "mountPath": "/weights", "readOnly": True}],
+            "/weights/" + _model_subpath(model_path, settings),
+        )
+    kind = "File" if model_path.endswith(_FILE_SUFFIXES) else "Directory"
+    return (
+        [{"name": "model", "hostPath": {"path": model_path, "type": kind}}],
+        [{"name": "model", "mountPath": MODEL_MOUNT, "readOnly": True}],
+        MODEL_MOUNT,
+    )
+
+
 def render_preflight_job(
     name: str,
     machine: MachineInfo,
@@ -1971,18 +1994,11 @@ def render_preflight_job(
     command = "exit 0"
     reads_log = False
     if model_path and images and images[0][0] == "engine":
-        pvc = (settings.k8s_model_pvc or "").strip()
-        if pvc:
-            volumes.append({"name": "weights",
-                            "persistentVolumeClaim": {"claimName": pvc, "readOnly": True}})
-            mounts.append({"name": "weights", "mountPath": "/weights", "readOnly": True})
-            target = shlex.quote("/weights/" + _model_subpath(model_path, settings))
+        volumes, mounts, target = _weights_mount(model_path, settings)
+        if (settings.k8s_model_pvc or "").strip():
+            target = shlex.quote(target)
             command = f"if [ -e {target} ]; then echo model-present; else echo model-missing; fi"
             reads_log = True
-        else:
-            kind = "File" if model_path.endswith(_FILE_SUFFIXES) else "Directory"
-            volumes.append({"name": "model", "hostPath": {"path": model_path, "type": kind}})
-            mounts.append({"name": "model", "mountPath": MODEL_MOUNT, "readOnly": True})
     containers = []
     for container_name, _, _, ref in images:
         container: dict[str, Any] = {
@@ -2037,11 +2053,17 @@ def render_preflight_job(
 
 
 def render_image_job(
-    name: str, machine: MachineInfo, image: str, command: str, settings: Settings
+    name: str, machine: MachineInfo, image: str, command: str, settings: Settings,
+    model_path: str = "",
 ) -> dict:
     """A Job that runs one shell line in `image` on the machine's node, with
-    no cards: how the engine vocabulary is read from the image itself. Room
-    for importing an engine (torch included), nothing more."""
+    no cards: how the engine vocabulary (and, given a model path, the model's
+    own config) is read. Room for importing an engine (torch included),
+    nothing more. The weights, when given, are mounted as a run mounts them,
+    at $MODEL_DIR."""
+    volumes, mounts, model_dir = (
+        _weights_mount(model_path, settings) if model_path else ([], [], "")
+    )
     container: dict[str, Any] = {
         "name": "engine",
         "image": image,
@@ -2056,12 +2078,17 @@ def render_image_job(
             "limits": {"cpu": "2", "memory": "8Gi"},
         },
     }
+    if model_path:
+        container["volumeMounts"] = mounts
+        container["env"].append({"name": "MODEL_DIR", "value": model_dir})
     pod_spec: dict[str, Any] = {
         "restartPolicy": "Never",
         "automountServiceAccountToken": False,
         "terminationGracePeriodSeconds": 0,
         "containers": [container],
     }
+    if volumes:
+        pod_spec["volumes"] = volumes
     selector = _node_selector_pairs(machine.node_selector, settings)
     if selector:
         pod_spec["nodeSelector"] = selector

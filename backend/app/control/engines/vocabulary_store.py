@@ -36,6 +36,9 @@ MARKER = "@@AUTOTUNE_VOCAB@@"
 _PROBE = Path(__file__).with_name("vocab_probe.py")
 # A failed read is retried after this long, not on every session start.
 _RETRY_AFTER = timedelta(hours=1)
+# A tag can move to another build; a good read is redone in the background
+# once it is this old (the old one serves until the new one lands).
+_REFRESH_AFTER = timedelta(days=1)
 
 # What a switch is for, read from its name or its section in the engine's own
 # registry or docs: a ROCm or AITER switch does nothing on an NVIDIA card.
@@ -181,7 +184,8 @@ def ingest(
 
 
 def needs_reading(db, engine: str, image: str) -> bool:
-    """No usable vocabulary for the image, and no failed read in the last hour."""
+    """No vocabulary for the image, a failed read over an hour old, or a good
+    one over a day old (its tag may point at another build by now)."""
     from app.db.models import EngineVocabulary
 
     row = db.execute(
@@ -192,10 +196,9 @@ def needs_reading(db, engine: str, image: str) -> bool:
     ).scalar_one_or_none()
     if row is None:
         return True
-    if row.status != "failed":
-        return False
     created = row.created_at if row.created_at.tzinfo else row.created_at.replace(tzinfo=UTC)
-    return datetime.now(UTC) - created > _RETRY_AFTER
+    age = datetime.now(UTC) - created
+    return age > (_RETRY_AFTER if row.status == "failed" else _REFRESH_AFTER)
 
 
 def read_image(driver, machine, engine: str, image: str) -> dict[str, Any]:
@@ -226,14 +229,30 @@ def read_image(driver, machine, engine: str, image: str) -> dict[str, Any]:
     }
 
 
+def needs_model_reading(db, model_path: str) -> bool:
+    """No config read for the model path, or a failed read over an hour old.
+    The weights at a path do not change under a campaign, so a good read stays."""
+    from app.db.models import ModelConfig
+
+    row = db.execute(
+        select(ModelConfig).where(ModelConfig.model_path == model_path)
+        .order_by(ModelConfig.id.desc()).limit(1)
+    ).scalar_one_or_none()
+    if row is None:
+        return True
+    if row.status != "failed":
+        return False
+    created = row.created_at if row.created_at.tzinfo else row.created_at.replace(tzinfo=UTC)
+    return datetime.now(UTC) - created > _RETRY_AFTER
+
+
 _reading: set[tuple[str, str]] = set()
 _lock = threading.Lock()
 
 
-def read_in_background(session_factory, driver, machine, engine: str, image: str) -> bool:
-    """Read the image on a thread, once at a time per image; False when a read
-    of it is already running."""
-    key = (engine, image)
+def in_background(session_factory, key: tuple[str, str], produce) -> bool:
+    """Run `produce()` on a thread — it reads an image or a model and returns
+    the row to keep — once at a time per key; False when one is running."""
     with _lock:
         if key in _reading:
             return False
@@ -241,22 +260,20 @@ def read_in_background(session_factory, driver, machine, engine: str, image: str
 
     def work() -> None:
         from app.control.launch.base import LaunchDeferred
-        from app.db.models import EngineVocabulary
 
         try:
-            fields = read_image(driver, machine, engine, image)
+            row = produce()
             with session_factory() as db:
-                db.add(EngineVocabulary(**fields))
+                db.add(row)
                 db.commit()
-            logger.info("engine vocabulary of %s: %s, %d entries", image,
-                        fields["status"], len(fields["entries"]))
+            logger.info("read %s %s: %s", key[0], key[1], row.status)
         except LaunchDeferred as exc:
-            logger.info("engine vocabulary of %s deferred: %s", image, exc)
+            logger.info("read of %s %s deferred: %s", key[0], key[1], exc)
         except Exception:  # noqa: BLE001 — a background read never takes the worker down
-            logger.exception("engine vocabulary of %s failed", image)
+            logger.exception("read of %s %s failed", key[0], key[1])
         finally:
             with _lock:
                 _reading.discard(key)
 
-    threading.Thread(target=work, name=f"vocab-{engine}", daemon=True).start()
+    threading.Thread(target=work, name=f"read-{key[0]}", daemon=True).start()
     return True

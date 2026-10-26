@@ -522,11 +522,13 @@ class DeploymentDriver(ABC):
     # -- one command in an image -------------------------------------------------
 
     def run_in_image(
-        self, machine: MachineInfo, image: str, command: str, timeout: int
+        self, machine: MachineInfo, image: str, command: str, timeout: int,
+        model_path: str = "",
     ) -> tuple[str, str]:
         """Run `command` (a shell line) in a throwaway container of `image`
         on the machine, with no cards and no network, and return (stdout,
-        image digest). For reading what an image contains — the engine
+        image digest). Given `model_path`, the weights are mounted read-only
+        as a run mounts them, at $MODEL_DIR. For reading what an image contains — the engine
         vocabulary — never for serving. Raises RuntimeError with the reason
         when it cannot run, LaunchDeferred when the image is not on the
         machine yet."""

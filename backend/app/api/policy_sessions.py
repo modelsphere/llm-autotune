@@ -61,6 +61,7 @@ from app.db.models import (
     EngineVocabulary,
     Event,
     Machine,
+    ModelConfig,
     Policy,
     PolicyContender,
     PolicySession,
@@ -168,6 +169,20 @@ def _canonical(config: dict[str, Any], campaign: Campaign) -> dict[str, Any]:
     return prune_inactive(merged, space)
 
 
+async def _model_config(db: AsyncSession, campaign: Campaign) -> ModelConfig | None:
+    """The newest good read of the campaign's model config."""
+    if not campaign.model_path:
+        return None
+    return (
+        await db.execute(
+            select(ModelConfig)
+            .where(ModelConfig.model_path == campaign.model_path, ModelConfig.status == "ok")
+            .order_by(ModelConfig.id.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+
+
 async def _vocabulary(db: AsyncSession, campaign: Campaign) -> vocab_mod.Vocabulary | None:
     """The newest usable vocabulary dumped from the campaign's image."""
     row = (
@@ -236,10 +251,14 @@ def _config_problems(
             f"{hit['pattern']!r}): leave it at the campaign's value",
         ))
     args, _env = split_env(canonical)
-    for found in round_trip_problems(
-        {k: v for k, v in args.items() if k not in PLACEMENT_FLAGS}, campaign.engine
-    ):
-        problems.append(ConfigProblem(**found))
+    flags = {k: v for k, v in args.items() if k not in PLACEMENT_FLAGS}
+    round_trip = round_trip_problems(flags, campaign.engine)
+    problems += [ConfigProblem(**found) for found in round_trip]
+    if vocab is not None and not round_trip:
+        problems += [
+            ConfigProblem(**found)
+            for found in vocab_mod.unknown_flag_problems(flags, vocab, campaign.engine)
+        ]
     for found in env_problems(canonical):
         problems.append(ConfigProblem(**found))
     if not any(p.param.startswith("env.") for p in problems):
@@ -651,6 +670,7 @@ async def manifest(
     )
 
     screen_slug = campaign.benchmark_slug or settings.llmbench_benchmark_slug
+    model_row = await _model_config(db, campaign)
     return SessionManifest(
         contract={"version": CONTRACT_VERSION},
         session_id=session.id,
@@ -668,6 +688,7 @@ async def manifest(
             served_model_name=campaign.served_model_name,
             extra_env=campaign.extra_env or {},
             extra_volumes=campaign.extra_volumes or {},
+            facts=dict((model_row.facts if model_row else None) or {}),
         ),
         hardware=ManifestHardware(
             machine=machine.name if machine else "",
@@ -1158,7 +1179,9 @@ async def check_config(
     _session, campaign, machine = await _context(db, caller)
     vocab = await _vocabulary(db, campaign)
     canonical, problems = _config_problems(body.engine_args, campaign, machine, vocab)
-    known = known_flags(campaign.engine)
+    # With the image's own parser at hand an unknown flag is a refusal above;
+    # the platform's catalog is only the fallback guess.
+    known = set() if vocab is not None and vocab.names("flag") else known_flags(campaign.engine)
     args, env = split_env(canonical)
     normalized, _ = normalize_args(campaign.engine, args)
     # Only what the policy chose: a key the campaign itself sets to this value
@@ -1210,10 +1233,15 @@ async def engine_vocabulary(
             .limit(1)
         )
     ).scalar_one_or_none()
+    model_row = await _model_config(db, campaign)
+    model = {
+        "model_facts": dict(model_row.facts or {}) if model_row else {},
+        "model_config_json": dict(model_row.config or {}) if model_row else {},
+    }
     if row is None or row.status == "failed":
         return VocabularyOut(
             status="none", engine=campaign.engine, image=campaign.image,
-            notes=list(row.notes or []) if row is not None else [],
+            notes=list(row.notes or []) if row is not None else [], **model,
         )
     rows = vocab_mod.lookup(
         vocab_mod.annotate(vocab_mod.from_row(row), (machine.gpu_type if machine else "") or ""),
@@ -1222,6 +1250,7 @@ async def engine_vocabulary(
     return VocabularyOut(
         status=row.status, engine=row.engine, engine_version=row.engine_version or "",
         image=row.image, total=len(rows), notes=list(row.notes or []), entries=rows[:limit],
+        **model,
     )
 
 

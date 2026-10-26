@@ -24,7 +24,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   hand-written recommendation (`high`, `mid`, `low`, `unknown`, from
   `backend/app/control/engines/labels/`) so a policy finds the few worth
   trying among hundreds. A label applies only to a switch the image has and
-  hardware it names.
+  hardware it names. Read by a probe in the image itself (a Job on k8s,
+  `docker run --rm` over ssh) when a policy session starts, or on demand
+  (`POST /campaigns/{id}/engine-vocabulary`). A flag the image's parser does
+  not accept is refused before it costs a launch.
+- **Model facts** (manifest `model.facts`, migration `022_model_configs`):
+  read from the model's own `config.json` where its runs mount the weights —
+  experts and active experts, built-in draft layers for speculative decoding,
+  attention layout, KV heads, context, precision.
 
 - **Where a delegated policy pod runs** (`AUTOTUNE_K8S_POLICY_NODE_SELECTOR`,
   `k=v,k2=v2`). Such a pod asks for no cards and had no node selector, so it

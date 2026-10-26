@@ -610,6 +610,26 @@ GET /api/policy/v1/engine/vocabulary?kind=env&level=mid&query=spec
   `limit`.
 - `status` is `ok`, `partial` (some of it could not be read; `notes` says
   what) or `none` (nothing has been read from this image yet).
+- `model_facts` and `model_config_json`: the model's facts and its whole
+  `config.json`, once read (the same facts as the manifest's `model.facts`;
+  here too because a policy reads the manifest once, and the platform may
+  finish reading after the session started).
+- The type, default and allowed values of a switch are the engine's own:
+  a flag's choices from its parser, a vllm env var's declared choices. A
+  string env var the engine declares no choices for carries `reads`: the
+  engine code that reads it, its own check of the value first.
+
+With a vocabulary for the image, a flag the config renders to that the
+image's parser does not accept is refused (`unknown_flag`, with the nearest
+spellings it does accept), instead of a launch that fails at start.
+
+**Model facts (1.5).** The manifest's `model.facts` is read from the model's
+own `config.json`, where the campaign's runs mount the weights: `layers`,
+`kv_heads`, `head_dim`, `max_context`, `experts` and `experts_per_token`,
+`shared_experts`, `draft_layers` (built-in MTP/NEXTN layers a speculative
+decoder can draft with), `layer_types` (e.g. linear vs full attention),
+`kv_lora_rank` (MLA), `dtype`, `quantization`, `rope_scaling`, `multimodal`.
+A field the config does not have is absent, never guessed. Empty until read.
 
 ### Diagnostics (1.3)
 
@@ -629,7 +649,7 @@ POST /api/policy/v1/configs/check
 A dry run: the canonical echo, the engine arguments it renders to, the
 environment it sets (`env`, 1.5), and everything a launch would refuse
 (`problems`: `placement`, `forbidden`, `not_renderable`, `round_trip`,
-`bad_key`, `unknown_env`, `safety`), without spending one.
+`bad_key`, `unknown_env`, `unknown_flag`, `safety`), without spending one.
 Never `422`s. `warnings` refuse nothing: flags the platform's catalog does not
 know (the engine may still accept them; a typo only fails at launch).
 
@@ -728,9 +748,10 @@ from their specs, time permitting. Either way the machine's own guarantees
   working unchanged — it simply never sends the new fields, and the deadline
   plus the watchdog govern it exactly as before.
 - **1.5** (additive): `env.<NAME>` config keys and `GET /engine/vocabulary`,
-  with `services.env_keys` and `services.vocabulary` on the menu, and `env` on
-  the `/configs/check` answer. A 1.4 policy sends no env keys and runs
-  unchanged.
+  with `services.env_keys` and `services.vocabulary` on the menu, `env` on
+  the `/configs/check` answer, and `model.facts` in the manifest. One new
+  refusal: with a vocabulary for the image, a flag its parser does not take
+  (`unknown_flag`), which would have failed the launch anyway.
 - **1.4** (additive): `PUT /session/digest` and `GET /history`, and
   `services.history` on the menu. A 1.3 policy runs unchanged.
 - **1.3** (additive): diagnostics (`POST /configs/check`, launch logs and

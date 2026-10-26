@@ -1642,3 +1642,20 @@ class EngineVocabulary(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
+
+
+class ModelConfig(Base):
+    """A model's own config.json and the facts read from it
+    (control/engines/model_facts.py), one row per read of a model path."""
+
+    __tablename__ = "model_configs"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    model_path: Mapped[str] = mapped_column(String(1024), index=True)
+    status: Mapped[str] = mapped_column(String(16), default="ok", server_default="ok")
+    facts: Mapped[dict] = mapped_column(JsonCol, default=dict)
+    config: Mapped[dict] = mapped_column(JsonCol, default=dict)
+    notes: Mapped[list] = mapped_column(JsonCol, default=list)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )

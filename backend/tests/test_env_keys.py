@@ -22,7 +22,12 @@ ENTRIES = [
      "help": "1-stage all-reduce kernel.", "help_source": "docs"},
     {"kind": "env", "name": "SGLANG_LOG_GC", "type": "bool", "default": False},
     {"kind": "flag", "name": "chunked_prefill_size", "type": "int", "default": None,
-     "help": "Tokens per prefill chunk.", "help_source": "engine"},
+     "help": "Tokens per prefill chunk.", "help_source": "engine",
+     "flag": "--chunked-prefill-size"},
+    {"kind": "flag", "name": "tp", "type": "int", "default": 1, "flag": "--tp-size",
+     "aliases": ["--tensor-parallel-size"]},
+    {"kind": "flag", "name": "enable_cache_report", "type": "bool", "default": False,
+     "flag": "--enable-cache-report"},
 ]
 LABELS = (
     vocab_mod.Label(
@@ -145,6 +150,8 @@ def test_labels_rank_entries_and_drop_what_does_not_apply(monkeypatch):
         ("SGLANG_ENABLE_OVERLAP_PLAN_STREAM", "high"),
         ("chunked_prefill_size", "mid"),
         ("SGLANG_LOG_GC", "unknown"),
+        ("enable_cache_report", "unknown"),
+        ("tp", "unknown"),
     ]
     assert rows[0]["when"] == "speculative decoding on"
     assert "SGLANG_USE_1STAGE_ALLREDUCE" in {
@@ -206,3 +213,21 @@ async def test_the_vocabulary_endpoint(night, monkeypatch):  # noqa: F811
     ]
     high = (await policy.get("/engine/vocabulary?level=high")).json()
     assert [e["name"] for e in high["entries"]] == ["SGLANG_ENABLE_OVERLAP_PLAN_STREAM"]
+
+
+async def test_a_flag_the_images_parser_does_not_take_is_refused(night):  # noqa: F811
+    supervisor, driver, http = night
+    await _store_vocabulary(http)
+    policy = await _boot(supervisor, driver, http)
+    ok = (await policy.post("/configs/check", json={"engine_args": {
+        "tensor_parallel_size": 2, "chunked_prefill_size": 4096}})).json()
+    assert ok["ok"] is True, ok["problems"]
+    assert ok["warnings"] == []  # the image's parser answers, not the catalog's guess
+    body = (await policy.post("/configs/check", json={"engine_args": {
+        "tp_size": 2, "chunked_prefil_size": 4096}})).json()
+    [problem] = body["problems"]
+    assert problem["kind"] == "unknown_flag"
+    assert "did you mean --chunked-prefill-size?" in problem["message"]
+    refused = await policy.post("/launches", json={"engine_args": {
+        "tp_size": 2, "chunked_prefil_size": 4096}, "gpu_indices": [0, 1]})
+    assert refused.status_code == 422

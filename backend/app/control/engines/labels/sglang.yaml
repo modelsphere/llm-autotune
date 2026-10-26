@@ -1,7 +1,9 @@
 # Recommendation labels for sglang switches: which are worth a policy's
 # trials first.
 #
-# Hand-written, optional. Anything not listed is "unknown". A label applies
+# Hand-written, optional, and only from experience: a switch that measurably
+# helped on real runs, with the situation it helped in. Anything not listed
+# is "unknown"; an empty file is fine. A label applies
 # only when the campaign's image actually reads the switch (its vocabulary,
 # dumped from the image) and the card matches `hardware`, so a label for a
 # switch an image lacks, or for other hardware, is dropped, never shown.
@@ -14,102 +16,6 @@
 #   hardware  vendor/architecture tags it applies to (nvidia, amd, npu,
 #             ampere, hopper, blackwell); omit for any hardware
 
-flag:
-- name: speculative_algorithm
-  level: high
-  when: decode-heavy traffic; first find which methods the model supports (a draft model, its own MTP/NEXTN
-    layers, or NGRAM, which needs none)
-- name: attention_backend
-  level: high
-  when: always worth one trial per backend the card supports
-- name: mem_fraction_static
-  level: mid
-  when: KV-cache bound at high concurrency, or OOM at load
-- name: schedule_policy
-  level: mid
-  when: prefix-heavy traffic (lpm groups requests that share a prefix)
-- name: speculative_num_steps
-  level: mid
-  when: speculative decoding on
-- name: speculative_eagle_topk
-  level: mid
-  when: EAGLE/NEXTN speculative decoding on
-- name: speculative_num_draft_tokens
-  level: mid
-  when: speculative decoding on
-- name: chunked_prefill_size
-  level: mid
-  when: long prompts, or TTFT spikes under load
-- name: max_prefill_tokens
-  level: mid
-  when: long prompts
-- name: max_running_requests
-  level: mid
-  when: high concurrency; KV-cache or batch-size bound
-- name: schedule_conservativeness
-  level: mid
-  when: frequent retractions, or KV cache left unused
-- name: cuda_graph_max_bs_decode
-  level: mid
-  when: the running batch outgrows the captured CUDA graphs
-- name: enable_dp_attention
-  level: mid
-  when: MoE/MLA models at high concurrency on several cards
-- name: moe_runner_backend
-  level: mid
-  when: MoE models
-- name: mamba_scheduler_strategy
-  level: mid
-  when: hybrid Mamba/linear-attention models with prefix caching
-- name: enable_mixed_chunk
-  level: low
-  when: prefill and decode compete in the same batches
-- name: enable_torch_compile
-  level: low
-  when: small batches; long startup
-- name: num_continuous_decode_steps
-  level: low
-  when: CPU scheduling overhead shows between decode steps
 
-env:
-- name: SGLANG_ENABLE_OVERLAP_PLAN_STREAM
-  level: high
-  when: speculative decoding on
-- name: SGLANG_INIT_NEW_TOKEN_RATIO
-  level: mid
-  when: high concurrency; the scheduler admits too few or retracts often
-- name: SGLANG_MIN_NEW_TOKEN_RATIO_FACTOR
-  level: mid
-  when: high concurrency; frequent retractions
-- name: SGLANG_CLIP_MAX_NEW_TOKENS_ESTIMATION
-  level: mid
-  when: requests ask for large max_tokens but stop early (admission is too cautious)
-- name: SGLANG_EXPERIMENTAL_CPP_RADIX_TREE
-  level: mid
-  when: prefix-heavy traffic with high cache hit rates
-- name: SGLANG_OPT_MAMBA_SKIP_DECODE_LOCK
-  level: mid
-  when: hybrid Mamba models with prefix caching
-- name: SGLANG_OPT_USE_CUSTOM_ALL_REDUCE_V2
-  level: mid
-  when: tensor parallel over NVLink
-  hardware:
-  - nvidia
-- name: SGLANG_ENABLE_JIT_DEEPGEMM
-  level: mid
-  when: FP8 models
-  hardware:
-  - hopper
-  - blackwell
-- name: SGLANG_ENABLE_DELAY_SAMPLE
-  level: mid
-  when: decode-heavy traffic; CPU work shows between steps
-- name: SGLANG_DISABLE_CONSECUTIVE_PREFILL_OVERLAP
-  level: low
-  when: long prompts arrive back to back
-- name: SGLANG_MOE_PADDING
-  level: low
-  when: MoE models
-- name: SGLANG_ENABLE_METADATA_GLUE_GRAPH
-  level: low
-  when: speculative decoding on, small batches
+flag: []
+env: []

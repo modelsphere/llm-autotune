@@ -41,6 +41,7 @@ from app.db.models import (
     Machine,
     MachineGroup,
     MachineGroupMember,
+    ModelConfig,
     Policy,
     PolicySession,
     PolicySessionStatus,
@@ -852,7 +853,7 @@ async def read_engine_vocabulary(
     _: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_async_session),
 ):
-    from app.control.engines import vocabulary_store
+    from app.control.engines import model_facts, vocabulary_store
     from app.control.launch.base import LaunchDeferred
 
     campaign = await session.get(Campaign, campaign_id)
@@ -870,16 +871,27 @@ async def read_engine_vocabulary(
         fields = await anyio.to_thread.run_sync(
             vocabulary_store.read_image, driver, info, campaign.engine, campaign.image
         )
+        model = (
+            await anyio.to_thread.run_sync(
+                model_facts.read_model, driver, info, campaign.image, campaign.model_path,
+                get_settings().engine_vocab_timeout_seconds,
+            )
+            if campaign.model_path else None
+        )
     except LaunchDeferred as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
     row = EngineVocabulary(**fields)
     session.add(row)
+    if model is not None:
+        session.add(ModelConfig(**model))
     await session.commit()
     kinds = [e.get("kind") for e in fields["entries"]]
     return {
         "id": row.id, "status": row.status, "engine_version": row.engine_version,
         "image_digest": row.image_digest, "flags": kinds.count("flag"),
         "env": kinds.count("env"), "notes": row.notes,
+        "model": {"status": model["status"], "facts": model["facts"], "notes": model["notes"]}
+        if model is not None else None,
     }
 
 

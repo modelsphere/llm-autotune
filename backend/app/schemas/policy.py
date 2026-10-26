@@ -155,6 +155,10 @@ class ManifestModel(BaseModel):
     served_model_name: str
     extra_env: dict[str, Any] = Field(default_factory=dict)
     extra_volumes: dict[str, Any] = Field(default_factory=dict)
+    # 1.5: read from the model's own config.json (engines/model_facts.py):
+    # layers, KV heads, experts and how many are active, built-in draft layers
+    # (draft_layers), attention layout, dtype, context. Empty until read.
+    facts: dict[str, Any] = Field(default_factory=dict)
 
 
 class ManifestHardware(BaseModel):
@@ -511,6 +515,10 @@ class VocabularyOut(BaseModel):
     total: int = 0
     notes: list[str] = Field(default_factory=list)
     entries: list[dict[str, Any]] = Field(default_factory=list)
+    # The model's facts and its whole config.json, once read (1.5); empty
+    # before. Here as well as in the manifest, which a policy reads once.
+    model_facts: dict[str, Any] = Field(default_factory=dict)
+    model_config_json: dict[str, Any] = Field(default_factory=dict)
 
 
 # -- contenders ---------------------------------------------------------------------

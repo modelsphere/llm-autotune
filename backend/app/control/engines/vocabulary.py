@@ -55,6 +55,12 @@ class Entry:
     # For a string env var the engine declares no choices for: where the
     # engine reads it ({where, code}), its own check of the value first.
     reads: tuple[dict[str, str], ...] = ()
+    negatable: bool = False
+    # A flag's spellings on this image's command line: the main one, the
+    # others its parser takes (including a `--no-` form), deprecated ones.
+    flag: str = ""
+    aliases: tuple[str, ...] = ()
+    deprecated_flags: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -87,6 +93,8 @@ def from_row(row: Any) -> Vocabulary:
             "choices": tuple(e.get("choices") or ()),
             "hardware": tuple(e.get("hardware") or ()),
             "reads": tuple(e.get("reads") or ()),
+            "aliases": tuple(e.get("aliases") or ()),
+            "deprecated_flags": tuple(e.get("deprecated_flags") or ()),
         })
         for e in row.entries or []
     ]
@@ -158,6 +166,44 @@ def lookup(
         and (not level or rank[r["level"]] <= rank.get(level, len(LEVELS)))
         and (not q or q in r["name"].lower() or q in (r["help"] or "").lower())
     ]
+
+
+def accepted_flags(vocab: Vocabulary) -> set[str]:
+    """Every option string the image's server parser takes."""
+    out: set[str] = set()
+    for e in vocab.entries:
+        if e.kind == "flag":
+            out.update(s for s in (e.flag, *e.aliases, *e.deprecated_flags) if s)
+            if e.negatable and e.flag.startswith("--"):
+                out.add("--no-" + e.flag[2:])
+    return out
+
+
+def unknown_flag_problems(
+    args: dict[str, Any], vocab: Vocabulary, engine: str
+) -> list[dict[str, Any]]:
+    """Flags the config renders to that the image's parser would refuse —
+    a launch that dies at argparse after minutes of scheduling and pulling.
+    Checked on the rendered command line, so an alias or a deprecated
+    spelling the engine still takes is fine."""
+    from app.control.engines.base import render_args
+
+    accepted = accepted_flags(vocab)
+    if not accepted:
+        return []
+    problems: list[dict[str, Any]] = []
+    for key, value in args.items():
+        for token in render_args({key: value}, engine):
+            if not token.startswith("--") or token in accepted:
+                continue
+            near = difflib.get_close_matches(token, sorted(accepted), n=3, cutoff=0.75)
+            hint = f"; did you mean {', '.join(near)}?" if near else ""
+            problems.append({
+                "param": key, "kind": "unknown_flag",
+                "message": f"{key} renders {token}, which this {engine} image's parser does "
+                f"not accept (the launch would fail){hint}",
+            })
+    return problems
 
 
 def unknown_env_problems(config: dict[str, Any], vocab: Vocabulary) -> list[dict[str, Any]]:
