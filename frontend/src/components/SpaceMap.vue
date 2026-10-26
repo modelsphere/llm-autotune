@@ -8,7 +8,10 @@
  *  move, and how far.
  */
 import { computed } from 'vue'
+import { useI18n } from '../i18n'
 import { axesOf, type SpaceShape } from '../utils/space'
+
+const { t } = useI18n()
 
 const props = defineProps<{
   space: SpaceShape | null | undefined
@@ -31,19 +34,19 @@ const axes = computed(() => axesOf(props.space))
 
       <div class="points">
         <span v-for="(value, i) in axis.values" :key="i" class="pt mono">{{ value }}</span>
-        <span v-if="axis.hidden" class="more">+{{ axis.hidden }} more</span>
+        <span v-if="axis.hidden" class="more">{{ t('campaignNew.map.more', { n: axis.hidden }) }}</span>
         <span v-if="!axis.values.length" class="mono broken">{{ axis.interval }}</span>
 
         <el-tag v-if="axis.kind === 'tied'" size="small" type="info" effect="plain"
-          class="mark" title="These move together — zipped, not crossed">
-          tied
+          class="mark" :title="t('campaignNew.map.tiedTip')">
+          {{ t('campaignNew.map.tied') }}
         </el-tag>
         <el-tag v-if="axis.kind === 'range'" size="small" type="info" effect="plain"
-          class="mark" :title="`interval ${axis.interval}`">
-          range
+          class="mark" :title="t('campaignNew.map.interval', { i: axis.interval })">
+          {{ t('campaignNew.map.range') }}
         </el-tag>
         <el-tag v-if="axis.gate" size="small" type="warning" effect="plain" class="mark">
-          only if {{ axis.gate.on }} = {{ axis.gate.values.join(' / ') }}
+          {{ t('campaignNew.map.onlyIf', { on: axis.gate.on, values: axis.gate.values.join(' / ') }) }}
         </el-tag>
       </div>
 
@@ -51,12 +54,12 @@ const axes = computed(() => axesOf(props.space))
     </div>
 
     <div v-if="candidates != null || note" class="total">
-      <b v-if="candidates != null">{{ candidates }} candidate{{ candidates === 1 ? '' : 's' }}</b>
+      <b v-if="candidates != null">{{ t('campaignNew.map.candidates', { n: candidates }) }}</b>
       <span v-if="note" class="note">{{ note }}</span>
     </div>
   </div>
 
-  <p v-else class="muted empty">No sweep — a single configuration.</p>
+  <p v-else class="muted empty">{{ t('campaignNew.map.none') }}</p>
 </template>
 
 <style scoped>

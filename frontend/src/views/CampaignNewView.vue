@@ -37,7 +37,9 @@ import { sweptKeysOf } from '../utils/space'
 import { defaultWorkload, specOf, type BenchmarkChoice, type Workload } from '../utils/workload'
 import { fromYaml, toYaml, YamlError } from '../utils/yaml'
 import { all } from '../utils/load'
+import { useI18n } from '../i18n'
 
+const { t } = useI18n()
 const router = useRouter()
 const route = useRoute()
 const step = ref(0)
@@ -55,7 +57,7 @@ const frozenDatasets = ref<FrozenDataset[]>([])
 const benchmarks = ref<BenchmarkChoice[]>([])
 /** What every candidate is measured with, and (two-stage) what the best few
  *  are re-measured with. Described workloads become benchmarks on create. */
-const workload = ref<Workload>(defaultWorkload('sweep'))
+const workload = ref<Workload>(defaultWorkload('replay'))
 const verifyWorkload = ref<Workload>(defaultWorkload('replay'))
 /** The LLMBench module each workload runs — the prefix of its metric names,
  *  which is what decides the objectives that can rank it. '' = unknown. */
@@ -137,14 +139,14 @@ const form = ref({
   schedule_until: null as string | null,
 })
 
-const STEPS = [
-  { title: 'Model' },
-  { title: 'Machines' },
-  { title: 'Search' },
-  { title: 'Benchmark' },
-  { title: 'Schedule' },
-  { title: 'Check' },
-]
+const STEPS = computed(() => [
+  { title: t('campaignNew.steps.model') },
+  { title: t('campaignNew.steps.machines') },
+  { title: t('campaignNew.steps.search') },
+  { title: t('campaignNew.steps.benchmark') },
+  { title: t('campaignNew.steps.schedule') },
+  { title: t('campaignNew.steps.check') },
+])
 
 /** The name a campaign gets when its author leaves it blank. */
 /** Today's date where the person is, not in UTC: a campaign named in the
@@ -174,10 +176,16 @@ const staged = computed(
   () => form.value.verify_enabled &&
     (verifyWorkload.value.mode !== 'existing' || verifyWorkload.value.slug.trim().length > 0))
 
+/** Whether a module's results can report a target metric: its own
+ *  `module.metric` names, or a measure (a name with no module, such as
+ *  total_tpm_per_gpu), which the platform derives for every module. */
+function reports(module: string, target: string): boolean {
+  return !module || !target.includes('.') || target.startsWith(`${module}.`)
+}
+
 /** The objectives a module's results can be ranked by. */
 function objectivesFor(module: string): Objective[] {
-  if (!module) return objectives.value
-  return objectives.value.filter((o) => o.target_metric.startsWith(`${module}.`))
+  return objectives.value.filter((o) => reports(module, o.target_metric))
 }
 const screenObjectives = computed(() => objectivesFor(screenModule.value))
 const verifyObjectives = computed(() => objectivesFor(verifyModule.value))
@@ -208,13 +216,13 @@ const pinnedProfile = computed(() =>
 /** What the summary calls a workload. */
 function describeWorkload(w: Workload): string {
   if (w.mode === 'sweep') {
-    return `synthetic ${w.input_tokens} in / ${w.output_tokens} out at ${w.concurrencies}`
+    return t('campaignNew.describe.sweep', { in: w.input_tokens, out: w.output_tokens, c: w.concurrencies })
   }
   if (w.mode === 'replay') {
-    return w.dataset_frozen ? `replay of frozen ${w.dataset_frozen}`
-      : `replay of ${w.dataset_profile || 'the example set'}`
+    return w.dataset_frozen ? t('campaignNew.describe.frozen', { name: w.dataset_frozen })
+      : t('campaignNew.describe.replay', { name: w.dataset_profile || t('campaignNew.describe.example') })
   }
-  return w.slug.trim() || 'the platform default'
+  return w.slug.trim() || t('campaignNew.describe.default')
 }
 
 /** The policy as a checkbox: two words beat a dropdown reading
@@ -243,11 +251,11 @@ const verifyObjectivePayload = computed(() => {
  *  None — which reads, in the morning, as "nothing was measured". */
 const objectiveMismatch = computed(() => {
   const target = selectedObjective.value?.target_metric ?? ''
-  return Boolean(screenModule.value && target && !target.startsWith(`${screenModule.value}.`))
+  return Boolean(target && !reports(screenModule.value, target))
 })
 const verifyObjectiveMismatch = computed(() => {
   const target = selectedVerifyObjective.value?.target_metric ?? ''
-  return Boolean(verifyModule.value && target && !target.startsWith(`${verifyModule.value}.`))
+  return Boolean(target && !reports(verifyModule.value, target))
 })
 
 /** What each step still needs, in the words of the thing that is missing.
@@ -255,16 +263,16 @@ const verifyObjectiveMismatch = computed(() => {
  *  end and is told the first page was wrong. */
 const problems = computed<string[][]>(() => [
   [
-    !form.value.image.trim() && 'a container image',
-    !form.value.model_path.trim() && 'the model path on the machine',
+    !form.value.image.trim() && t('campaignNew.need.image'),
+    !form.value.model_path.trim() && t('campaignNew.need.modelPath'),
   ].filter(Boolean) as string[],
   [] as string[], // machines may be left empty (= any), so nothing is required
-  [!selectedSpace.value && 'a search space'].filter(Boolean) as string[],
+  [!selectedSpace.value && t('campaignNew.need.space')].filter(Boolean) as string[],
   [
-    !selectedObjective.value && 'an objective',
+    !selectedObjective.value && t('campaignNew.need.objective'),
     // Ticked but blank is the quiet failure: the campaign saves, the second
     // stage never fires, and nothing anywhere says why.
-    form.value.verify_enabled && !staged.value && 'the benchmark to re-measure the best on',
+    form.value.verify_enabled && !staged.value && t('campaignNew.need.verify'),
   ].filter(Boolean) as string[],
   [] as string[],
   [] as string[], // the check step reports; it does not block by itself
@@ -373,7 +381,7 @@ async function runPreflight() {
   } catch (error: any) {
     ElMessage.error(
       error instanceof YamlError ? error.message
-        : (apiErrorText(error, 'Could not run the checks')),
+        : (apiErrorText(error, t('campaignNew.err.checks'))),
     )
   } finally {
     checking.value = false
@@ -396,7 +404,7 @@ const statusLook: Record<string, { type: string; icon: string }> = {
 /** Run the checks when the author arrives at the step — they are cheap, and a
  *  check nobody presses is a check nobody reads. */
 watch(step, (i) => {
-  if (i === STEPS.length - 1 && checkable.value && !preflight.value) runPreflight()
+  if (i === STEPS.value.length - 1 && checkable.value && !preflight.value) runPreflight()
 })
 
 const canCreate = computed(() => problems.value.every((p) => p.length === 0))
@@ -406,9 +414,9 @@ const canCreate = computed(() => problems.value.every((p) => p.length === 0))
  *  from. Name and objective are not among them. */
 const missingForCheck = computed(() =>
   [
-    !form.value.image.trim() && 'the container image',
-    !form.value.model_path.trim() && 'the model path',
-    !selectedSpace.value && 'a search space',
+    !form.value.image.trim() && t('campaignNew.need.image2'),
+    !form.value.model_path.trim() && t('campaignNew.need.modelPath2'),
+    !selectedSpace.value && t('campaignNew.need.space'),
   ].filter(Boolean) as string[])
 
 const checkable = computed(() => missingForCheck.value.length === 0)
@@ -424,7 +432,7 @@ function stepStatus(i: number): 'process' | 'success' | 'error' | 'wait' {
   if (i === step.value) return 'process'
   // The last step is the checks: it is done when they ran, not when it was
   // merely looked at, and it is a problem when they found one.
-  if (i === STEPS.length - 1) {
+  if (i === STEPS.value.length - 1) {
     if (!preflight.value || preflight.value.note) return 'wait'
     return blockers.value.length ? 'error' : 'success'
   }
@@ -511,7 +519,7 @@ async function refreshLists() {
   searchSpaces.value = spaces.data
   objectives.value = objs.data
   policies.value = ps.data
-  ElMessage.success('List refreshed')
+  ElMessage.success(t('campaignNew.msg.refreshed'))
 }
 
 /** The machines this campaign would actually land on. A node group is the pin
@@ -541,9 +549,7 @@ const nightsNeeded = computed(() => {
   const hours = (count * perRun) / 60 / parallel
   const windowHours = windowLength.value || 9
   const nights = Math.max(1, Math.ceil(hours / windowHours))
-  return `≈ ${hours.toFixed(1)} h of benchmarking — about ${nights} night${
-    nights === 1 ? '' : 's'
-  } at this window`
+  return t('campaignNew.estimate', { h: hours.toFixed(1), n: nights })
 })
 
 const windowLength = computed(() => {
@@ -612,7 +618,7 @@ function applyImport(opts: { review?: boolean } = {}) {
   try {
     parsed = campaignFromYaml(importText.value)
   } catch (error: any) {
-    ElMessage.error(error?.message ?? 'Could not read that YAML')
+    ElMessage.error(error?.message ?? t('campaignNew.err.yaml'))
     return
   }
 
@@ -684,7 +690,7 @@ function applyImport(opts: { review?: boolean } = {}) {
   importOpen.value = false
   importText.value = ''
   if (parsed.unknown.length) {
-    ElMessage.warning(`Ignored unknown field(s): ${parsed.unknown.join(', ')}`)
+    ElMessage.warning(t('campaignNew.msg.unknown', { fields: parsed.unknown.join(', ') }))
   }
 
   visited.value = new Set([0, 1, 2, 3, 4, 5])
@@ -694,8 +700,8 @@ function applyImport(opts: { review?: boolean } = {}) {
   }
   // Straight to the checks: an imported campaign is one nobody has reviewed
   // against tonight's machines, and that is the whole point of this step.
-  step.value = STEPS.length - 1
-  ElMessage.success('Imported — running the pre-flight checks')
+  step.value = STEPS.value.length - 1
+  ElMessage.success(t('campaignNew.msg.imported'))
   runPreflight()
 }
 
@@ -738,9 +744,9 @@ async function startFromCampaign(id: number) {
     applyImport({ review: true })
     draftNotes.value = null
     copiedFrom.value = { id: campaign.id, name: campaign.name }
-    ElMessage.success(`Filled in from ${campaign.name}: change what you need, then check and create`)
+    ElMessage.success(t('campaignNew.msg.filled', { name: campaign.name }))
   } catch (error: any) {
-    ElMessage.error(apiErrorText(error, 'Could not load that campaign'))
+    ElMessage.error(apiErrorText(error, t('campaignNew.err.load')))
   }
 }
 
@@ -823,7 +829,7 @@ async function draftFrom(req: Record<string, unknown>) {
     copiedFrom.value = null
     draftNotes.value = { provenance: data.provenance, warnings: data.warnings }
   } catch (error: any) {
-    ElMessage.error(apiErrorText(error, 'Could not draft a campaign'))
+    ElMessage.error(apiErrorText(error, t('campaignNew.err.draft')))
   } finally {
     drafting.value = false
   }
@@ -843,17 +849,15 @@ async function create() {
   if (!canCreate.value) {
     const firstBad = problems.value.findIndex((p) => p.length > 0)
     step.value = firstBad
-    ElMessage.error(`Still needs ${problems.value[firstBad].join(', ')}`)
+    ElMessage.error(t('campaignNew.msg.stillNeeds', { items: problems.value[firstBad].join(', ') }))
     return
   }
   if (blockers.value.length) {
     try {
       await ElMessageBox.confirm(
-        `The checks found ${blockers.value.length} problem(s) that would stop this `
-          + 'campaign: ' + blockers.value.map((b) => b.label).join(', ')
-          + '. Create it anyway, to fix them before it starts?',
-        'Create with problems?',
-        { confirmButtonText: 'Create anyway', cancelButtonText: 'Go back', type: 'warning' },
+        t('campaignNew.withProblems', { n: blockers.value.length, list: blockers.value.map((b) => b.label).join(', ') }),
+        t('campaignNew.withProblemsTitle'),
+        { confirmButtonText: t('campaignNew.createAnyway'), cancelButtonText: t('campaignNew.goBack'), type: 'warning' },
       )
     } catch {
       return
@@ -920,7 +924,7 @@ async function create() {
     ElMessage.error(
       error instanceof YamlError
         ? error.message
-        : (apiErrorText(error, 'Create failed')),
+        : (apiErrorText(error, t('campaignNew.err.create'))),
     )
   } finally {
     busy.value = false
@@ -949,27 +953,27 @@ onMounted(async () => {
 <template>
   <div class="page wide">
     <div class="header-row">
-      <h1 class="page-title">New campaign</h1>
+      <h1 class="page-title">{{ t('campaignNew.title') }}</h1>
       <div class="header-actions">
         <el-dropdown trigger="click" @command="startFrom">
           <el-button type="primary" plain>
-            Start from<el-icon class="el-icon--right"><ArrowDown /></el-icon>
+            {{ t('campaignNew.startFrom') }}<el-icon class="el-icon--right"><ArrowDown /></el-icon>
           </el-button>
           <template #dropdown>
             <el-dropdown-menu>
               <el-dropdown-item command="campaign" :icon="CopyDocument">
-                A previous campaign…</el-dropdown-item>
-              <el-dropdown-item command="baseline" :icon="Medal">A baseline…</el-dropdown-item>
-              <el-dropdown-item command="yaml" :icon="Document">A YAML file…</el-dropdown-item>
+                {{ t('campaignNew.fromCampaign') }}</el-dropdown-item>
+              <el-dropdown-item command="baseline" :icon="Medal">{{ t('campaignNew.fromBaseline') }}</el-dropdown-item>
+              <el-dropdown-item command="yaml" :icon="Document">{{ t('campaignNew.fromYaml') }}</el-dropdown-item>
             </el-dropdown-menu>
           </template>
         </el-dropdown>
-        <el-button text @click="router.push('/campaigns')">Cancel</el-button>
+        <el-button text @click="router.push('/campaigns')">{{ t('common.cancel') }}</el-button>
       </div>
     </div>
     <div v-if="copiedFrom" class="copied-from muted tiny">
       <el-icon><CopyDocument /></el-icon>
-      Copied from
+      {{ t('campaignNew.copiedFrom') }}
       <router-link :to="`/campaigns/${copiedFrom.id}`" class="nav-link" target="_blank">
         {{ copiedFrom.name }}</router-link>
     </div>
@@ -984,43 +988,37 @@ onMounted(async () => {
         <!-- 1. Model -->
         <template v-if="step === 0">
           <el-form label-position="top">
-            <el-form-item label="Campaign name">
+            <el-form-item :label="t('campaignNew.name')">
               <el-input v-model="form.name" :placeholder="defaultName" />
             </el-form-item>
-            <el-form-item label="Container image">
+            <el-form-item :label="t('campaignNew.image')">
               <el-autocomplete v-model="form.image" class="mono wide-input"
                 :fetch-suggestions="suggest('image')"
                 placeholder="lmsysorg/sglang:v0.5.13.post1" />
             </el-form-item>
             <el-form-item>
               <template #label>
-                <span>Model path on the machine</span>
-                <InfoHint>Bind-mounted into the container at <span class="mono">/model</span>.</InfoHint>
+                <span>{{ t('campaignNew.modelPath') }}</span>
+                <InfoHint><span v-html="t('campaignNew.modelPathHint')" /></InfoHint>
               </template>
               <el-autocomplete v-model="form.model_path" class="mono wide-input"
                 :fetch-suggestions="suggest('model_path')" placeholder="/data/models/qwen3.6" />
             </el-form-item>
             <el-collapse v-model="modelAdvanced" class="advanced">
-              <el-collapse-item name="model" title="Advanced">
+              <el-collapse-item name="model" :title="t('campaignNew.advanced')">
                 <el-form-item>
                   <template #label>
-                    <span>Served model name</span>
-                    <InfoHint>
-                      The name the engine answers to. Only the platform and LLMBench use it,
-                      so by default it is the last part of the model path.
-                    </InfoHint>
+                    <span>{{ t('campaignNew.servedName') }}</span>
+                    <InfoHint>{{ t('campaignNew.servedNameHint') }}</InfoHint>
                   </template>
                   <el-autocomplete v-model="form.served_model_name" class="wide-input"
                     :fetch-suggestions="suggest('served_model_name')"
-                    :placeholder="servedName || 'from the model path'" />
+                    :placeholder="servedName || t('campaignNew.fromPath')" />
                 </el-form-item>
                 <el-form-item>
                   <template #label>
-                    <span>Launch extras</span>
-                    <InfoHint>
-                      YAML. Env vars and bind mounts every container gets — what the model
-                      needs beyond the engine flags.
-                    </InfoHint>
+                    <span>{{ t('campaignNew.extras') }}</span>
+                    <InfoHint>{{ t('campaignNew.extrasHint') }}</InfoHint>
                   </template>
                   <el-input v-model="form.extras_text" type="textarea" :rows="4" class="mono" />
                 </el-form-item>
@@ -1034,68 +1032,47 @@ onMounted(async () => {
           <el-form label-position="top">
             <el-form-item v-if="form.engine === 'sglang' && groups.length">
               <template #label>
-                <span>Node group</span>
-                <InfoHint :width="430">
-                  Deploy each run <b>across</b> the group's members instead of on one
-                  machine. Leave empty for an ordinary single-node campaign. The group's
-                  members become the pin and the Machines list below is ignored.
-                  <br /><br />
-                  The member count is the deployment width: a 2-member group needs a config
-                  whose tp×dp×pp divides evenly across the two boxes, and no other run may
-                  share a member while the gang is live. Form the group on the Resources
-                  page first.
-                </InfoHint>
+                <span>{{ t('campaignNew.nodeGroup') }}</span>
+                <InfoHint :width="430"><span v-html="t('campaignNew.nodeGroupHint')" /></InfoHint>
               </template>
               <el-select v-model="form.node_group" clearable style="width: 100%"
-                placeholder="single node">
+                :placeholder="t('campaignNew.singleNode')">
                 <el-option v-for="g in groups" :key="g.id" :value="g.name"
-                  :label="`${g.name} — ${g.node_count} node(s)${g.deployable ? '' : ' · blocked'}`" />
+                  :label="`${g.name} — ${t('campaignNew.nNodes', { n: g.node_count })}${g.deployable ? '' : ' · ' + t('campaignNew.blocked')}`" />
               </el-select>
             </el-form-item>
             <el-form-item>
               <template #label>
-                <span>Machines</span>
-                <InfoHint>
-                  Leave empty to allow any leased machine. Usually you want to pin — a model
-                  and image belong to the box that has the weights on disk.
-                </InfoHint>
+                <span>{{ t('campaignNew.machines') }}</span>
+                <InfoHint>{{ t('campaignNew.machinesHint') }}</InfoHint>
               </template>
               <el-select v-model="form.machine_names" multiple style="width: 100%"
                 :disabled="Boolean(form.node_group)"
-                :placeholder="form.node_group ? 'the node group is the pin' : 'any leased machine'">
+                :placeholder="form.node_group ? t('campaignNew.groupIsPin') : t('campaignNew.anyMachine')">
                 <el-option v-for="m in machines" :key="m.id" :value="m.name"
                   :label="`${m.name} (${m.gpu_count}× ${m.gpu_type || 'GPU'})`" />
               </el-select>
             </el-form-item>
             <el-form-item>
-              <el-checkbox v-model="form.share_machine">Parallel candidates</el-checkbox>
+              <el-checkbox v-model="form.share_machine">{{ t('campaignNew.parallel') }}</el-checkbox>
               <InfoHint :width="340">
-                Several candidates share a machine at once, each pinned to its own GPUs:
-                an 8-card node running one tp=2 config would otherwise leave six cards
-                idle. Widest candidates are placed first. Turn off if a config is
-                sensitive to host-level contention.
+                {{ t('campaignNew.parallelHint') }}
               </InfoHint>
             </el-form-item>
             <el-collapse v-model="machinesAdvanced" class="advanced">
-              <el-collapse-item name="machines" title="Advanced">
+              <el-collapse-item name="machines" :title="t('campaignNew.advanced')">
                 <div class="grid-2">
                   <el-form-item>
                     <template #label>
-                      <span>First engine port</span>
-                      <InfoHint>
-                        Each run takes the first free port from here. 30000–32767 is
-                        skipped: on k8s nodes kube-proxy hijacks that range.
-                      </InfoHint>
+                      <span>{{ t('campaignNew.port') }}</span>
+                      <InfoHint>{{ t('campaignNew.portHint') }}</InfoHint>
                     </template>
                     <el-input-number v-model="form.service_port" :min="1024" :max="65535" />
                   </el-form-item>
                   <el-form-item>
                     <template #label>
-                      <span>Max minutes per run</span>
-                      <InfoHint>
-                        A safety bound. The window is planned from how long this campaign's
-                        runs actually take, never more than this.
-                      </InfoHint>
+                      <span>{{ t('campaignNew.maxMinutes') }}</span>
+                      <InfoHint>{{ t('campaignNew.maxMinutesHint') }}</InfoHint>
                     </template>
                     <el-input-number v-model="form.max_run_minutes" :min="10" :max="1440"
                       :step="60" />
@@ -1111,18 +1088,18 @@ onMounted(async () => {
           <el-form label-position="top">
             <el-form-item>
               <template #label>
-                <span>Search space</span>
+                <span>{{ t('campaignNew.space') }}</span>
                 <el-button link type="primary" class="label-link"
-                  @click="openBuilder('/search-spaces')">Build one</el-button>
-                <el-button link class="label-link" @click="refreshLists">Refresh</el-button>
+                  @click="openBuilder('/search-spaces')">{{ t('campaignNew.build') }}</el-button>
+                <el-button link class="label-link" @click="refreshLists">{{ t('common.refresh') }}</el-button>
               </template>
               <el-select v-model="selectedSpaceId" filterable style="width: 100%"
-                placeholder="pick a saved search space" @change="applySearchSpace">
+                :placeholder="t('campaignNew.pickSpace')" @change="applySearchSpace">
                 <el-option v-for="s in searchSpaces" :key="s.id" :value="s.id"
                   :label="`${s.name} (${s.engine})`">
                   <span>{{ s.name }}</span>
                   <span class="muted opt-help">
-                    {{ s.engine }} · {{ sweptKeysOf(s).join(', ') || 'no sweep' }}
+                    {{ s.engine }} · {{ sweptKeysOf(s).join(', ') || t('campaignNew.noSweep') }}
                   </span>
                 </el-option>
               </el-select>
@@ -1133,22 +1110,15 @@ onMounted(async () => {
 
             <el-form-item class="spaced">
               <template #label>
-                <span>Strategy</span>
-                <InfoHint :width="360">
-                  With <b>no policy</b> the campaign tries every configuration in the
-                  space, in declaration order — exhaustive and repeatable, which works
-                  while the space is small; a window that runs out of time stops wherever
-                  it stopped. A <b>policy</b> is an external container (policy-as-code)
-                  that decides what to try next; the platform still launches, benchmarks
-                  and judges every configuration it picks.
-                </InfoHint>
+                <span>{{ t('campaignNew.strategy') }}</span>
+                <InfoHint :width="360"><span v-html="t('campaignNew.strategyHint')" /></InfoHint>
                 <el-button link type="primary" class="label-link"
-                  @click="openBuilder('/policies')">Register one</el-button>
-                <el-button link class="label-link" @click="refreshLists">Refresh</el-button>
+                  @click="openBuilder('/policies')">{{ t('campaignNew.register') }}</el-button>
+                <el-button link class="label-link" @click="refreshLists">{{ t('common.refresh') }}</el-button>
               </template>
               <el-select v-model="form.strategy" style="width: 100%" filterable
                 :empty-values="[null, undefined]">
-                <el-option value="" label="Grid (exhaustive)" />
+                <el-option value="" :label="t('campaignNew.grid')" />
                 <el-option-group v-if="policies.length" label="Policies">
                   <el-option v-for="p in policies" :key="p.id" :value="`policy:${p.id}`"
                     :label="p.name">
@@ -1161,73 +1131,50 @@ onMounted(async () => {
 
             <el-form-item v-if="selectedPolicy" class="spaced">
               <template #label>
-                <span>Finalists</span>
-                <InfoHint :width="360">
-                  When the window nears its end the policy names its best configs, and the
-                  platform launches and benchmarks each one itself — that measurement
-                  decides the winner. The time this needs is held back from the search,
-                  learned from how long this campaign's runs take.
-                </InfoHint>
+                <span>{{ t('campaignNew.finalists') }}</span>
+                <InfoHint :width="360">{{ t('campaignNew.finalistsHint') }}</InfoHint>
               </template>
               <el-input-number v-model="form.policy_max_contenders" :min="1" :max="8"
                 size="small" />
             </el-form-item>
             <el-form-item>
               <template #label>
-                <span>GPU budget</span>
-                <InfoHint :width="380">
-                  How many cards the night holds at once. Every launch shares them — search
-                  trials, repeats, and the final validation of the finalists and production —
-                  each taking as many as its config needs (tp × dp × pp), so a bigger budget
-                  means more measurements side by side. Empty: the whole machine, or on a
-                  node pool one launch's worth.
-                </InfoHint>
+                <span>{{ t('campaignNew.gpuBudget') }}</span>
+                <InfoHint :width="380">{{ t('campaignNew.gpuBudgetHint') }}</InfoHint>
               </template>
               <el-input-number v-model="form.policy_gpu_budget" :min="1" :max="64"
-                size="small" placeholder="default" />
+                size="small" :placeholder="t('campaignNew.default')" />
             </el-form-item>
 
             <el-collapse v-if="selectedPolicy" v-model="policyAdvanced" class="advanced">
-              <el-collapse-item name="policy" title="Advanced">
+              <el-collapse-item name="policy" :title="t('campaignNew.advanced')">
                 <el-form-item>
                   <el-checkbox v-model="form.policy_validate_production">
-                    Validate production next to the finalists
+                    {{ t('campaignNew.validateProd') }}
                   </el-checkbox>
                   <InfoHint :width="340">
-                    Measures the production config with the validation benchmark, at the same
-                    time as the finalists, so the verdict says whether they beat it under the
-                    same conditions. Costs one more launch's worth of cards at the end.
+                    {{ t('campaignNew.validateProdHint') }}
                   </InfoHint>
                 </el-form-item>
                 <el-form-item>
                   <template #label>
-                    <span>Parameters the policy may not change</span>
-                    <InfoHint :width="380">
-                      The benchmarks measure speed, not answers, so a flag that changes what the
-                      model returns (KV-cache or weight precision, context length, chat template,
-                      parsers, default sampling) would look like a win. The policy may keep the
-                      value this campaign gives such a flag, but not change it. A flag this
-                      campaign's own search space sweeps is always allowed. One glob per line.
-                    </InfoHint>
+                    <span>{{ t('campaignNew.forbidden') }}</span>
+                    <InfoHint :width="380">{{ t('campaignNew.forbiddenHint') }}</InfoHint>
                   </template>
-                  <el-switch v-model="form.policy_forbidden_custom" active-text="Custom list"
-                    inactive-text="Platform default" @change="useCustomForbidden" />
+                  <el-switch v-model="form.policy_forbidden_custom" :active-text="t('campaignNew.customList')"
+                    :inactive-text="t('campaignNew.platformDefault')" @change="useCustomForbidden" />
                 </el-form-item>
                 <el-form-item v-if="form.policy_forbidden_custom">
                   <el-input v-model="form.policy_forbidden_text" type="textarea" :rows="6"
-                    class="mono" placeholder="Empty: the policy may change anything" />
+                    class="mono" :placeholder="t('campaignNew.emptyAnything')" />
                 </el-form-item>
                 <p v-else class="muted mono forbidden-default">
-                  {{ forbiddenDefault.join(', ') || 'The platform default list.' }}
+                  {{ forbiddenDefault.join(', ') || t('campaignNew.defaultList') }}
                 </p>
                 <el-form-item>
                   <template #label>
-                    <span>Policy parameters</span>
-                    <InfoHint :width="360">
-                      Knobs for the policy itself, passed to it as they are (YAML) — for example
-                      which LLM an agent policy uses and how hard it thinks. The platform does
-                      not read them; the policy's README lists what it accepts.
-                    </InfoHint>
+                    <span>{{ t('campaignNew.params') }}</span>
+                    <InfoHint :width="360">{{ t('campaignNew.paramsHint') }}</InfoHint>
                   </template>
                   <el-input v-model="form.policy_params_text" type="textarea" :rows="4"
                     class="mono" placeholder="model: my-llm" />
@@ -1236,20 +1183,16 @@ onMounted(async () => {
             </el-collapse>
 
             <el-collapse v-if="!selectedPolicy" v-model="searchAdvanced" class="advanced">
-              <el-collapse-item name="search" title="Advanced">
+              <el-collapse-item name="search" :title="t('campaignNew.advanced')">
                 <div class="grid-2">
                   <el-form-item>
                     <template #label>
-                      <span>Confirm top-k</span>
-                      <InfoHint :width="360">
-                        One benchmark is a signal, not a decision: a config can lead by noise.
-                        Before finishing, re-run the best k configs so the winner is backed
-                        by several measurements and reports its spread. 0 turns it off.
-                      </InfoHint>
+                      <span>{{ t('campaignNew.confirm') }}</span>
+                      <InfoHint :width="360">{{ t('campaignNew.confirmHint') }}</InfoHint>
                     </template>
                     <el-input-number v-model="form.confirm_top_k" :min="0" :max="10" />
                   </el-form-item>
-                  <el-form-item label="Repeats">
+                  <el-form-item :label="t('campaignNew.repeats')">
                     <el-input-number v-model="form.confirm_repeats" :min="2" :max="10"
                       :disabled="form.confirm_top_k === 0" />
                   </el-form-item>
@@ -1267,14 +1210,8 @@ onMounted(async () => {
           <el-form label-position="top">
             <el-form-item>
               <template #label>
-                <span>Workload</span>
-                <InfoHint :width="380">
-                  Every candidate gets the same load from LLMBench, the benchmark platform.
-                  Describe the load and AutoTune creates a matching benchmark there, filed
-                  under <span class="mono">llm-autotune</span> and locked so it cannot change
-                  mid-campaign. The same load always maps to the same benchmark, so
-                  campaigns that share it can be compared.
-                </InfoHint>
+                <span>{{ t('campaignNew.workload') }}</span>
+                <InfoHint :width="380"><span v-html="t('campaignNew.workloadHint')" /></InfoHint>
               </template>
               <WorkloadPicker v-model="workload" v-model:rebuild="rebuildAtStart"
                 :profiles="datasetProfiles" :frozen="frozenDatasets" :benchmarks="benchmarks"
@@ -1283,17 +1220,14 @@ onMounted(async () => {
 
             <el-form-item>
               <template #label>
-                <span>Objective</span>
-                <InfoHint :width="340">
-                  The metric candidates are ranked on, and the redlines a candidate must
-                  hold to rank at all. Only objectives this workload can report are listed.
-                </InfoHint>
+                <span>{{ t('campaignNew.objective') }}</span>
+                <InfoHint :width="340">{{ t('campaignNew.objectiveHint') }}</InfoHint>
                 <el-button link type="primary" class="label-link"
-                  @click="openBuilder('/objectives')">Build one</el-button>
-                <el-button link class="label-link" @click="refreshLists">Refresh</el-button>
+                  @click="openBuilder('/objectives')">{{ t('campaignNew.build') }}</el-button>
+                <el-button link class="label-link" @click="refreshLists">{{ t('common.refresh') }}</el-button>
               </template>
               <el-select v-model="selectedObjectiveId" filterable style="width: 100%"
-                placeholder="pick an objective">
+                :placeholder="t('campaignNew.pickObjective')">
                 <el-option v-for="o in screenObjectives" :key="o.id" :value="o.id" :label="o.name">
                   <span>{{ o.name }}</span>
                   <span class="muted opt-help">{{ o.direction }} {{ o.target_metric }}</span>
@@ -1301,37 +1235,35 @@ onMounted(async () => {
               </el-select>
               <div v-if="selectedObjective" class="goal-box">
                 <div class="goal-line">
-                  <span class="muted tiny lead-in">rank by</span>
+                  <span class="muted tiny lead-in">{{ t('campaignNew.rankBy') }}</span>
                   <b>{{ selectedObjective.direction }}</b>
                   <span class="mono">{{ selectedObjective.target_metric }}</span>
                 </div>
                 <!-- "must hold", not "reject if": a redline is the condition a run
                      has to SATISFY. -->
                 <div v-if="selectedObjective.redlines.length" class="goal-line">
-                  <span class="muted tiny lead-in">must hold</span>
+                  <span class="muted tiny lead-in">{{ t('campaignNew.mustHold') }}</span>
                   <span v-for="(r, i) in selectedObjective.redlines" :key="i" class="mono chip">
                     {{ r.metric }} {{ r.op }} {{ r.value }}
                   </span>
                 </div>
-                <div v-else class="muted tiny">no redlines</div>
+                <div v-else class="muted tiny">{{ t('campaignNew.noRedlines') }}</div>
               </div>
               <div v-if="objectiveMismatch" class="stage-warn">
-                This workload does not report <b>{{ selectedObjective?.target_metric }}</b>.
+                {{ t('campaignNew.mismatch') }} <b>{{ selectedObjective?.target_metric }}</b>.
               </div>
             </el-form-item>
 
             <el-collapse v-model="advancedNames" class="advanced">
               <el-collapse-item name="split">
-                <template #title>Advanced: verify stage</template>
+                <template #title>{{ t('campaignNew.verifyStage') }}</template>
                 <div class="stage-box" :class="{ off: !form.verify_enabled }">
                   <div class="stage-head">
                     <el-checkbox v-model="form.verify_enabled">
-                      <h4>Verify the best on a second workload</h4>
+                      <h4>{{ t('campaignNew.verifyTitle') }}</h4>
                     </el-checkbox>
                     <InfoHint :width="380">
-                      A replay of real traffic takes the better part of an hour per config.
-                      Screen every candidate with the workload above, then replay only the
-                      best few — and let that measurement decide the winner.
+                      {{ t('campaignNew.verifyHint') }}
                     </InfoHint>
                   </div>
                   <template v-if="form.verify_enabled">
@@ -1345,9 +1277,9 @@ onMounted(async () => {
                           size="small" controls-position="right" />
                       </label>
                       <label class="field">
-                        <span class="muted tiny">Objective</span>
+                        <span class="muted tiny">{{ t('campaignNew.objective') }}</span>
                       <el-select v-model="verifyObjectiveId" size="small" clearable filterable
-                        placeholder="platform default">
+                        :placeholder="t('campaignNew.platformDefaultLc')">
                         <el-option v-for="o in verifyObjectives" :key="o.id" :value="o.id"
                           :label="o.name">
                           <span>{{ o.name }}</span>
@@ -1357,7 +1289,7 @@ onMounted(async () => {
                       </label>
                     </div>
                     <div v-if="verifyObjectiveMismatch" class="stage-warn">
-                      The verify workload does not report
+                      {{ t('campaignNew.verifyMismatch') }}
                       <b>{{ selectedVerifyObjective?.target_metric }}</b>.
                     </div>
                   </template>
@@ -1387,7 +1319,7 @@ onMounted(async () => {
                  and gives no reason. -->
             <el-button v-if="checkable" size="small" :loading="checking"
               @click="runPreflight">
-              {{ preflight ? 'Re-run checks' : 'Run checks' }}
+              {{ preflight ? t('campaignNew.rerun') : t('campaignNew.run') }}
             </el-button>
           </div>
 
@@ -1396,7 +1328,7 @@ onMounted(async () => {
               :closable="false" show-icon :title="w" />
             <details>
               <summary class="muted tiny">
-                Drafted — where {{ Object.keys(draftNotes.provenance).length }} values came from
+                {{ t('campaignNew.drafted', { n: Object.keys(draftNotes.provenance).length }) }}
               </summary>
               <dl class="provenance">
                 <template v-for="(why, field) in draftNotes.provenance" :key="field">
@@ -1407,7 +1339,7 @@ onMounted(async () => {
             </details>
           </div>
 
-          <div v-if="checking" class="muted">Checking…</div>
+          <div v-if="checking" class="muted">{{ t('campaignNew.checking') }}</div>
 
           <el-alert v-else-if="preflight?.note" type="warning" :closable="false" show-icon
             :title="preflight.note" />
@@ -1415,9 +1347,9 @@ onMounted(async () => {
           <template v-else-if="preflight">
             <el-alert v-if="blockers.length" type="error" :closable="false" show-icon
               class="verdict"
-              :title="`${blockers.length} problem(s) would stop this campaign`" />
+              :title="t('campaignNew.nProblems', { n: blockers.length })" />
             <el-alert v-else type="success" :closable="false" show-icon class="verdict"
-              title="Nothing is in the way" />
+              :title="t('campaignNew.clear')" />
 
             <div v-for="m in preflight.machines" :key="m.machine" class="machine-checks">
               <div class="machine-name mono">{{ m.machine }}</div>
@@ -1440,108 +1372,105 @@ onMounted(async () => {
           </template>
 
           <p v-else-if="!checkable" class="muted">
-            Needs <b>{{ missingForCheck.join(', ') }}</b>.
+            {{ t('campaignNew.needs') }} <b>{{ missingForCheck.join(', ') }}</b>.
           </p>
         </template>
       </div>
 
       <!-- the answer so far, visible throughout rather than at a review screen -->
       <aside class="summary">
-        <h3>So far</h3>
+        <h3>{{ t('campaignNew.sum.title') }}</h3>
         <dl>
-          <dt>Name</dt>
+          <dt>{{ t('common.name') }}</dt>
           <dd>{{ form.name || defaultName }}</dd>
-          <dt>Serving</dt>
+          <dt>{{ t('campaignNew.sum.serving') }}</dt>
           <dd :class="{ empty: !servedName }">
-            {{ servedName || '—' }} <span class="muted">on {{ form.engine }}</span>
+            {{ servedName || '—' }} <span class="muted">{{ t('campaignNew.sum.on', { engine: form.engine }) }}</span>
           </dd>
-          <dt>Machines</dt>
+          <dt>{{ t('campaignNew.machines') }}</dt>
           <dd v-if="form.node_group">
             <el-tag size="small" type="primary" effect="plain">multi-node</el-tag>
-            node group <b>{{ form.node_group }}</b>
+            {{ t('campaignNew.sum.group') }} <b>{{ form.node_group }}</b>
             <span class="muted">
-              ({{ groups.find((g) => g.name === form.node_group)?.node_count ?? '?' }} nodes)
+              ({{ t('campaignNew.nNodes', { n: groups.find((g) => g.name === form.node_group)?.node_count ?? '?' }) }})
             </span>
           </dd>
-          <dd v-else>{{ form.machine_names.join(', ') || 'any leased machine' }}</dd>
-          <dt>Search</dt>
+          <dd v-else>{{ form.machine_names.join(', ') || t('campaignNew.anyMachine') }}</dd>
+          <dt>{{ t('campaignNew.steps.search') }}</dt>
           <dd :class="{ empty: !selectedSpace }">
             <template v-if="selectedSpace">
               {{ selectedSpace.name }}
-              <span class="muted">· {{ selectedSpace.candidate_count }} candidates
+              <span class="muted">· {{ t('campaignNew.sum.candidates', { n: selectedSpace.candidate_count }) }}
                 · {{ selectedPolicy ? `policy ${selectedPolicy.name}`
-                  : 'every configuration, in order' }}</span>
+                  : t('campaignNew.sum.inOrder') }}</span>
             </template>
-            <template v-else>not chosen</template>
+            <template v-else>{{ t('campaignNew.sum.notChosen') }}</template>
           </dd>
-          <dt>Measured by</dt>
+          <dt>{{ t('campaignNew.sum.measuredBy') }}</dt>
           <dd>{{ describeWorkload(workload) }}</dd>
-          <dt>Wins</dt>
+          <dt>{{ t('campaignNew.sum.wins') }}</dt>
           <dd :class="{ empty: !selectedObjective }">
-            {{ selectedObjective?.name ?? 'no objective chosen' }}
+            {{ selectedObjective?.name ?? t('campaignNew.sum.noObjective') }}
           </dd>
           <template v-if="staged">
-            <dt>Then</dt>
-            <dd>the best {{ form.verify_top_k }} on {{ describeWorkload(verifyWorkload) }}</dd>
+            <dt>{{ t('campaignNew.sum.then') }}</dt>
+            <dd>{{ t('campaignNew.sum.thenBest', { k: form.verify_top_k, workload: describeWorkload(verifyWorkload) }) }}</dd>
           </template>
-          <dt>Window</dt>
+          <dt>{{ t('campaignNew.sum.window') }}</dt>
           <dd :class="{ empty: !form.daily_start || !form.daily_end }">
             <template v-if="form.daily_start && form.daily_end">
-              {{ form.daily_start }} → {{ form.daily_end }} nightly
+              {{ form.daily_start }} → {{ form.daily_end }} {{ t('campaignNew.sum.nightly') }}
             </template>
-            <template v-else>manual</template>
+            <template v-else>{{ t('campaignNew.sum.manual') }}</template>
           </dd>
         </dl>
         <p v-if="nightsNeeded" class="muted tiny">{{ nightsNeeded }}</p>
       </aside>
     </div>
 
-    <el-dialog v-model="draftOpen" title="Start from a baseline" width="620px">
+    <el-dialog v-model="draftOpen" :title="t('campaignNew.draft.title')" width="620px">
       <el-form label-position="top">
         <el-form-item>
           <template #label>
-            Baseline
-            <InfoHint :width="360">The image, model and arguments come from the baseline;
-              the grid is sized to the machines. Every drafted value says where it came
-              from, and nothing is created until you press Create.</InfoHint>
+            {{ t('campaignNew.draft.baseline') }}
+            <InfoHint :width="360">{{ t('campaignNew.draft.baselineHint') }}</InfoHint>
           </template>
           <el-select v-model="draftForm.baseline_id" clearable filterable
-            placeholder="pick one — or name a model below">
+            :placeholder="t('campaignNew.draft.pick')">
             <el-option v-for="b in baselines" :key="b.id" :value="b.id"
-              :label="`#${b.id} ${b.served_model_name} · ${b.engine} · ${b.card_type || 'any card'}`" />
+              :label="`#${b.id} ${b.served_model_name} · ${b.engine} · ${b.card_type || t('campaignNew.draft.anyCard')}`" />
           </el-select>
         </el-form-item>
-        <el-form-item v-if="!draftForm.baseline_id" label="Served model name">
+        <el-form-item v-if="!draftForm.baseline_id" :label="t('campaignNew.servedName')">
           <el-input v-model="draftForm.served_model_name" placeholder="served model name" />
         </el-form-item>
-        <el-form-item label="Node group">
-          <el-select v-model="draftForm.node_group" clearable placeholder="single-node">
+        <el-form-item :label="t('campaignNew.nodeGroup')">
+          <el-select v-model="draftForm.node_group" clearable :placeholder="t('campaignNew.singleNode')">
             <el-option v-for="g in groups" :key="g.name" :value="g.name" :label="g.name" />
           </el-select>
         </el-form-item>
-        <el-form-item label="Verify benchmark">
+        <el-form-item :label="t('campaignNew.draft.verify')">
           <el-select v-model="draftForm.verify_benchmark_slug" clearable filterable allow-create
-            default-first-option class="mono" placeholder="no second stage">
+            default-first-option class="mono" :placeholder="t('campaignNew.draft.noSecond')">
             <el-option v-for="b in benchmarks" :key="b.slug" :value="b.slug" :label="b.slug" />
           </el-select>
         </el-form-item>
       </el-form>
       <template #footer>
-        <el-button @click="draftOpen = false">Cancel</el-button>
+        <el-button @click="draftOpen = false">{{ t('common.cancel') }}</el-button>
         <el-button type="primary" :loading="drafting"
           :disabled="!draftForm.baseline_id && !draftForm.served_model_name.trim()"
           @click="submitDraft">
-          Draft and check
+          {{ t('campaignNew.draft.submit') }}
         </el-button>
       </template>
     </el-dialog>
 
-    <el-dialog v-model="fromOpen" title="Start from a previous campaign" width="560px">
+    <el-dialog v-model="fromOpen" :title="t('campaignNew.from.title')" width="560px">
       <p class="muted tiny dialog-lead">
-        Its definition fills the form in — model, machines, search, benchmark and schedule —
-        to change before you create the new one. Its results and window stay with it.
+        {{ t('campaignNew.from.lead') }}
       </p>
-      <el-select v-model="fromId" filterable class="from-pick" placeholder="Pick a campaign">
+      <el-select v-model="fromId" filterable class="from-pick" :placeholder="t('campaignNew.from.pick')">
         <el-option v-for="c in pastCampaigns" :key="c.id" :value="c.id"
           :label="`${c.name} (#${c.id})`">
           <div class="from-option">
@@ -1552,34 +1481,34 @@ onMounted(async () => {
         </el-option>
       </el-select>
       <template #footer>
-        <el-button @click="fromOpen = false">Cancel</el-button>
+        <el-button @click="fromOpen = false">{{ t('common.cancel') }}</el-button>
         <el-button type="primary" :disabled="fromId == null" @click="startFromCampaign(fromId!)">
-          Fill in
+          {{ t('campaignNew.from.fill') }}
         </el-button>
       </template>
     </el-dialog>
 
-    <el-dialog v-model="importOpen" title="Import a campaign" width="720px">
+    <el-dialog v-model="importOpen" :title="t('campaignNew.import.title')" width="720px">
       <el-input v-model="importText" type="textarea" :rows="16" class="mono"
         placeholder="name: ...&#10;engine: sglang&#10;image: ..." />
       <template #footer>
-        <el-button @click="importOpen = false">Cancel</el-button>
+        <el-button @click="importOpen = false">{{ t('common.cancel') }}</el-button>
         <el-button type="primary" :disabled="!importText.trim()"
           @click="copiedFrom = null; applyImport()">
-          Import and check
+          {{ t('campaignNew.import.submit') }}
         </el-button>
       </template>
     </el-dialog>
 
     <div class="footer">
-      <el-button :disabled="step === 0" @click="step--">Back</el-button>
+      <el-button :disabled="step === 0" @click="step--">{{ t('campaignNew.back') }}</el-button>
       <span class="grow" />
       <span v-if="problems[step].length" class="muted tiny needs">
-        needs {{ problems[step].join(', ') }}
+        {{ t('campaignNew.needsLc', { items: problems[step].join(', ') }) }}
       </span>
-      <el-button v-if="step < STEPS.length - 1" type="primary" @click="step++">Next</el-button>
+      <el-button v-if="step < STEPS.length - 1" type="primary" @click="step++">{{ t('campaignNew.next') }}</el-button>
       <el-button v-else type="primary" :loading="busy" :disabled="!canCreate" @click="create">
-        Create campaign
+        {{ t('campaignNew.create') }}
       </el-button>
     </div>
   </div>
