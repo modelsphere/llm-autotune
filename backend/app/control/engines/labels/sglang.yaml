@@ -1,149 +1,66 @@
 # Recommendation labels for sglang switches: which are worth a policy's
-# trials, and where to search them.
+# trials first.
 #
 # Hand-written, optional. Anything not listed is "unknown". A label applies
 # only when the campaign's image actually reads the switch (its vocabulary,
 # dumped from the image) and the card matches `hardware`, so a label for a
 # switch an image lacks, or for other hardware, is dropped, never shown.
-# What may not be set at all lives in common.yaml.
+# What may not be set at all lives in common.yaml. A switch's type, default
+# and allowed values come from the image itself, never from here.
 #
 #   level     high | mid | low   (high: try early; mid: worth a trial when
 #                                 the record points at it; low: rarely helps)
 #   when      when it is worth trying, in a few words ("MoE models")
 #   hardware  vendor/architecture tags it applies to (nvidia, amd, npu,
 #             ampere, hopper, blackwell); omit for any hardware
-#   values    the values worth a trial, a hint, not a limit. Each is a value
-#             or {value: …, hardware: [...]}. Checked against the choices the
-#             image declares: a value the engine would refuse is dropped.
-#   range     {min, max, step} for a number worth searching over an interval
-#
-# The engine's own type, default and full list of choices come from the
-# image, not from here.
+
 flag:
 - name: speculative_algorithm
   level: high
   when: decode-heavy traffic; first find which methods the model supports (a draft model, its own MTP/NEXTN
     layers, or NGRAM, which needs none)
-  values:
-  - NGRAM
-  - EAGLE
-  - EAGLE3
-  - NEXTN
-  - STANDALONE
 - name: attention_backend
   level: high
   when: always worth one trial per backend the card supports
-  values:
-  - value: fa3
-    hardware:
-    - hopper
-  - flashinfer
-  - triton
-  - value: fa4
-    hardware:
-    - blackwell
-  - value: trtllm_mha
-    hardware:
-    - blackwell
 - name: mem_fraction_static
   level: mid
   when: KV-cache bound at high concurrency, or OOM at load
-  range:
-    min: 0.75
-    max: 0.93
-    step: 0.02
 - name: schedule_policy
   level: mid
   when: prefix-heavy traffic (lpm groups requests that share a prefix)
-  values:
-  - fcfs
-  - lpm
 - name: speculative_num_steps
   level: mid
   when: speculative decoding on
-  range:
-    min: 1
-    max: 6
-    step: 1
 - name: speculative_eagle_topk
   level: mid
   when: EAGLE/NEXTN speculative decoding on
-  values:
-  - 1
-  - 2
-  - 4
-  - 8
 - name: speculative_num_draft_tokens
   level: mid
   when: speculative decoding on
-  range:
-    min: 2
-    max: 32
-    step: 2
 - name: chunked_prefill_size
   level: mid
   when: long prompts, or TTFT spikes under load
-  values:
-  - 2048
-  - 4096
-  - 8192
-  - 16384
 - name: max_prefill_tokens
   level: mid
   when: long prompts
-  values:
-  - 8192
-  - 16384
-  - 32768
 - name: max_running_requests
   level: mid
   when: high concurrency; KV-cache or batch-size bound
-  values:
-  - 32
-  - 64
-  - 128
-  - 256
-  - 512
 - name: schedule_conservativeness
   level: mid
   when: frequent retractions, or KV cache left unused
-  range:
-    min: 0.3
-    max: 1.5
-    step: 0.1
 - name: cuda_graph_max_bs_decode
   level: mid
   when: the running batch outgrows the captured CUDA graphs
-  values:
-  - 64
-  - 128
-  - 256
-  - 512
 - name: enable_dp_attention
   level: mid
   when: MoE/MLA models at high concurrency on several cards
 - name: moe_runner_backend
   level: mid
   when: MoE models
-  values:
-  - auto
-  - triton
-  - value: deep_gemm
-    hardware:
-    - hopper
-    - blackwell
-  - value: flashinfer_trtllm
-    hardware:
-    - blackwell
-  - value: flashinfer_cutlass
-    hardware:
-    - blackwell
 - name: mamba_scheduler_strategy
   level: mid
   when: hybrid Mamba/linear-attention models with prefix caching
-  values:
-  - no_buffer
-  - extra_buffer
 - name: enable_mixed_chunk
   level: low
   when: prefill and decode compete in the same batches
@@ -153,10 +70,6 @@ flag:
 - name: num_continuous_decode_steps
   level: low
   when: CPU scheduling overhead shows between decode steps
-  range:
-    min: 1
-    max: 8
-    step: 1
 
 env:
 - name: SGLANG_ENABLE_OVERLAP_PLAN_STREAM
@@ -165,25 +78,12 @@ env:
 - name: SGLANG_INIT_NEW_TOKEN_RATIO
   level: mid
   when: high concurrency; the scheduler admits too few or retracts often
-  range:
-    min: 0.3
-    max: 0.9
-    step: 0.1
 - name: SGLANG_MIN_NEW_TOKEN_RATIO_FACTOR
   level: mid
   when: high concurrency; frequent retractions
-  range:
-    min: 0.05
-    max: 0.3
-    step: 0.05
 - name: SGLANG_CLIP_MAX_NEW_TOKENS_ESTIMATION
   level: mid
   when: requests ask for large max_tokens but stop early (admission is too cautious)
-  values:
-  - 1024
-  - 2048
-  - 4096
-  - 8192
 - name: SGLANG_EXPERIMENTAL_CPP_RADIX_TREE
   level: mid
   when: prefix-heavy traffic with high cache hit rates

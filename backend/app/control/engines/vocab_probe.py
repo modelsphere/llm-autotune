@@ -343,6 +343,46 @@ def flags_of(parser):
     return out
 
 
+def add_reads(root, entries, registry_file):
+    """For string-valued env vars the engine declares no choices for: where
+    the engine reads each one, a line either side — its own check of the value
+    ("must be one of: auto, masked, compact") is the only list there is, and
+    reading it beats any list built from it. Lines that validate come first."""
+    wanted = {e["name"]: e for e in entries
+              if e["kind"] == "env" and e.get("type") in ("str", "") and not e.get("choices")
+              and e.get("help_source") != "source"}
+    if not wanted:
+        return
+    use = re.compile(r"\benvs\.([A-Z][A-Z0-9_]+)")
+    checks = re.compile(r"one of|must be|raise|not in|== ?[\"']|in \(", re.I)
+    found = {}
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS]
+        for fn in filenames:
+            full = os.path.join(dirpath, fn)
+            if not fn.endswith(".py") or os.path.samefile(full, registry_file):
+                continue
+            try:
+                lines = open(full, encoding="utf-8").read().splitlines()
+            except Exception:
+                continue
+            for i, line in enumerate(lines):
+                for name in use.findall(line):
+                    if name not in wanted:
+                        continue
+                    lo, hi = max(0, i - 1), min(len(lines), i + 2)
+                    near = "\n".join(lines[lo:min(len(lines), i + 4)])
+                    snippet = {
+                        "where": f"{os.path.relpath(full, root)}:{i + 1}",
+                        "code": "\n".join(lines[lo:hi])[:400],
+                        "checks": bool(checks.search(near)),
+                    }
+                    found.setdefault(name, []).append(snippet)
+    for name, snippets in found.items():
+        snippets.sort(key=lambda r: not r["checks"])
+        wanted[name]["reads"] = [{"where": r["where"], "code": r["code"]} for r in snippets[:2]]
+
+
 def version_of(dist):
     try:
         from importlib.metadata import version
@@ -357,6 +397,9 @@ def main(engine):
     root = package_dir(engine)
     try:
         entries += (sglang_env if engine == "sglang" else vllm_env)(root, notes)
+        registry = os.path.join(root, "srt", "environ.py") if engine == "sglang" else (
+            os.path.join(root, "envs.py"))
+        add_reads(root, entries, registry)
     except Exception as exc:
         status = "partial"
         notes.append(f"env vars unreadable: {type(exc).__name__}: {exc}")

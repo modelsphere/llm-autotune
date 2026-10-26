@@ -52,6 +52,9 @@ class Entry:
     # Vendor/architecture tags it only applies to, as read from its name and
     # section ("amd" for an AITER or ROCm switch); empty = any hardware.
     hardware: tuple[str, ...] = ()
+    # For a string env var the engine declares no choices for: where the
+    # engine reads it ({where, code}), its own check of the value first.
+    reads: tuple[dict[str, str], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -63,10 +66,6 @@ class Label:
     # Vendor/architecture tags (app.hardware.hardware_tags) it applies to;
     # empty = any hardware.
     hardware: tuple[str, ...] = ()
-    # Where to search, when the label says: a short list of values worth a
-    # trial, each with the hardware it is for (empty = any), or an interval.
-    values: tuple[tuple[Any, tuple[str, ...]], ...] = ()
-    range: dict[str, float] | None = None
 
 
 @dataclass
@@ -87,6 +86,7 @@ def from_row(row: Any) -> Vocabulary:
             **{k: v for k, v in e.items() if k in fields},
             "choices": tuple(e.get("choices") or ()),
             "hardware": tuple(e.get("hardware") or ()),
+            "reads": tuple(e.get("reads") or ()),
         })
         for e in row.entries or []
     ]
@@ -110,48 +110,8 @@ def load_labels(engine: str) -> tuple[Label, ...]:
                 kind=kind, name=str(row["name"]), level=level,
                 when=str(row.get("when") or ""),
                 hardware=tuple(str(h) for h in row.get("hardware") or ()),
-                values=tuple(_value(v, path.name, row["name"]) for v in row.get("values") or ()),
-                range=_range(row.get("range"), path.name, row["name"]),
             ))
     return tuple(out)
-
-
-def _value(raw: Any, file: str, name: str) -> tuple[Any, tuple[str, ...]]:
-    """`fa3` or `{value: fa3, hardware: [hopper]}`."""
-    if isinstance(raw, dict):
-        if "value" not in raw:
-            raise ValueError(f"{file}: a value of {name!r} has no `value`")
-        return raw["value"], tuple(str(h) for h in raw.get("hardware") or ())
-    return raw, ()
-
-
-def _range(raw: Any, file: str, name: str) -> dict[str, float] | None:
-    if raw is None:
-        return None
-    if not isinstance(raw, dict) or not {"min", "max"} <= set(raw):
-        raise ValueError(f"{file}: the range of {name!r} needs `min` and `max`")
-    if not all(isinstance(raw[k], int | float) for k in raw if k in ("min", "max", "step")):
-        raise ValueError(f"{file}: the range of {name!r} must be numbers")
-    if raw["min"] > raw["max"]:
-        raise ValueError(f"{file}: the range of {name!r} has min above max")
-    return {k: raw[k] for k in ("min", "max", "step") if k in raw}
-
-
-def _suggested(label: Label, entry: Entry, tags: frozenset[str]) -> dict[str, Any] | None:
-    """The label's search hint as it applies here: values for other hardware
-    left out, and, when the engine declares its choices, only values it
-    accepts — a stale label never suggests what this image would refuse."""
-    if label.range is not None:
-        return {"range": dict(label.range)}
-    if not label.values:
-        return None
-    accepted = {str(c).lower() for c in entry.choices}
-    values = [
-        v for v, hw in label.values
-        if (not hw or not tags or tags & set(hw))
-        and (not accepted or str(v).lower() in accepted)
-    ]
-    return {"values": values} if values else None
 
 
 def _applies(label: Label, tags: frozenset[str]) -> bool:
@@ -176,9 +136,9 @@ def annotate(vocab: Vocabulary, gpu_type: str = "") -> list[dict[str, Any]]:
         row = asdict(entry)
         row["choices"] = list(entry.choices)
         row["hardware"] = list(entry.hardware)
+        row["reads"] = list(entry.reads)
         row["level"] = label.level if label else "unknown"
         row["when"] = label.when if label else ""
-        row["suggested"] = _suggested(label, entry, tags) if label else None
         out.append(row)
     rank = {level: i for i, level in enumerate(LEVELS)}
     out.sort(key=lambda r: (rank[r["level"]], r["kind"], r["name"]))
