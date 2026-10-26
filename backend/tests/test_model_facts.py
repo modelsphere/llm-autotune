@@ -71,7 +71,7 @@ def test_reading_a_models_config():
 
     import pytest
 
-    driver = _Driver(f"noise\n{mf.MARKER}\n{json.dumps(HYBRID_LIKE)}")
+    driver = _Driver(f"noise\n{mf.MARKER}{json.dumps(HYBRID_LIKE)}\n")
     fields = mf.read_model(driver, object(), "sglang:x", "/models/q", 60)
     assert fields["status"] == "ok" and fields["facts"]["experts"] == 512
     assert fields["config"] == HYBRID_LIKE

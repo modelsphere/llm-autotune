@@ -1743,7 +1743,7 @@ class K8sDriver(DeploymentDriver):
             statuses = (pods[0].get("status") or {}).get("containerStatuses") or []
             digest = str((statuses[0] if statuses else {}).get("imageID") or "")
             digest = digest.removeprefix("docker-pullable://")
-            out = api.logs(f"{PREFLIGHT_LABEL}={name}", tail=100)
+            out = api.logs(f"{PREFLIGHT_LABEL}={name}", tail=2000)
             if phase == "Failed":
                 raise RuntimeError(f"the job failed: {out.strip()[-1500:]}")
             return out, digest

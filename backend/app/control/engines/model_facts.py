@@ -14,7 +14,9 @@ import json
 from typing import Any
 
 MARKER = "@@AUTOTUNE_MODEL_CONFIG@@"
-READ_COMMAND = f'echo {MARKER}; head -c 400000 "$MODEL_DIR/config.json"'
+# One line after the marker (JSON keeps no raw newlines inside its strings),
+# so a log reader that keeps only the last lines still has all of it.
+READ_COMMAND = f'printf %s {MARKER}; head -c 400000 "$MODEL_DIR/config.json" | tr -d "\\n"; echo'
 
 # One fact, the spellings different model families use for it.
 _SAME: dict[str, tuple[str, ...]] = {
@@ -39,7 +41,8 @@ _SAME: dict[str, tuple[str, ...]] = {
 def parse_output(text: str) -> dict[str, Any]:
     if MARKER not in text:
         raise RuntimeError(f"no config.json read: {text.strip()[-500:]}")
-    body = text.split(MARKER, 1)[1].strip()
+    after = text.split(MARKER, 1)[1].strip()
+    body = after.splitlines()[0] if after else ""
     if not body:
         raise RuntimeError("config.json is empty or missing")
     return json.loads(body)
