@@ -74,8 +74,8 @@ async def test_the_check_answers_with_the_recipe_a_config_builds(night):  # noqa
     assert "--mem-fraction-static=0.8" in checked["recipe"]["values"]["extraArgs"]
     # A whole recipe is not a config: the platform builds it, a policy does not.
     recipe = (await policy.get("/session")).json()["model"]["recipe"]
-    ignored = (await policy.post("/configs/check", json={"recipe": recipe})).json()
-    assert "mem_fraction_static" not in ignored["config"]
+    refused = await policy.post("/configs/check", json={"recipe": recipe})
+    assert refused.status_code == 422
 
 
 async def test_a_recipe_campaign_refuses_what_its_chart_would(night):  # noqa: F811

@@ -385,7 +385,7 @@ class TrialOut(BaseModel):
 class LaunchIn(BaseModel):
     model_config = _lenient
 
-    engine_args: dict[str, Any] = Field(default_factory=dict)
+    engine_args: dict[str, Any]
     # The cards the config runs on, as many as it uses (tp×dp×pp). Empty only
     # on a machine with no cards, whose session holds none.
     gpu_indices: list[int] = Field(default_factory=list)
@@ -475,7 +475,7 @@ class BenchmarkOut(BaseModel):
 class ConfigCheckIn(BaseModel):
     model_config = _lenient
 
-    engine_args: dict[str, Any] = Field(default_factory=dict)
+    engine_args: dict[str, Any]
 
 
 class ConfigProblem(BaseModel):
@@ -543,7 +543,7 @@ class VocabularyOut(BaseModel):
 class ContenderLaunchSpec(BaseModel):
     model_config = _lenient
 
-    engine_args: dict[str, Any] = Field(default_factory=dict)
+    engine_args: dict[str, Any]
     image: str = Field(min_length=1)
     env: dict[str, str] = Field(default_factory=dict)
     volumes: dict[str, str] = Field(default_factory=dict)
