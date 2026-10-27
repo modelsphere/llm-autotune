@@ -1,0 +1,89 @@
+# What a config may not set, for every engine. Patterns are fnmatch,
+# case-sensitive; environment variables are written as their config key,
+# `env.<NAME>`.
+#
+#   never      placement and credentials: the launch driver, a node group's
+#              fabric settings and the install own these. Refused for every
+#              campaign; no setting relaxes it.
+#   forbidden  the default list of parameters that change what the model
+#              answers rather than how fast it answers. A config may keep the
+#              campaign's own value but not change it, and a parameter the
+#              campaign's own space sweeps is never forbidden. A campaign can
+#              replace the list (policy_settings.forbidden_params; empty =
+#              nothing forbidden).
+
+never:
+  # Which cards the engine sees.
+  - env.CUDA_VISIBLE_DEVICES
+  - env.NVIDIA_VISIBLE_DEVICES
+  - env.HIP_VISIBLE_DEVICES
+  - env.ROCR_VISIBLE_DEVICES
+  - env.ASCEND_RT_VISIBLE_DEVICES
+  # Rendezvous and fabric.
+  - env.MASTER_ADDR
+  - env.MASTER_PORT
+  - env.RANK
+  - env.LOCAL_RANK
+  - env.WORLD_SIZE
+  - env.NODE_RANK
+  - env.NCCL_SOCKET_IFNAME
+  - env.GLOO_SOCKET_IFNAME
+  - env.NCCL_IB_HCA
+  - env.*_HOST_IP
+  - env.*_PORT
+  # The process's own search paths.
+  - env.PATH
+  - env.LD_LIBRARY_PATH
+  - env.PYTHONPATH
+  - env.HOME
+  # Credentials. Not "*TOKEN*": SGLANG_CLIP_MAX_NEW_TOKENS_ESTIMATION and its
+  # kind are tuning knobs.
+  - env.*_TOKEN
+  - env.*SECRET*
+  - env.*PASSWORD*
+  - env.*_API_KEY
+  - env.*ACCESS_KEY*
+
+forbidden:
+  # Precision of weights and KV cache.
+  - quantization*
+  - modelopt_quant*
+  - kv_cache_dtype
+  - dtype
+  # What the deployment can do and how it reads requests.
+  - context_length
+  - max_model_len
+  - chat_template*
+  - "*_parser"
+  - enable_auto_tool_choice
+  - trust_remote_code
+  - load_format
+  - tokenizer*
+  - skip_tokenizer_init
+  - revision
+  - json_model_override_args
+  - hf_overrides
+  # Default sampling.
+  - generation_config
+  - override_generation_config
+  - preferred_sampling_params
+  - sampling_defaults
+  # Environment variables that change answers: reasoning budgets and
+  # defaults, clipped outputs, approximate attention, greedy verification,
+  # weight/activation/state precision.
+  - env.*THINK*
+  - env.*REASONING*
+  - env.*MAX_NEW_TOKENS_LIMIT*
+  - env.*SKIP_SOFTMAX*
+  - env.*GREEDY*
+  - env.*_DTYPE
+  - env.*PRECISION*
+  - env.*QUANT*
+  - env.*FP4*
+  - env.*INT4*
+  - env.*MXFP*
+  - env.*IGNORED_LAYERS*
+  - env.*LOW_PRECISION*
+  - env.*MULTIPLE_REDUCTION*
+  - env.*CONTEXT_LEN*
+  - env.*CHAT_TEMPLATE*

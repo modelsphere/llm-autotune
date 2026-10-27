@@ -331,6 +331,35 @@ class SshDockerDriver(DeploymentDriver):
     def _q(parts: list[str]) -> str:
         return " ".join(shlex.quote(part) for part in parts)
 
+    def run_in_image(
+        self, machine, image: str, command: str, timeout: int, model_path: str = ""
+    ) -> tuple[str, str]:
+        """`docker run --rm` on the machine, only once the image is there (an
+        engine launch pulls it; this never does)."""
+        q = shlex.quote(image)
+        script = (
+            f"docker image inspect {q} >/dev/null 2>&1 || {{ echo @@NO_IMAGE@@; exit 0; }}; "
+            f"echo \"@@DIGEST@@$(docker image inspect --format '{{{{index .RepoDigests 0}}}}' {q} "
+            "2>/dev/null)\"; "
+            f"docker run --rm --network none --entrypoint sh -e NVIDIA_VISIBLE_DEVICES=none "
+            + (f"-v {shlex.quote(model_path)}:{MODEL_MOUNT}:ro -e MODEL_DIR={MODEL_MOUNT} "
+               if model_path else "")
+            + f"{q} -c {shlex.quote(command)}"
+        )
+        result = self._ssh(machine, script, timeout=timeout)
+        out = result.stdout or ""
+        if "@@NO_IMAGE@@" in out:
+            raise LaunchDeferred(f"{image} is not on {machine.host} yet")
+        digest = next(
+            (ln.split("@@DIGEST@@", 1)[1].strip() for ln in out.splitlines() if "@@DIGEST@@" in ln),
+            "",
+        )
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"exit {result.returncode}: {(result.stderr or out).strip()[-1500:]}"
+            )
+        return out, digest
+
     def ensure_image(self, machine, image: str) -> None:
         """Make sure `image` is on the machine before `docker run` needs it.
 

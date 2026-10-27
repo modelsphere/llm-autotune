@@ -8,7 +8,7 @@ This document is the narrative version: what the calls mean, and what each side
 guarantees. For the one-page summary see [policy-api.md](policy-api.md); the interactive reference that
 always matches the running build is **`/api/docs`**, section *policy sessions*.
 For real responses from a finished session see the
-Contract version: **1.3** (`/api/policy/v1`; see [Evolution](#evolution)).
+Contract version: **1.5** (`/api/policy/v1`; see [Evolution](#evolution)).
 
 ---
 
@@ -360,6 +360,27 @@ Both are refusals (`422`) at `POST /launches`, `POST /benchmarks` and
 `PUT /contenders` (where the entry is echoed in `rejected`), and both are
 reported without refusing by `POST /configs/check` below.
 
+**Environment variables (1.5).** Some engine switches exist only as
+environment variables (`SGLANG_*`, `VLLM_*`). A config sets one as an
+`env.<NAME>` key, still a flat scalar: `{"tp_size": 2,
+"env.SGLANG_ENABLE_OVERLAP_PLAN_STREAM": true}`. The platform keeps these keys off the
+command line and puts them into the engine container's environment, over the
+campaign's `extra_env`; a boolean becomes `1`/`0`, anything else its string. A
+search space can sweep them like any parameter, and they travel with a winner
+into its deployable config. Refused (`422`, and reported by
+`POST /configs/check` as `unknown_env`, `placement` or `bad_key`):
+
+- a name the campaign's image does not read, per its
+  [vocabulary](#engine-vocabulary-15). The engine would ignore it silently, and
+  the trial would measure the config without it. The message names the
+  nearest names it does read. With no vocabulary for the image yet, every env
+  key is refused, unless the campaign sets
+  `policy_settings.env_without_vocabulary: "warn"`;
+- placement and credentials: device visibility (`CUDA_VISIBLE_DEVICES`, …),
+  rendezvous (`MASTER_ADDR`, `RANK`, …), fabric (`NCCL_SOCKET_IFNAME`, …),
+  any `*_PORT` or `*_HOST_IP`, search paths, and tokens, keys and passwords;
+- a name that is not `A-Z`, `0-9` and `_`.
+
 ---
 
 ## Services
@@ -561,6 +582,55 @@ Read another campaign's findings as hints, not facts. A different image,
 workload or objective can turn them over, so check them with this night's
 trials before relying on them.
 
+### Engine vocabulary (1.5)
+
+When the manifest's `services.vocabulary` is true. The flags and environment
+variables the campaign's engine image reads, read from that image (one dump
+per image digest), each with the engine's own description where the image or
+its docs have one, and the platform's recommendation:
+
+```http
+GET /api/policy/v1/engine/vocabulary?kind=env&level=mid&query=spec
+→ {"status": "ok", "engine": "sglang", "engine_version": "0.5.19", "total": 1,
+   "notes": [], "entries": [
+     {"kind": "env", "name": "SGLANG_ENABLE_OVERLAP_PLAN_STREAM", "type": "bool", "default": false,
+      "choices": [], "help": "…", "help_source": "docs", "where": "…",
+      "level": "high", "when": "speculative decoding on"}]}
+```
+
+- `level` is `high`, `mid`, `low` or `unknown`: a hand-written recommendation
+  of what is worth a trial, best first. Most entries are `unknown`: debug, CI
+  and switches for other hardware. An entry labeled only for other hardware
+  than the session's cards is left out.
+- `help_source` says whose words `help` is: `engine` (the image's own help or
+  comment), `docs` (the engine's docs at that version), or `source` (the code
+  that reads it, when nothing describes it).
+- Filters: `kind` (`flag` or `env`), `query` (a substring of the name or the
+  help), `level` (the lowest level wanted: `mid` returns high and mid),
+  `limit`.
+- `status` is `ok`, `partial` (some of it could not be read; `notes` says
+  what) or `none` (nothing has been read from this image yet).
+- `model_facts` and `model_config_json`: the model's facts and its whole
+  `config.json`, once read (the same facts as the manifest's `model.facts`;
+  here too because a policy reads the manifest once, and the platform may
+  finish reading after the session started).
+- The type, default and allowed values of a switch are the engine's own:
+  a flag's choices from its parser, a vllm env var's declared choices. A
+  string env var the engine declares no choices for carries `reads`: the
+  engine code that reads it, its own check of the value first.
+
+With a vocabulary for the image, a flag the config renders to that the
+image's parser does not accept is refused (`unknown_flag`, with the nearest
+spellings it does accept), instead of a launch that fails at start.
+
+**Model facts (1.5).** The manifest's `model.facts` is read from the model's
+own `config.json`, where the campaign's runs mount the weights: `layers`,
+`kv_heads`, `head_dim`, `max_context`, `experts` and `experts_per_token`,
+`shared_experts`, `draft_layers` (built-in MTP/NEXTN layers a speculative
+decoder can draft with), `layer_types` (e.g. linear vs full attention),
+`kv_lora_rank` (MLA), `dtype`, `quantization`, `rope_scaling`, `multimodal`.
+A field the config does not have is absent, never guessed. Empty until read.
+
 ### Diagnostics (1.3)
 
 When the manifest's `services.diagnostics` is true. Everything the platform
@@ -576,9 +646,10 @@ POST /api/policy/v1/configs/check
    "warnings": [], "deviations": [{"param": "quantization", "kind": "unknown", …}]}
 ```
 
-A dry run: the canonical echo, the engine arguments it renders to, and
-everything a launch would refuse (`problems`: `placement`, `forbidden`,
-`not_renderable`, `round_trip`, `bad_key`, `safety`), without spending one.
+A dry run: the canonical echo, the engine arguments it renders to, the
+environment it sets (`env`, 1.5), and everything a launch would refuse
+(`problems`: `placement`, `forbidden`, `not_renderable`, `round_trip`,
+`bad_key`, `unknown_env`, `unknown_flag`, `safety`), without spending one.
 Never `422`s. `warnings` refuse nothing: flags the platform's catalog does not
 know (the engine may still accept them; a typo only fails at launch).
 
@@ -676,6 +747,11 @@ from their specs, time permitting. Either way the machine's own guarantees
   `search_idle_strikes`) and a recorded `search_end_reason`. A 1.0 image keeps
   working unchanged — it simply never sends the new fields, and the deadline
   plus the watchdog govern it exactly as before.
+- **1.5** (additive): `env.<NAME>` config keys and `GET /engine/vocabulary`,
+  with `services.env_keys` and `services.vocabulary` on the menu, `env` on
+  the `/configs/check` answer, and `model.facts` in the manifest. One new
+  refusal: with a vocabulary for the image, a flag its parser does not take
+  (`unknown_flag`), which would have failed the launch anyway.
 - **1.4** (additive): `PUT /session/digest` and `GET /history`, and
   `services.history` on the menu. A 1.3 policy runs unchanged.
 - **1.3** (additive): diagnostics (`POST /configs/check`, launch logs and

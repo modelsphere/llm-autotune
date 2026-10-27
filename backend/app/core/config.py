@@ -167,6 +167,18 @@ class Settings(BaseSettings):
     # the single ready_timeout, unchanged.
     ready_timeout_minutes: int = 30
     image_pull_timeout_minutes: int = 45
+    # The engine vocabulary (control/engines/vocabulary_store.py): how long the
+    # job that reads an image's flags and env vars may take (it imports the
+    # engine, torch included), and where the engine's docs are fetched from to
+    # describe env vars the image's code does not ({version} is the engine's).
+    # The fetch is optional: empty, unreachable or a missing page just leaves
+    # those descriptions out.
+    engine_vocab_timeout_seconds: int = 900
+    engine_docs_url_sglang: str = (
+        "https://raw.githubusercontent.com/sgl-project/sglang/v{version}"
+        "/docs/docs/references/environment_variables.mdx"
+    )
+    engine_docs_timeout_seconds: float = 10.0
     # Tearing a run's container down is graceful-then-forceful, verified by the
     # janitor rather than fire-and-forget: a SIGTERM first (let the engine
     # release GPU memory and NCCL cleanly), then this many seconds later a

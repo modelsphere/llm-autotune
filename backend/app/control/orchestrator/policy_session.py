@@ -587,6 +587,45 @@ class PolicySessionEngine:
         logger.info(
             "policy session %d launched %s on %s", session.id, policy.image, target.name
         )
+        self._read_vocabulary(db, campaign, target)
+
+    def _read_vocabulary(self, db: Session, campaign: Campaign, target) -> None:
+        """Read, in the background, what the platform does not know yet: the
+        engine image's flags and env vars (what env keys and flags are checked
+        against, GET /engine/vocabulary) and the model's own config (the
+        manifest's model facts)."""
+        from app.control.engines import model_facts, vocabulary_store
+        from app.control.launch.base import DeploymentDriver
+        from app.db.models import EngineVocabulary, ModelConfig
+
+        try:
+            if not campaign.image:
+                return
+            info = self.sup._machine_info(target)
+            driver = self.sup._driver_for(info)
+            # A substrate that cannot run a command in an image has nothing to read.
+            if getattr(type(driver), "run_in_image", None) in (
+                None, DeploymentDriver.run_in_image
+            ):
+                return
+            settings = self.sup.settings
+            if vocabulary_store.needs_reading(db, campaign.engine, campaign.image):
+                vocabulary_store.in_background(
+                    self.sup.session_factory, ("image", campaign.image),
+                    lambda: EngineVocabulary(**vocabulary_store.read_image(
+                        driver, info, campaign.engine, campaign.image)),
+                )
+            if campaign.model_path and vocabulary_store.needs_model_reading(
+                db, campaign.model_path
+            ):
+                vocabulary_store.in_background(
+                    self.sup.session_factory, ("model", campaign.model_path),
+                    lambda: ModelConfig(**model_facts.read_model(
+                        driver, info, campaign.image, campaign.model_path,
+                        settings.engine_vocab_timeout_seconds)),
+                )
+        except Exception:  # noqa: BLE001 — an extra, never a reason to fail a launch
+            logger.exception("could not start reading %s", campaign.image)
 
     # -- STARTING: wait for the first heartbeat --------------------------------
 

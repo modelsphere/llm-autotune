@@ -207,7 +207,16 @@ def _check_multi_node_shape(args: dict[str, Any], ctx: ValidationContext) -> str
     return None
 
 
+def _check_env_keys(args: dict[str, Any], ctx: ValidationContext) -> str | None:
+    """`env.<NAME>` keys: a variable name, never placement or a credential."""
+    from app.control.engines.env_keys import env_problems
+
+    problems = env_problems(args)
+    return problems[0]["message"] if problems else None
+
+
 CHECKS: list[CheckFn] = [
+    _check_env_keys,
     _check_positive_ints,
     _check_dp_attention_divides_tp,
     _check_parallelism_fits,

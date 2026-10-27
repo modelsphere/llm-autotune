@@ -1,0 +1,21 @@
+# Recommendation labels for vllm switches: which are worth a policy's
+# trials first.
+#
+# Hand-written, optional, and only from experience: a switch that measurably
+# helped on real runs, with the situation it helped in. Anything not listed
+# is "unknown"; an empty file is fine. A label applies
+# only when the campaign's image actually reads the switch (its vocabulary,
+# dumped from the image) and the card matches `hardware`, so a label for a
+# switch an image lacks, or for other hardware, is dropped, never shown.
+# What may not be set at all lives in common.yaml. A switch's type, default
+# and allowed values come from the image itself, never from here.
+#
+#   level     high | mid | low   (high: try early; mid: worth a trial when
+#                                 the record points at it; low: rarely helps)
+#   when      when it is worth trying, in a few words ("MoE models")
+#   hardware  vendor/architecture tags it applies to (nvidia, amd, npu,
+#             ampere, hopper, blackwell); omit for any hardware
+
+
+flag: []
+env: []

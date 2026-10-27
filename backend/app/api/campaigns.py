@@ -36,10 +36,12 @@ from app.db.models import (
     CampaignOwner,
     CampaignStatus,
     Candidate,
+    EngineVocabulary,
     Event,
     Machine,
     MachineGroup,
     MachineGroupMember,
+    ModelConfig,
     Policy,
     PolicySession,
     PolicySessionStatus,
@@ -836,6 +838,61 @@ async def campaign_preflight(
         policy_id=campaign.policy_id,
     )
     return await preflight(body, _, session)
+
+
+@router.post(
+    "/{campaign_id}/engine-vocabulary",
+    summary="Read the engine image's flags and environment variables now",
+    description="Runs the vocabulary probe in the campaign's image on its first machine "
+    "(a throwaway container, no cards) and stores what it read. A policy session reads "
+    "it by itself when the image has none; this re-reads on demand, e.g. after the "
+    "image's tag moved. Takes a minute or more: the engine is imported.",
+)
+async def read_engine_vocabulary(
+    campaign_id: int,
+    _: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_async_session),
+):
+    from app.control.engines import model_facts, vocabulary_store
+    from app.control.launch.base import LaunchDeferred
+
+    campaign = await session.get(Campaign, campaign_id)
+    if campaign is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "no such campaign")
+    names = list(campaign.machine_names or [])
+    machine = (
+        await session.execute(select(Machine).where(Machine.name.in_(names)))
+    ).scalars().first() if names else None
+    if machine is None:
+        raise HTTPException(status.HTTP_409_CONFLICT, "the campaign names no machine to read on")
+    info = MachineInfo.of(machine)
+    driver = get_driver(machine.driver or "ssh_docker", cluster_id=machine.cluster_id)
+    try:
+        fields = await anyio.to_thread.run_sync(
+            vocabulary_store.read_image, driver, info, campaign.engine, campaign.image
+        )
+        model = (
+            await anyio.to_thread.run_sync(
+                model_facts.read_model, driver, info, campaign.image, campaign.model_path,
+                get_settings().engine_vocab_timeout_seconds,
+            )
+            if campaign.model_path else None
+        )
+    except LaunchDeferred as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+    row = EngineVocabulary(**fields)
+    session.add(row)
+    if model is not None:
+        session.add(ModelConfig(**model))
+    await session.commit()
+    kinds = [e.get("kind") for e in fields["entries"]]
+    return {
+        "id": row.id, "status": row.status, "engine_version": row.engine_version,
+        "image_digest": row.image_digest, "flags": kinds.count("flag"),
+        "env": kinds.count("env"), "notes": row.notes,
+        "model": {"status": model["status"], "facts": model["facts"], "notes": model["notes"]}
+        if model is not None else None,
+    }
 
 
 @router.get(

@@ -1719,6 +1719,40 @@ class K8sDriver(DeploymentDriver):
         checks.extend(self._probe_job(api, machine, image, model_path, policy_images, timeout))
         return checks
 
+    def run_in_image(
+        self, machine: MachineInfo, image: str, command: str, timeout: int,
+        model_path: str = "",
+    ) -> tuple[str, str]:
+        """A Job on the machine's node (render_image_job): its log, and the
+        digest the node resolved the image to."""
+        api = self.api
+        name = f"autotune-vocab-{secrets.token_hex(4)}"
+        api.apply(render_image_job(name, machine, image, command, self.settings, model_path))
+        try:
+            deadline = time.monotonic() + timeout
+            while True:
+                pods = api.list("pods", label_selector=f"{PREFLIGHT_LABEL}={name}")
+                phase = ((pods[0].get("status") or {}).get("phase") if pods else "") or ""
+                if phase in ("Succeeded", "Failed"):
+                    break
+                if time.monotonic() >= deadline:
+                    raise RuntimeError(
+                        f"did not finish in {timeout}s (pod phase {phase or 'none'})"
+                    )
+                time.sleep(3)
+            statuses = (pods[0].get("status") or {}).get("containerStatuses") or []
+            digest = str((statuses[0] if statuses else {}).get("imageID") or "")
+            digest = digest.removeprefix("docker-pullable://")
+            out = api.logs(f"{PREFLIGHT_LABEL}={name}", tail=2000)
+            if phase == "Failed":
+                raise RuntimeError(f"the job failed: {out.strip()[-1500:]}")
+            return out, digest
+        finally:
+            try:
+                api.delete("job", name)
+            except Exception:  # noqa: BLE001 — labelled; it reaps itself after 600 s
+                logger.warning("could not delete vocabulary job %s", name)
+
     def model_presence(
         self,
         machine: MachineInfo,
@@ -1917,6 +1951,28 @@ class K8sDriver(DeploymentDriver):
 _FILE_SUFFIXES = (".gguf", ".safetensors", ".bin", ".pt", ".pth")
 
 
+def _weights_mount(
+    model_path: str, settings: Settings
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], str]:
+    """(volumes, mounts, where the weights are in the container), mounted as a
+    run mounts them: the shared weights claim at its subpath, else a hostPath
+    with a type check, so a missing path fails the mount rather than appearing
+    as an empty directory."""
+    pvc = (settings.k8s_model_pvc or "").strip()
+    if pvc:
+        return (
+            [{"name": "weights", "persistentVolumeClaim": {"claimName": pvc, "readOnly": True}}],
+            [{"name": "weights", "mountPath": "/weights", "readOnly": True}],
+            "/weights/" + _model_subpath(model_path, settings),
+        )
+    kind = "File" if model_path.endswith(_FILE_SUFFIXES) else "Directory"
+    return (
+        [{"name": "model", "hostPath": {"path": model_path, "type": kind}}],
+        [{"name": "model", "mountPath": MODEL_MOUNT, "readOnly": True}],
+        MODEL_MOUNT,
+    )
+
+
 def render_preflight_job(
     name: str,
     machine: MachineInfo,
@@ -1938,18 +1994,11 @@ def render_preflight_job(
     command = "exit 0"
     reads_log = False
     if model_path and images and images[0][0] == "engine":
-        pvc = (settings.k8s_model_pvc or "").strip()
-        if pvc:
-            volumes.append({"name": "weights",
-                            "persistentVolumeClaim": {"claimName": pvc, "readOnly": True}})
-            mounts.append({"name": "weights", "mountPath": "/weights", "readOnly": True})
-            target = shlex.quote("/weights/" + _model_subpath(model_path, settings))
+        volumes, mounts, target = _weights_mount(model_path, settings)
+        if (settings.k8s_model_pvc or "").strip():
+            target = shlex.quote(target)
             command = f"if [ -e {target} ]; then echo model-present; else echo model-missing; fi"
             reads_log = True
-        else:
-            kind = "File" if model_path.endswith(_FILE_SUFFIXES) else "Directory"
-            volumes.append({"name": "model", "hostPath": {"path": model_path, "type": kind}})
-            mounts.append({"name": "model", "mountPath": MODEL_MOUNT, "readOnly": True})
     containers = []
     for container_name, _, _, ref in images:
         container: dict[str, Any] = {
@@ -2001,6 +2050,66 @@ def render_preflight_job(
         },
     }
     return job, reads_log
+
+
+def render_image_job(
+    name: str, machine: MachineInfo, image: str, command: str, settings: Settings,
+    model_path: str = "",
+) -> dict:
+    """A Job that runs one shell line in `image` on the machine's node, with
+    no cards: how the engine vocabulary (and, given a model path, the model's
+    own config) is read. Room for importing an engine (torch included),
+    nothing more. The weights, when given, are mounted as a run mounts them,
+    at $MODEL_DIR."""
+    volumes, mounts, model_dir = (
+        _weights_mount(model_path, settings) if model_path else ([], [], "")
+    )
+    container: dict[str, Any] = {
+        "name": "engine",
+        "image": image,
+        "command": ["sh", "-c", command],
+        # "none", not "void": no cards, but the driver libraries, which an
+        # engine's parser may load (vllm's CUDA platform needs libcuda).
+        "env": ([{"name": "NVIDIA_VISIBLE_DEVICES", "value": "none"},
+                 {"name": "NVIDIA_DISABLE_REQUIRE", "value": "1"}]
+                if settings.k8s_gpu_resource.startswith("nvidia.com/") else []),
+        "resources": {
+            "requests": {"cpu": "500m", "memory": "2Gi"},
+            "limits": {"cpu": "2", "memory": "8Gi"},
+        },
+    }
+    if model_path:
+        container["volumeMounts"] = mounts
+        container["env"].append({"name": "MODEL_DIR", "value": model_dir})
+    pod_spec: dict[str, Any] = {
+        "restartPolicy": "Never",
+        "automountServiceAccountToken": False,
+        "terminationGracePeriodSeconds": 0,
+        "containers": [container],
+    }
+    if volumes:
+        pod_spec["volumes"] = volumes
+    selector = _node_selector_pairs(machine.node_selector, settings)
+    if selector:
+        pod_spec["nodeSelector"] = selector
+    tolerations = _tolerations(1, settings)
+    if tolerations:
+        pod_spec["tolerations"] = tolerations
+    pull_secrets = _image_pull_secrets(settings)
+    if pull_secrets:
+        pod_spec["imagePullSecrets"] = pull_secrets
+    labels = {MANAGED_LABEL: "true", PREFLIGHT_LABEL: name}
+    return {
+        "apiVersion": "batch/v1",
+        "kind": "Job",
+        "metadata": {"name": name, "labels": labels},
+        "spec": {
+            "backoffLimit": 0,
+            "ttlSecondsAfterFinished": 600,
+            "activeDeadlineSeconds": 3600,
+            "template": {"metadata": {"labels": labels}, "spec": pod_spec},
+        },
+    }
 
 
 class ProbeVerdict:
