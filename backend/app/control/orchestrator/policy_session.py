@@ -43,9 +43,11 @@ from app.control.orchestrator.policy_lifecycle import (
     settings_of,
 )
 from app.control.orchestrator.schedule import from_campaign as schedule_of
+from app.control.recipe.campaign import config_cards
+from app.control.recipe.campaign import widest_cards as campaign_widest_cards
 from app.control.search.base import CandidateConfig
 from app.control.search.space import prune_inactive
-from app.control.search.validation import cards_used, widest_cards
+from app.control.search.validation import cards_used
 from app.core import apikeys
 from app.db.models import (
     TERMINAL_RUN_STATES,
@@ -132,7 +134,9 @@ def policy_log_path(run_log_dir: str, session_id: int) -> str:
 
 
 
-def _validation_cards(session: PolicySession, config: dict, blockers: list) -> list[int] | None:
+def _validation_cards(
+    session: PolicySession, config: dict, blockers: list, campaign: Campaign | None = None
+) -> list[int] | None:
     """The cards a validation run takes: as many as its config uses
     (tp × dp × pp), all of them free within the session's block — or None
     when not enough are free yet. Validation launches run side by side, so
@@ -143,7 +147,7 @@ def _validation_cards(session: PolicySession, config: dict, blockers: list) -> l
     block = list(session.gpu_indices or [])
     if not block:
         return []
-    needed = max(cards_used(config), 1)
+    needed = max(config_cards(campaign, config) if campaign is not None else cards_used(config), 1)
     if needed > len(block):
         needed = len(block)
     held = {i for r in blockers for i in (r.gpu_indices or [])}
@@ -415,7 +419,7 @@ class PolicySessionEngine:
         held_ports |= {r.service_port for r in live_runs + dying if r.service_port}
 
         total = machine.gpu_count or 0
-        needed = settings_of(campaign).cards or widest_cards(campaign.search_space) or 1
+        needed = settings_of(campaign).cards or campaign_widest_cards(campaign) or 1
         free = [i for i in range(total) if i not in held_cards]
         if total and len(free) < needed:
             return None
@@ -993,7 +997,7 @@ class PolicySessionEngine:
             if machine is not None
             else []
         )
-        cards = _validation_cards(session, config, blockers)
+        cards = _validation_cards(session, config, blockers, db.get(Campaign, session.campaign_id))
         if cards is None:
             return False
         # A container holds its port for seconds after teardown is requested,

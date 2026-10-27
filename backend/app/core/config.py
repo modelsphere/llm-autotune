@@ -252,13 +252,30 @@ class Settings(BaseSettings):
     k8s_in_cluster: bool = False
     # Which object the driver renders for one run. The cluster design is still
     # TBD, so this is a switch, not a commitment:
-    #   "deployment" — a plain Deployment + NodePort Service. The universal k8s
-    #                  primitive: works on any cluster, no CRD/operator needed,
-    #                  right for single-node. This is the concrete, non-speculative
-    #                  path we can run today.
-    #   "custom"     — a TuningRun the autotune-operator reconciles (fields below).
-    #                  Set this once the operator is deployed on the cluster.
-    k8s_workload_kind: str = "deployment"
+    #   "llmservice" — an LLMService per run (llm-operator installs the engine
+    #                  chart with the run's recipe), the object a production
+    #                  deploy uses. The default; the stack install brings it.
+    #   "deployment" — (deprecated) a plain Deployment + NodePort Service, for a
+    #                  cluster without llm-operator.
+    #   "custom"     — (deprecated) a TuningRun the autotune-operator reconciles.
+    k8s_workload_kind: str = "llmservice"
+    # "llmservice" mode: the engine chart an LLMService installs, and where it
+    # is pulled from. The default is the chart repository the stack install
+    # publishes to; a site with its own (an oci:// mirror) sets it.
+    # `k8s_chart_credentials_secret` names a Secret in the namespace with
+    # basic-auth `username`/`password` for that repository.
+    k8s_chart_repo: str = "https://modelsphere.github.io/helm-charts"
+    k8s_chart_credentials_secret: str = ""
+    # How the benchmark reaches a run: "dns" (the default: it runs in this
+    # cluster and dials the run's Service by name) or "nodeport" (opt-in: from
+    # outside the cluster, through a node at k8s_node_host).
+    k8s_endpoint: str = "dns"
+    # The site's engine-image mirror ("" = as written): an image is pulled as
+    # <mirror>/<last path component>, swiss's rule for the same images.
+    k8s_image_mirror: str = ""
+    # Chart values every engine on this cluster gets (JSON), under the run's
+    # own: resources a quota demands, securityContext, shm.
+    k8s_site_values: str = ""
     # The custom resource the operator reconciles (only used when
     # k8s_workload_kind="custom"). Defaults address the autotune-operator's
     # TuningRun CRD; override only if its group/kind changes. apiVersion is

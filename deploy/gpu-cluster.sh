@@ -129,11 +129,23 @@ rules:
   - apiGroups: [""]
     resources: ["events"]
     verbs: ["get", "list"]
+  # The namespace's GPU quota: a pool's capacity where nodes cannot be read.
+  - apiGroups: [""]
+    resources: ["resourcequotas"]
+    verbs: ["get", "list"]
   # A search policy runs to completion as a Job.
   - apiGroups: ["batch"]
     resources: ["jobs"]
     verbs: ["create", "get", "list", "delete"]
-  # With the optional operator, an engine is a TuningRun instead.
+  # An engine is an LLMService (llm-operator), whose chart's Service and
+  # endpoints the platform reads for readiness.
+  - apiGroups: ["serving.modelsphere.dev"]
+    resources: ["llmservices"]
+    verbs: ["create", "get", "list", "watch", "update", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["endpoints"]
+    verbs: ["get", "list"]
+  # Deprecated: with the autotune operator, an engine is a TuningRun instead.
   - apiGroups: ["tuning.modelsphere.dev"]
     resources: ["tuningruns"]
     verbs: ["create", "get", "list", "watch", "delete"]

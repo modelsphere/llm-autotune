@@ -29,7 +29,14 @@ def get_driver(name: str = "ssh_docker", cluster_id: int | None = None) -> Deplo
     except KeyError as exc:
         raise ValueError(f"unknown driver '{name}' (available: {list(DRIVER_REGISTRY)})") from exc
     if factory is K8sDriver:
-        return K8sDriver(cluster_id=cluster_id)
+        driver = K8sDriver(cluster_id=cluster_id)
+        if driver.settings.k8s_workload_kind == "llmservice":
+            # Imported here: the recipe package imports the engine catalog,
+            # which imports this package.
+            from app.control.launch.llmservice import LLMServiceDriver
+
+            return LLMServiceDriver(settings=driver.settings)
+        return driver
     return factory()
 
 

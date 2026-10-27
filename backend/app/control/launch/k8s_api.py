@@ -57,6 +57,15 @@ def _unlink_quietly(path: str) -> None:
         pass
 
 
+# An LLMService (llm-operator), addressed the way kubectl names it. Fixed, not a
+# setting: unlike the TuningRun the old "custom" mode reconciled, its group and
+# version are the operator's published API.
+LLMSVC_GROUP = "serving.modelsphere.dev"
+LLMSVC_VERSION = "v1alpha1"
+LLMSVC_PLURAL = "llmservices"
+LLMSVC_RESOURCE = f"{LLMSVC_PLURAL}.{LLMSVC_GROUP}"
+
+
 class K8sError(RuntimeError):
     """A cluster call failed. Raised as RuntimeError so the supervisor
     classifies it as an infrastructure failure (retryable) rather than letting
@@ -325,6 +334,8 @@ class ClientApi(K8sApi):
             return "job"
         if kind == "Pod":
             return "pod"
+        if kind == "LLMService":
+            return LLMSVC_RESOURCE
         return f"{self.cluster.k8s_cr_plural}.{self.cluster.k8s_cr_group}"
 
     def _ensure(self) -> None:
@@ -401,7 +412,9 @@ class ClientApi(K8sApi):
                 lambda item: self._core.create_namespaced_pod(self._ns, item),
                 lambda name, item: self._core.replace_namespaced_pod(name, self._ns, item),
             )
-        g, v, plural = self._cr()
+        g, v, plural = (
+            (LLMSVC_GROUP, LLMSVC_VERSION, LLMSVC_PLURAL) if kind == "LLMService" else self._cr()
+        )
         return (
             lambda item: self._custom.create_namespaced_custom_object(g, v, self._ns, plural, item),
             lambda name, item: self._custom.replace_namespaced_custom_object(
@@ -443,6 +456,12 @@ class ClientApi(K8sApi):
                 return self._sanitize(self._batch.read_namespaced_job(name, self._ns))
             if resource == "pod":
                 return self._sanitize(self._core.read_namespaced_pod(name, self._ns))
+            if resource == "endpoints":
+                return self._sanitize(self._core.read_namespaced_endpoints(name, self._ns))
+            if resource == LLMSVC_RESOURCE:
+                return self._custom.get_namespaced_custom_object(
+                    LLMSVC_GROUP, LLMSVC_VERSION, self._ns, LLMSVC_PLURAL, name
+                )
             g, v, plural = self._cr()
             return self._custom.get_namespaced_custom_object(g, v, self._ns, plural, name)
         except self._ApiException as exc:
@@ -466,6 +485,10 @@ class ClientApi(K8sApi):
                 )
             elif resource == "pod":
                 self._core.delete_namespaced_pod(name, self._ns, grace_period_seconds=0)
+            elif resource == LLMSVC_RESOURCE:
+                self._custom.delete_namespaced_custom_object(
+                    LLMSVC_GROUP, LLMSVC_VERSION, self._ns, LLMSVC_PLURAL, name
+                )
             else:
                 g, v, plural = self._cr()
                 self._custom.delete_namespaced_custom_object(g, v, self._ns, plural, name)
@@ -484,6 +507,15 @@ class ClientApi(K8sApi):
                 resp = self._core.list_namespaced_event(self._ns, **kwargs)
             elif resource == "nodes":
                 resp = self._core.list_node(**kwargs)
+            elif resource == "resourcequotas":
+                resp = self._core.list_namespaced_resource_quota(self._ns, **kwargs)
+            elif resource == LLMSVC_RESOURCE:
+                return list(
+                    self._custom.list_namespaced_custom_object(
+                        LLMSVC_GROUP, LLMSVC_VERSION, self._ns, LLMSVC_PLURAL, **kwargs
+                    ).get("items")
+                    or []
+                )
             elif "." in resource:
                 # A custom resource, addressed as `<plural>.<group>` — how the
                 # probe asks whether the operator's CRD exists on this cluster.
@@ -534,37 +566,56 @@ class ClientApi(K8sApi):
         chunks = []
         for pod in pods.items:
             pod_name = pod.metadata.name
-            # A crash-looping engine's current container is a fresh restart
-            # with an empty log; the crash itself is in the previous one.
-            restarted = any(
-                (status.restart_count or 0) > 0
+            spec = getattr(pod, "spec", None)
+            containers = [c.name for c in ((spec and spec.containers) or [])]
+            # One container reads as the pod; several (an engine beside a
+            # sidecar, both engines of a colocated pd pod) each need naming,
+            # or the API refuses the read outright.
+            targets = containers if len(containers) > 1 else [None]
+            restarts = {
+                getattr(status, "name", ""): (status.restart_count or 0)
                 for status in ((pod.status and pod.status.container_statuses) or [])
-            )
-            if restarted:
+            }
+            for container in targets:
+                label = pod_name if container is None else f"{pod_name}/{container}"
+                # A crash-looping engine's current container is a fresh restart
+                # with an empty log; the crash itself is in the previous one.
+                restarted = (
+                    any(restarts.values()) if container is None else restarts.get(container, 0)
+                )
+                if restarted:
+                    try:
+                        before = self._read_log(pod_name, tail, previous=True, container=container)
+                        # Gone already (the runtime keeps one previous
+                        # container, and not for long): the kubelet answers
+                        # with a sentence.
+                        if before.strip() and "unable to retrieve container logs" not in before:
+                            chunks.append(f"[{label}, before the restart]\n{before}")
+                    except self._ApiException:
+                        pass
                 try:
-                    before = self._read_log(pod_name, tail, previous=True)
-                    # Gone already (the runtime keeps one previous container,
-                    # and not for long): the kubelet answers with a sentence.
-                    if before.strip() and "unable to retrieve container logs" not in before:
-                        chunks.append(f"[{pod_name}, before the restart]\n{before}")
+                    text = self._read_log(pod_name, tail, container=container)
                 except self._ApiException:
-                    pass
-            try:
-                text = self._read_log(pod_name, tail)
-            except self._ApiException:
-                continue  # best-effort: a log we cannot read must not fail a run
-            # A pod that printed nothing adds nothing: its name alone, saved as
-            # the log, reads as a log with something wrong in it.
-            if text.strip():
-                chunks.append(f"[{pod_name}]\n{text}")
+                    continue  # best-effort: a log we cannot read must not fail a run
+                # A pod that printed nothing adds nothing: its name alone, saved
+                # as the log, reads as a log with something wrong in it.
+                if text.strip():
+                    chunks.append(f"[{label}]\n{text}")
         return "\n".join(chunks).strip()
 
-    def _read_log(self, pod_name: str, tail: int, previous: bool = False) -> str:
+    def _read_log(
+        self, pod_name: str, tail: int, previous: bool = False, container: str | None = None
+    ) -> str:
         """A pod's log as text. Read raw and decoded here: the client's own
         deserialization hands back the repr of the bytes (b'...\\n...'), which
         is what every captured engine log looked like."""
         response = self._core.read_namespaced_pod_log(
-            pod_name, self._ns, tail_lines=tail, previous=previous, _preload_content=False
+            pod_name,
+            self._ns,
+            tail_lines=tail,
+            previous=previous,
+            _preload_content=False,
+            **({"container": container} if container else {}),
         )
         data = getattr(response, "data", response)
         if isinstance(data, bytes):

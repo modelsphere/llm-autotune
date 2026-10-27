@@ -115,10 +115,11 @@ def is_node_pool(machine) -> bool:
 def record_capacity(machine, probe: dict) -> bool:
     """Write a capacity probe onto a machine row; True if it said anything.
     A probe that matched no nodes leaves the row alone: that is a selector
-    mistake, not a reason to zero what was there."""
+    mistake, not a reason to zero what was there. One read from the namespace
+    quota (no node access) says the card count and what is free, nothing more."""
     from datetime import UTC, datetime
 
-    if not (probe.get("supported") and probe.get("node_count")):
+    if not (probe.get("supported") and (probe.get("node_count") or probe.get("quota"))):
         return False
     machine.gpu_count = probe.get("gpu_count", machine.gpu_count)
     if probe.get("gpu_type"):

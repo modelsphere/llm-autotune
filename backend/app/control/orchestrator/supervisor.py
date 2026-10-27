@@ -70,6 +70,7 @@ from app.control.orchestrator.machine_queue import campaign_key, session_key, wa
 from app.control.orchestrator.occupancy import holds, reservations_on
 from app.control.orchestrator.packing import Placement, choose_next, free_indices
 from app.control.orchestrator.states import can_transition
+from app.control.recipe.campaign import base_recipe, config_cards, recipe_for, split_flat
 from app.control.run_nodes import machine_hosts_live_gang, nodes_of, run_ids_on_machine
 from app.control.search import CandidateConfig
 from app.control.search.space import expand
@@ -1183,7 +1184,7 @@ class Supervisor:
             self._maybe_finish_campaign(session, campaign)
             return False
         by_id = {c.id: c for c in pending}
-        placements = [Placement(c.id, _cards_used(c.config)) for c in pending]
+        placements = [Placement(c.id, config_cards(campaign, c.config)) for c in pending]
 
         # A group campaign places a GANG, not a run on one machine: the group is
         # the unit, and the single-machine packer below would put a 2-node config
@@ -2007,7 +2008,7 @@ class Supervisor:
             # variants if each is credited with the GPUs it occupies. A baseline
             # now carries production's real engine args, so it is counted the
             # same way as any candidate — no special case.
-            cards = _cards_used(config)
+            cards = config_cards(campaign, config)
             # `cards` is the config's WORLD size (tp×dp×pp), which is the whole
             # deployment for a single node and the total across the gang for a
             # multi-node one. LLMBench card-normalizes per machine, so the two
@@ -2108,7 +2109,16 @@ class Supervisor:
         # the interconnect the boxes are actually wired with.
         # The config's own `env.<NAME>` keys go over the campaign's env; the
         # group's fabric settings still win over both.
-        engine_args, config_env = split_env(run.candidate.config or {})
+        stored = base_recipe(campaign)
+        # Every run carries its recipe: the LLMService driver launches it as
+        # is. The flat fields below are for the drivers that take them
+        # (ssh_docker, the Deployment kind), which apply flags and env only.
+        recipe = recipe_for(campaign, run.candidate.config or {})
+        if stored is not None:
+            engine_args, config_env = dict(recipe.flags()), dict(recipe.env())
+        else:
+            flat, _ = split_flat(run.candidate.config or {})
+            engine_args, config_env = split_env(flat)
         env = {**(campaign.extra_env or {}), **config_env}
         volumes = dict(campaign.extra_volumes or {})
         group = self._group_for_run(session, run)
@@ -2132,10 +2142,14 @@ class Supervisor:
         return LaunchSpec(
             run_id=run.id,
             machine=master_info,
-            engine=campaign.engine,
-            image=campaign.image,
+            engine=recipe.engine if stored is not None else campaign.engine,
+            image=recipe.image if stored is not None else campaign.image,
             model_path=campaign.model_path,
-            served_model_name=campaign.served_model_name,
+            served_model_name=(
+                recipe.served_name if stored is not None else campaign.served_model_name
+            ),
+            recipe=recipe.model_dump(),
+            chart_version=(campaign.chart_version or "") if stored is not None else "",
             engine_args=engine_args,
             gpu_indices=list(nodes[0].gpu_indices) if nodes else list(run.gpu_indices or []),
             port=run.service_port or campaign.service_port,
@@ -2528,6 +2542,13 @@ class Supervisor:
             snapshot["card_type"] = card_type
         snapshot["gpu_indices"] = list(run.gpu_indices or [])
         run.env_snapshot = snapshot
+        # The first run of a recipe campaign whose recipe names a range pins
+        # the version the operator installed: every later trial renders it.
+        campaign = run.campaign
+        resolved = str(snapshot.get("chart_version") or "")
+        if resolved and campaign is not None and campaign.recipe and not campaign.chart_version:
+            campaign.chart_version = resolved
+            logger.info("campaign %d pinned chart version %s", campaign.id, resolved)
 
     def _ready_timed_out(self, run: Run) -> bool:
         if run.started_at is None:

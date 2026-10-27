@@ -655,12 +655,18 @@ def dataset_wiring(client: Any) -> tuple[dict[str, str] | None, list[str] | None
     return wired, profiles
 
 
-def widest_candidate(search_space: dict) -> int:
-    """Cards the largest configuration in this space would occupy."""
+def widest_candidate(search_space: dict, recipe: dict | None = None) -> int:
+    """Cards the largest configuration in this space would occupy, on the
+    recipe when the campaign has one."""
     try:
+        from types import SimpleNamespace
+
+        from app.control.recipe.campaign import widest_cards
         from app.control.search.space import expand
         from app.control.search.validation import cards_used
 
+        if recipe:
+            return widest_cards(SimpleNamespace(recipe=recipe, search_space=search_space or {}))
         return max((cards_used(c) for c in expand(search_space or {})), default=0)
     except Exception:
         return 0

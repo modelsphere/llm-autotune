@@ -36,6 +36,7 @@ from app.control.engines import vocabulary as vocab_mod
 from app.control.engines.base import render_args
 from app.control.engines.env_keys import env_problems, is_env_key, split_env
 from app.control.engines.flags import known_flags, normalize_args
+from app.control.launch.clusters import resolve_cluster
 from app.control.orchestrator.policy_lifecycle import (
     PENDING_CONTENDER_STATES,
     command_for,
@@ -43,10 +44,23 @@ from app.control.orchestrator.policy_lifecycle import (
     deadlines,
     settings_of,
 )
+from app.control.recipe import Recipe
+from app.control.recipe import shape as recipe_shape
+from app.control.recipe.address import BadAddress
+from app.control.recipe.address import parse as parse_address
+from app.control.recipe.campaign import (
+    config_cards,
+    config_pod_cards,
+    recipe_for,
+    split_flat,
+)
+from app.control.recipe.check import config_problems as recipe_config_problems
+from app.control.recipe.check import recipe_problems
+from app.control.recipe.render import chart_commands
 from app.control.search.base import CandidateConfig
 from app.control.search.space import deviations as space_deviations
 from app.control.search.space import forbidden_hits, prune_inactive
-from app.control.search.validation import ValidationContext, cards_used, validate_config
+from app.control.search.validation import ValidationContext, validate_config
 from app.core.auth import PolicyCaller, get_policy_session
 from app.core.config import get_settings
 from app.db.base import get_async_session
@@ -222,6 +236,39 @@ def _env_vocabulary_problems(
     ]
 
 
+def _anchor(campaign: Campaign) -> Recipe:
+    """What every launch starts from: the campaign's recipe (or the one its
+    fields make) with the space's base applied."""
+    return recipe_for(campaign, (campaign.search_space or {}).get("base") or {})
+
+
+def _launches_recipes(machine: Machine | None) -> bool:
+    """Whether this machine's runs are LLMServices, which carry the whole recipe."""
+    if machine is None or (machine.driver or "") != "k8s":
+        return False
+    try:
+        return resolve_cluster(machine.cluster_id).k8s_workload_kind == "llmservice"
+    except Exception:
+        return False
+
+
+def _split_addresses(config: dict[str, Any]) -> tuple[dict[str, Any], list[ConfigProblem]]:
+    """The bare flags and env keys (what every check before 1.6 reads), and a
+    problem for each address that cannot be read. Role flags and chart values
+    are checked on the recipe they produce."""
+    flat: dict[str, Any] = {}
+    problems: list[ConfigProblem] = []
+    for key, value in config.items():
+        try:
+            kind = parse_address(key).kind
+        except BadAddress as exc:
+            problems.append(ConfigProblem(kind="bad_key", param=key, message=str(exc)))
+            continue
+        if kind in ("flag", "env"):
+            flat[key] = value
+    return flat, problems
+
+
 def _config_problems(
     config: dict[str, Any],
     campaign: Campaign,
@@ -233,14 +280,35 @@ def _config_problems(
     Shared by the refusals (`_validated`) and the dry run (`POST
     /configs/check`), so the two can never disagree about a config.
     """
-    problems = [
+    canonical_all = _canonical(config, campaign)
+    _, address_problems = _split_addresses(canonical_all)
+    problems = list(address_problems)
+    problems += [
+        ConfigProblem(**found)
+        for found in recipe_config_problems(
+            {k: v for k, v in canonical_all.items() if "." in k and not k.startswith("env.")}
+        )
+    ]
+    flat_config, _ = _split_addresses(config)
+    config = flat_config
+    _, recipe_only = split_flat(canonical_all)
+    if recipe_only and not _launches_recipes(machine):
+        problems += [
+            ConfigProblem(
+                kind="substrate", param=key,
+                message=f"{key}: this machine's launch driver applies flags and env only; "
+                "pd role flags and chart values need a cluster that launches LLMServices",
+            )
+            for key in sorted(recipe_only)
+        ]
+    problems += [
         ConfigProblem(
             kind="placement", param=key,
             message=f"{key} is placement, which the platform sets: remove it",
         )
         for key in sorted(set(config) & set(PLACEMENT_FLAGS))
     ]
-    canonical = _canonical(config, campaign)
+    canonical = canonical_all
     for hit in forbidden_hits(
         canonical, campaign.search_space or {}, settings_of(campaign).forbidden(),
         campaign.engine,
@@ -250,7 +318,8 @@ def _config_problems(
             message=f"{hit['param']} is forbidden for this campaign (matches "
             f"{hit['pattern']!r}): leave it at the campaign's value",
         ))
-    args, _env = split_env(canonical)
+    flat, _ = _split_addresses(canonical)
+    args, _env = split_env(flat)
     flags = {k: v for k, v in args.items() if k not in PLACEMENT_FLAGS}
     round_trip = round_trip_problems(flags, campaign.engine)
     problems += [ConfigProblem(**found) for found in round_trip]
@@ -259,10 +328,10 @@ def _config_problems(
             ConfigProblem(**found)
             for found in vocab_mod.unknown_flag_problems(flags, vocab, campaign.engine)
         ]
-    for found in env_problems(canonical):
+    for found in env_problems(flat):
         problems.append(ConfigProblem(**found))
     if not any(p.param.startswith("env.") for p in problems):
-        problems += _env_vocabulary_problems(canonical, campaign, vocab)
+        problems += _env_vocabulary_problems(flat, campaign, vocab)
     error = validate_config(
         args,
         ValidationContext(
@@ -271,6 +340,13 @@ def _config_problems(
     )
     if error:
         problems.append(ConfigProblem(kind="safety", message=error))
+    # A recipe campaign's launch is the recipe with this config applied: what
+    # the chart would refuse, it refuses here.
+    if campaign.recipe and not any(p.kind == "bad_key" for p in problems):
+        problems += [
+            ConfigProblem(**found)
+            for found in recipe_problems(recipe_for(campaign, canonical))
+        ]
     return canonical, problems
 
 
@@ -355,16 +431,18 @@ async def _idempotent_run(
     ).scalar_one_or_none()
 
 
-def _check_fits_a_node(machine: Machine | None, needed: int) -> None:
-    """On a node pool a launch's cards are all on one node, so a config wider
+def _check_fits_a_node(machine: Machine | None, per_pod: int) -> None:
+    """On a node pool each pod's cards are all on one node, so a pod wider
     than the widest node could never be scheduled: refuse it now, rather than
-    let it wait for room that will never come. Unknown sizes pass."""
+    let it wait for room that will never come. A gang or a pd recipe spreads
+    over several pods, so its widest pod is what must fit, not its total.
+    Unknown sizes pass (a pool read from a namespace quota has no node sizes)."""
     if machine is None or not is_node_pool(machine) or not machine.node_gpu_max:
         return
-    if needed > machine.node_gpu_max:
+    if per_pod > machine.node_gpu_max:
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
-            f"config uses {needed} card(s) (tp×dp×pp), but the largest node in "
+            f"a pod of this config uses {per_pod} card(s), but the largest node in "
             f"{machine.name} has {machine.node_gpu_max}: no node could ever hold it",
         )
 
@@ -689,6 +767,7 @@ async def manifest(
             extra_env=campaign.extra_env or {},
             extra_volumes=campaign.extra_volumes or {},
             facts=dict((model_row.facts if model_row else None) or {}),
+            recipe=_anchor(campaign).model_dump(),
         ),
         hardware=ManifestHardware(
             machine=machine.name if machine else "",
@@ -736,6 +815,7 @@ async def manifest(
             diagnostics=True,
             env_keys=True,
             vocabulary=True,
+            recipes=True,
             history=True,
         ),
         prior=prior,
@@ -906,8 +986,10 @@ async def request_launch(
         await db.commit()
         return _launch_out(existing, await db.get(Candidate, existing.candidate_id))
 
-    canonical, dev = await _validated_or_audit(db, caller, body.engine_args, campaign, machine)
-    needed = cards_used(canonical)
+    canonical, dev = await _validated_or_audit(
+        db, caller, dict(body.engine_args or {}), campaign, machine
+    )
+    needed = config_cards(campaign, canonical)
     # A machine with no cards (a CPU-only slice: kind, the demo's mock
     # engine) gives the session none, and its launches ask for none whatever
     # the config's parallelism, the way a plain campaign runs there. Asking
@@ -918,7 +1000,7 @@ async def request_launch(
             f"config uses {needed} card(s) (tp×dp×pp) but {len(body.gpu_indices)} were "
             "requested — they must match",
         )
-    _check_fits_a_node(machine, needed)
+    _check_fits_a_node(machine, config_pod_cards(campaign, canonical))
     live = await _live_session_runs(db, session)
     port = _check_cards_and_port(session, live, body.gpu_indices, body.port)
 
@@ -1178,11 +1260,14 @@ async def check_config(
     spending a launch. Never 422s: the answer is the point."""
     _session, campaign, machine = await _context(db, caller)
     vocab = await _vocabulary(db, campaign)
-    canonical, problems = _config_problems(body.engine_args, campaign, machine, vocab)
+    canonical, problems = _config_problems(
+        dict(body.engine_args or {}), campaign, machine, vocab
+    )
     # With the image's own parser at hand an unknown flag is a refusal above;
     # the platform's catalog is only the fallback guess.
     known = set() if vocab is not None and vocab.names("flag") else known_flags(campaign.engine)
-    args, env = split_env(canonical)
+    flat, _ = _split_addresses(canonical)
+    args, env = split_env(flat)
     normalized, _ = normalize_args(campaign.engine, args)
     # Only what the policy chose: a key the campaign itself sets to this value
     # (the base config) is the operator's, and repeating its warning on every
@@ -1195,17 +1280,27 @@ async def check_config(
         if known and key not in known and not (key in base and base[key] == normalized[key])
     ]
     command: list[str] = []
+    recipe_out: dict[str, Any] = {}
+    shape_out: dict[str, Any] = {}
+    commands: dict[str, list[str]] = {}
     if not any(p.kind in ("not_renderable", "bad_key") for p in problems):
         command = render_args(args, campaign.engine)
+        recipe = recipe_for(campaign, canonical)
+        recipe_out = recipe.model_dump()
+        shape_out = recipe_shape(recipe).payload()
+        commands = chart_commands(recipe)
     return ConfigCheckOut(
         ok=not problems,
         config=canonical,
-        cards=cards_used(args),
+        cards=config_cards(campaign, canonical),
         command=command,
         env=env,
         problems=problems,
         warnings=warnings,
         deviations=space_deviations(canonical, campaign.search_space or {}),
+        recipe=recipe_out,
+        shape=shape_out,
+        commands=commands,
     )
 
 
@@ -1373,12 +1468,17 @@ async def put_contenders(
             )
             continue
         try:
-            canonical, dev = _validated(entry.launch_spec.engine_args, campaign, machine, vocab)
+            canonical, dev = _validated(
+                dict(entry.launch_spec.engine_args or {}),
+                campaign, machine, vocab,
+            )
         except HTTPException as exc:
             rejected.append({"rank": entry.rank, "reason": str(exc.detail)})
             continue
         spec = entry.launch_spec.model_dump(mode="json")
         spec["engine_args"] = canonical
+        # 1.6: what this contender launches and what a publish writes.
+        spec["recipe"] = recipe_for(campaign, canonical).model_dump()
         accepted_rows.append(
             PolicyContender(
                 session_id=session.id,

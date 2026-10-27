@@ -1,8 +1,8 @@
 # Mock engine
 
 A stdlib-only fake sglang/vLLM server, for running the whole tuning loop without
-GPUs. It answers to both `python3 -m sglang.launch_server ...` and
-`vllm serve ...`, so the platform launches it exactly as it would a real engine,
+GPUs. It answers to `python3 -m sglang.launch_server ...`, `sglang serve ...`
+(what the engine charts run) and `vllm serve ...`, so the platform launches it exactly as it would a real engine,
 on Kubernetes or over ssh.
 
 No image is published: it is a few kilobytes of Python on `python:3.12-slim`,

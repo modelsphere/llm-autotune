@@ -87,7 +87,16 @@ export interface Cluster {
   has_kubeconfig: boolean
   context: string
   namespace: string
-  workload_kind: 'deployment' | 'custom'
+  /** llmservice: one LLMService per run. deployment/custom: deprecated. */
+  workload_kind: 'llmservice' | 'deployment' | 'custom'
+  /** llmservice: the engine chart repository ('' = the install's), its pull
+   *  secret, how the benchmark reaches a run, the image mirror, and chart
+   *  values (JSON) every run here gets. */
+  chart_repo: string
+  chart_credentials_secret: string
+  endpoint: 'dns' | 'nodeport'
+  image_mirror: string
+  site_values: string
   /** Host LLMBench is given for a run's NodePort endpoint. Empty = derive from
    *  a node InternalIP, which needs the cluster-scoped `nodes` read. */
   node_host: string
@@ -133,6 +142,11 @@ export interface ClusterInput {
   context?: string
   namespace?: string
   workload_kind?: string
+  chart_repo?: string
+  chart_credentials_secret?: string
+  endpoint?: string
+  image_mirror?: string
+  site_values?: string
   node_host?: string
   gpu_resource?: string
   gpu_product_label?: string
@@ -326,6 +340,11 @@ export interface Campaign {
   model_path: string
   served_model_name: string
   search_space: Record<string, unknown>
+  /** The configuration every run starts from, as the engine chart reads it
+   *  ({engine, chart, values}); empty for a campaign built from its fields. */
+  recipe?: { engine?: string; chart?: { name?: string; version?: string }; values?: Record<string, unknown> }
+  /** The exact chart version every run renders; empty until it is pinned. */
+  chart_version?: string
   objective: Record<string, unknown>
   status: string
   /** The benchmark every candidate runs. Single-stage replay is the default:

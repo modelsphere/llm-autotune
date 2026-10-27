@@ -281,10 +281,21 @@ class Cluster(Base):
     kubeconfig_enc: Mapped[str] = mapped_column(Text, default="")
     context: Mapped[str] = mapped_column(String(128), default="")
     namespace: Mapped[str] = mapped_column(String(128), default="autotune")
-    # "deployment" (the driver manages Deployment + NodePort Service) or
-    # "custom" (a TuningRun the operator reconciles). Per cluster because an
-    # operator may be installed on one cluster and not another.
-    workload_kind: Mapped[str] = mapped_column(String(24), default="deployment")
+    # "llmservice" (an LLMService per run), or the deprecated "deployment"
+    # (Deployment + NodePort Service) and "custom" (a TuningRun). Per cluster
+    # because an operator may be installed on one cluster and not another.
+    workload_kind: Mapped[str] = mapped_column(String(24), default="llmservice")
+    # "llmservice" mode (an LLMService per run; see app/control/recipe). Empty
+    # chart_repo = the install's AUTOTUNE_K8S_CHART_REPO.
+    chart_repo: Mapped[str] = mapped_column(String(512), default="", server_default="")
+    chart_credentials_secret: Mapped[str] = mapped_column(
+        String(253), default="", server_default=""
+    )
+    # "dns" (the benchmark is in this cluster) or "nodeport" (opt-in).
+    endpoint: Mapped[str] = mapped_column(String(16), default="dns", server_default="dns")
+    image_mirror: Mapped[str] = mapped_column(String(255), default="", server_default="")
+    # Chart values for every engine on this cluster, as JSON text.
+    site_values: Mapped[str] = mapped_column(Text, default="", server_default="")
     # The host LLMBench is given for a run's NodePort endpoint. Empty = derive
     # from a node InternalIP, which needs the cluster-scoped `nodes` read.
     node_host: Mapped[str] = mapped_column(String(255), default="")
@@ -513,6 +524,17 @@ class Campaign(Base):
     served_model_name: Mapped[str] = mapped_column(String(128))
     # {"base": {fixed args}, "grid": {param: [values]}, "tied": [{param: [values]}]}
     search_space: Mapped[dict] = mapped_column(JsonCol)
+    # The configuration every run starts from, as the engine chart reads it
+    # (app/control/recipe): {engine, chart, values}. A run launches this with
+    # its candidate's config applied, and a winner is published as it. Empty =
+    # a campaign from before recipes, built from the fields above.
+    recipe: Mapped[dict] = mapped_column(JsonCol, default=dict)
+    # The exact chart version every run renders. The recipe may name a range
+    # (the catalog does); a campaign pins it once, so a chart released mid-way
+    # cannot change what later trials measure. Set at creation when given or
+    # when the recipe names an exact version, else from the version the
+    # operator installed for the first run. Empty = not pinned yet.
+    chart_version: Mapped[str] = mapped_column(String(64), default="")
     # {"target_metric": "...", "redlines": [{"metric": "...", "op": "<=", "value": x}]}
     objective: Mapped[dict] = mapped_column(JsonCol, default=dict)
     status: Mapped[str] = mapped_column(String(16), default=CampaignStatus.DRAFT.value, index=True)

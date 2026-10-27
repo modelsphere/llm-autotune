@@ -41,6 +41,11 @@ data:
   AUTOTUNE_K8S_IN_CLUSTER: "true"
   AUTOTUNE_K8S_NAMESPACE: {{ .Values.gpuCluster.namespace | default .Release.Namespace | quote }}
   AUTOTUNE_K8S_WORKLOAD_KIND: {{ if .Values.operator.enabled }}"custom"{{ else }}{{ .Values.gpuCluster.workloadKind | quote }}{{ end }}
+  AUTOTUNE_K8S_CHART_REPO: {{ .Values.gpuCluster.engineCharts.repo | quote }}
+  AUTOTUNE_K8S_CHART_CREDENTIALS_SECRET: {{ .Values.gpuCluster.engineCharts.credentialsSecret | quote }}
+  AUTOTUNE_K8S_ENDPOINT: {{ .Values.gpuCluster.endpoint | quote }}
+  AUTOTUNE_K8S_IMAGE_MIRROR: {{ .Values.gpuCluster.imageMirror | quote }}
+  AUTOTUNE_K8S_SITE_VALUES: {{ if .Values.gpuCluster.siteValues }}{{ toJson .Values.gpuCluster.siteValues | quote }}{{ else }}""{{ end }}
   AUTOTUNE_K8S_GPU_RESOURCE: {{ .Values.gpuCluster.gpuResource | quote }}
   AUTOTUNE_K8S_RUNTIME_CLASS: {{ .Values.gpuCluster.runtimeClass | quote }}
   AUTOTUNE_K8S_TOLERATE_GPU_TAINT: {{ .Values.gpuCluster.tolerateGpuTaint | quote }}

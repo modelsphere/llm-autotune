@@ -144,8 +144,19 @@ count and type the node reports, leased to the platform unless you clear
 **Lease them to the platform now**. **Clusters ▸ Nodes** registers nodes added
 later and lists registered machines whose node has left the cluster.
 
-For engines reached over the public network, use the default **deployment**
-workload kind. In **Add GPU cluster** or **Clusters ▸ Edit**, set **Service
+Runs are launched as **llmservice** by default: each run is an LLMService that
+[llm-operator](https://github.com/modelsphere/llm-operator) installs, the
+engine chart with the run's recipe, exactly as a production deploy is. The
+cluster needs llm-operator (the modelsphere stack installs it; **Connect** says
+when it is missing). The benchmark reaches a run by its Service's in-cluster
+name (**Endpoint: dns**), which is right when AutoTune and LLMBench run on the
+GPU cluster; set **Endpoint: nodeport** when they run elsewhere. The
+**deployment** (a Deployment and a NodePort Service, no operator) and
+**custom** (TuningRun) kinds still work and are deprecated: they take engine
+flags and env only, not pd or chart values, and are no longer extended.
+
+For engines reached over the public network with the deprecated
+**deployment** kind, in **Add GPU cluster** or **Clusters ▸ Edit**, set **Service
 public IP / hostname** to a node address reachable by both the AutoTune worker
 and LLMBench. Enter only the host, without `http://`, a port or a path; the API
 server address in the kubeconfig is not necessarily a service entry point.
@@ -165,8 +176,8 @@ allocated port.
 Network paths:
 
 - AutoTune's pods reach the cluster's API server.
-- LLMBench reaches the engines: each engine is a NodePort Service, reached on
-  a node's address.
+- LLMBench reaches the engines: by the Service's in-cluster name (llmservice,
+  endpoint dns), or as a NodePort Service on a node's address.
 - A search policy running on the GPU cluster reaches the platform at
   `publicApiUrl`.
 

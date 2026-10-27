@@ -38,6 +38,8 @@ from app.control.catalog_export.catalog_index import lookup
 from app.control.catalog_export.publish import publish
 from app.control.catalog_export.validation import validation_file
 from app.control.launch_config import LaunchConfig
+from app.control.recipe import Recipe
+from app.control.recipe.campaign import recipe_for
 from app.core import platform_settings
 from app.core.auth import Principal, get_principal
 from app.datasets.pinning import dataset_of
@@ -125,6 +127,27 @@ async def _card_type(session: AsyncSession, run: Run) -> str:
     return normalize_gpu_type(card or "")
 
 
+_RECIPE_HASH = re.compile(r"autotune\.modelsphere\.dev/recipe-hash:\s*'?(sha256:[0-9a-f]{64})")
+
+
+def _launched_recipe(campaign: Campaign, candidate: Candidate, run: Run) -> Recipe | None:
+    """The recipe this run launched, when it launched one: a recipe campaign's,
+    or any run that went out as an LLMService. Refused (409) when it is no
+    longer the recipe the run measured, so a publish is always the measured
+    document."""
+    launched = _RECIPE_HASH.search(run.launch_command or "")
+    if not campaign.recipe and launched is None:
+        return None  # a deprecated driver's run: its config is converted
+    recipe = recipe_for(campaign, dict(candidate.config or {}))
+    if launched is not None and launched.group(1) != recipe.hash():
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"run {run.id} measured recipe {launched.group(1)[:19]}..., and this campaign's recipe "
+            "has changed since; publish a run of the current one",
+        )
+    return recipe
+
+
 async def _from_run(session: AsyncSession, item: CatalogVariantIn) -> tuple[VariantSource, str]:
     run = await session.get(Run, item.run_id)
     campaign = await session.get(Campaign, run.campaign_id) if run is not None else None
@@ -140,7 +163,9 @@ async def _from_run(session: AsyncSession, item: CatalogVariantIn) -> tuple[Vari
     value = result.objective_value
     if value is None:
         value = (result.metrics or {}).get(metric)
+    recipe = _launched_recipe(campaign, candidate, run)
     source = VariantSource(
+        recipe=recipe,
         config=LaunchConfig.from_campaign(
             campaign, dict(candidate.config or {}), gpu_type=await _card_type(session, run)
         ),

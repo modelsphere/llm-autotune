@@ -8,7 +8,7 @@ This document is the narrative version: what the calls mean, and what each side
 guarantees. For the one-page summary see [policy-api.md](policy-api.md); the interactive reference that
 always matches the running build is **`/api/docs`**, section *policy sessions*.
 For real responses from a finished session see the
-Contract version: **1.5** (`/api/policy/v1`; see [Evolution](#evolution)).
+Contract version: **1.6** (`/api/policy/v1`; see [Evolution](#evolution)).
 
 ---
 
@@ -381,6 +381,36 @@ into its deployable config. Refused (`422`, and reported by
   any `*_PORT` or `*_HOST_IP`, search paths, and tokens, keys and passwords;
 - a name that is not `A-Z`, `0-9` and `_`.
 
+**Recipes (1.6).** Every launch is a *recipe*: the engine chart's values
+(`{engine, chart, values}`), exactly as a [model-catalog](https://github.com/modelsphere/model-catalog)
+variant writes them. The manifest's `model.recipe` is the one every launch
+starts from, the space's `base` applied, and a config's keys are addresses
+into it:
+
+| key | address |
+| --- | --- |
+| `tp_size` | a flag in `values.extraArgs`, as before |
+| `env.SGLANG_X` | an entry of `values.env`, as before |
+| `prefill.mem_fraction_static`, `decode.max_running_requests` | a flag in a pd role's `values.pd.<role>.extraArgs` |
+| `values.pd.prefill.replicas`, `values.localKVOffload.hicache.ratio` | any chart value, by its dotted path (`values.resources.limits["rdma/hca_shared"]` for a segment with dots) |
+
+`null` removes: a flag, a variable, a value. A config without the new prefixes
+means what it always meant. Refused as `bad_key`: an address that does not
+parse, and `values.extraArgs` / `values.env` as a whole (set their entries by
+their own addresses). Refused as `placement`: what only the site or a run sets
+(scheduling, routing, scaling, naming, the Service type, the image). Refused as `substrate`: a pd role flag or chart value
+on a machine whose launches are not LLMServices, since its driver applies
+flags and env only.
+
+A policy sends configs only; the platform builds the recipe. `POST
+/configs/check` answers with the `recipe` a launch of the config runs, its
+`shape` (the pods and the cards each claims) and `commands` (each role's engine
+command as the chart builds it), so a policy can see exactly what would run
+without reading the chart. A recipe campaign also refuses what its chart would
+(`not_renderable`, `placement`): a flag the chart renders itself (`--port`,
+`--model-path`, …), an image without a tag. A winner is published as the
+recipe its config builds.
+
 ---
 
 ## Services
@@ -747,6 +777,11 @@ from their specs, time permitting. Either way the machine's own guarantees
   `search_idle_strikes`) and a recorded `search_end_reason`. A 1.0 image keeps
   working unchanged — it simply never sends the new fields, and the deadline
   plus the watchdog govern it exactly as before.
+- **1.6** (additive): [recipes](#config-format). `model.recipe` in the
+  manifest and `services.recipes` on the menu; `prefill.`, `decode.` and
+  `values.` config addresses; `recipe`, `shape` (pods and cards) and `commands` (each
+  role's engine argv as the chart builds it) on the `/configs/check` answer.
+  New refusals only for the new addresses. A 1.5 policy runs unchanged.
 - **1.5** (additive): `env.<NAME>` config keys and `GET /engine/vocabulary`,
   with `services.env_keys` and `services.vocabulary` on the menu, `env` on
   the `/configs/check` answer, and `model.facts` in the manifest. One new
