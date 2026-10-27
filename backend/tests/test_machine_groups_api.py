@@ -336,9 +336,18 @@ async def test_a_single_node_campaign_is_unaffected(client):
     assert resp.status_code == 200
 
 
-async def test_preflight_reports_the_group_and_probes_only_its_members(client):
+async def test_preflight_reports_the_group_and_probes_only_its_members(client, monkeypatch):
     """The wizard must see the deployment shape before anything is saved, and
     must probe only the group's machines rather than the whole fleet."""
+    # Tests have no LLMBench and the machines are fake addresses: asking either
+    # would wait out retries and connect timeouts (minutes). Who gets probed is
+    # what this test checks, not what the probes find.
+    monkeypatch.setattr("app.api.campaigns.pf.benchmark_catalog", lambda client: None)
+    monkeypatch.setattr("app.api.campaigns.pf.dataset_wiring", lambda client: (None, None))
+    monkeypatch.setattr(
+        "app.control.launch.ssh_docker.SshDockerDriver._ssh",
+        lambda self, machine, script, timeout=45: _ProbeResult("", 255, "unreachable"),
+    )
     await _machine(client, "node-1")
     await _machine(client, "node-2")
     await _machine(client, "node-3")
