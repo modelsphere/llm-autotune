@@ -289,9 +289,12 @@ class LLMServiceDriver(K8sDriver):
 
     @staticmethod
     def _recipe_from_obj(obj: dict[str, Any]) -> Recipe:
-        layers = (obj.get("spec") or {}).get("layers") or []
-        catalog = next((layer for layer in layers if layer.get("name") == "catalog"), {})
-        return Recipe(values=catalog.get("values") or {})
+        spec = obj.get("spec") or {}
+        catalog = next(
+            (layer for layer in spec.get("layers") or [] if layer.get("name") == "catalog"), {}
+        )
+        chart = (spec.get("chart") or {}).get("name") or "sglang"
+        return Recipe(engine=chart, chart={"name": chart}, values=catalog.get("values") or {})
 
     def _endpoint(self, spec: LaunchSpec, recipe: Recipe) -> str:
         name = service_name(recipe, spec.container_name)

@@ -26,18 +26,31 @@ def base_recipe(campaign: Any) -> Recipe | None:
     return Recipe.model_validate(raw) if raw else None
 
 
+def split_flat(config: dict[str, Any] | None) -> tuple[dict[str, Any], dict[str, Any]]:
+    """(flags and env keys, the other addresses): what every driver can apply,
+    and what only a recipe can carry (pd role flags, chart values)."""
+    flat: dict[str, Any] = {}
+    rest: dict[str, Any] = {}
+    for key, value in (config or {}).items():
+        is_flat = "." not in key or key.startswith("env.")
+        (flat if is_flat else rest)[key] = value
+    return flat, rest
+
+
 def recipe_for(campaign: Any, config: dict[str, Any] | None) -> Recipe:
     base = base_recipe(campaign)
     if base is not None:
         return apply(base, dict(config or {}))
-    return from_fields(
+    flat, rest = split_flat(config)
+    built = from_fields(
         engine=campaign.engine,
         image=campaign.image,
         served_model_name=campaign.served_model_name,
-        engine_args=dict(config or {}),
+        engine_args=flat,
         extra_env=dict(campaign.extra_env or {}),
         extra_volumes=dict(campaign.extra_volumes or {}),
     )
+    return apply(built, rest) if rest else built
 
 
 def config_cards(campaign: Any, config: dict[str, Any] | None) -> int:

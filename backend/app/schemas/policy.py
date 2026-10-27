@@ -15,7 +15,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-CONTRACT_VERSION = "1.5"
+CONTRACT_VERSION = "1.6"
 
 # Inbound payloads from policy containers: unknown fields are the future, not
 # an error.
@@ -159,6 +159,12 @@ class ManifestModel(BaseModel):
     # layers, KV heads, experts and how many are active, built-in draft layers
     # (draft_layers), attention layout, dtype, context. Empty until read.
     facts: dict[str, Any] = Field(default_factory=dict)
+    # 1.6: the configuration every launch starts from, as the engine chart
+    # reads it ({engine, chart, values}; app/control/recipe), the space's base
+    # applied. A config's keys are addresses into it: a flag, env.<NAME>,
+    # prefill./decode.<flag> (a pd role's flags) or values.<path> (any chart
+    # value). A winner is published as this document with its config applied.
+    recipe: dict[str, Any] = Field(default_factory=dict)
 
 
 class ManifestHardware(BaseModel):
@@ -222,6 +228,9 @@ class ManifestServices(BaseModel):
     # each one's recommendation level.
     env_keys: bool = False
     vocabulary: bool = False
+    # 1.6: configs address a recipe (manifest.model.recipe); launches, checks
+    # and contenders also take a whole `recipe` in place of a config.
+    recipes: bool = False
 
 
 class SessionManifest(BaseModel):
@@ -375,7 +384,9 @@ class TrialOut(BaseModel):
 class LaunchIn(BaseModel):
     model_config = _lenient
 
-    engine_args: dict[str, Any]
+    engine_args: dict[str, Any] = Field(default_factory=dict)
+    # 1.6: a whole recipe in place of a config (see ConfigCheckIn.recipe).
+    recipe: dict[str, Any] | None = None
     # The cards the config runs on, as many as it uses (tp×dp×pp). Empty only
     # on a machine with no cards, whose session holds none.
     gpu_indices: list[int] = Field(default_factory=list)
@@ -465,7 +476,10 @@ class BenchmarkOut(BaseModel):
 class ConfigCheckIn(BaseModel):
     model_config = _lenient
 
-    engine_args: dict[str, Any]
+    engine_args: dict[str, Any] = Field(default_factory=dict)
+    # 1.6: a whole recipe instead of (or as well as) a config; read as the
+    # addresses at which it differs from manifest.model.recipe.
+    recipe: dict[str, Any] | None = None
 
 
 class ConfigProblem(BaseModel):
@@ -494,6 +508,12 @@ class ConfigCheckOut(BaseModel):
     problems: list[ConfigProblem] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
     deviations: list[dict[str, Any]] = Field(default_factory=list)
+    # 1.6: the recipe a launch of this config runs, the pods it makes and the
+    # cards each claims, and each role's engine command as the chart builds it
+    # (the chart's own flags first, then the recipe's).
+    recipe: dict[str, Any] = Field(default_factory=dict)
+    shape: dict[str, Any] = Field(default_factory=dict)
+    commands: dict[str, list[str]] = Field(default_factory=dict)
 
 
 class VocabularyOut(BaseModel):
@@ -527,7 +547,9 @@ class VocabularyOut(BaseModel):
 class ContenderLaunchSpec(BaseModel):
     model_config = _lenient
 
-    engine_args: dict[str, Any]
+    engine_args: dict[str, Any] = Field(default_factory=dict)
+    # 1.6: a whole recipe in place of a config (see ConfigCheckIn.recipe).
+    recipe: dict[str, Any] | None = None
     image: str = Field(min_length=1)
     env: dict[str, str] = Field(default_factory=dict)
     volumes: dict[str, str] = Field(default_factory=dict)

@@ -9,6 +9,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Runs as LLMServices.** A cluster set to `workload_kind: llmservice`
+  launches every run as an LLMService ([llm-operator](https://github.com/modelsphere/llm-operator)):
+  the sglang or vllm chart installed with the run's configuration, the object
+  a production deploy uses. The platform still reads the pods itself (state,
+  failures, logs, the environment the engine ran in); a run is ready when the
+  chart's Service has a ready endpoint, and torn down once the object and its
+  pods are gone. The benchmark reaches a run by its Service's in-cluster name
+  by default (`endpoint: dns`, the stack install's layout), or through a
+  NodePort as an opt-in. Per cluster: the engine-chart repository and pull
+  secret, the image mirror (swiss's rewrite rule), and chart values every run
+  gets. Migration `023_cluster_llmservice`. The `deployment` and `custom`
+  (TuningRun) kinds keep working and are deprecated.
+- **Recipes.** A configuration is now a recipe: the engine chart's values, the
+  serving part of a model-catalog variant. A campaign can start from one
+  (`recipe`, or `recipe_text`: a catalog variant, an LLMService YAML or a
+  command line; migration `024_campaign_recipe`), and its search space and
+  every policy address it: a flag, `env.<NAME>`, a pd role's flags
+  (`prefill.`/`decode.`) or any chart value (`values.<path>`). Converting
+  between a flat config and a recipe is lossless, checked on every variant the
+  catalog publishes. Cards are counted from what the pods ask for.
+- **Policy contract 1.6.** The manifest carries the recipe every launch starts
+  from; launches, checks and contenders also take a whole recipe; the check
+  answers with the recipe, its pods and cards, and each role's engine
+  command.
+
 - **Environment variables in configs (contract 1.5).** Some engine switches
   exist only as environment variables, which a config of command-line flags
   could not reach. A config, a search space or an agent's proposal now sets

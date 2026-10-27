@@ -239,4 +239,9 @@ def service_name(recipe: Recipe, release: str) -> str:
 
 
 def service_port(recipe: Recipe) -> int:
-    return int(((recipe.values.get("service") or {}).get("port")) or 30000)
+    """The front door's port: service.port, else the chart's own default
+    (sglang 30000, vllm 8000)."""
+    from app.control.recipe.render import default_port
+
+    port = (recipe.values.get("service") or {}).get("port")
+    return int(port) if port else default_port(recipe.chart.name)
