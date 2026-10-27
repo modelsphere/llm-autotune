@@ -27,7 +27,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   hardware it names. Read by a probe in the image itself (a Job on k8s,
   `docker run --rm` over ssh) when a policy session starts, or on demand
   (`POST /campaigns/{id}/engine-vocabulary`). A flag the image's parser does
-  not accept is refused before it costs a launch.
+  not accept is refused before it costs a launch. sglang's own description
+  of its environment variables (its docs page, v0.5.19) ships with the
+  platform, so a cluster without GitHub still gets them; another version
+  tries the engine's repository and falls back to the nearest shipped one.
+  sglang ships with generic labels for 104 of its switches, each only where
+  its code, docs or published recipes say it changes performance: `high` for
+  the levers its tuning guide names for every deployment (memory fraction,
+  running requests, chunked prefill, schedule conservativeness, CUDA graph
+  batch size, tp, dp), `mid` and `low` with the situation each applies to.
 - **Model facts** (manifest `model.facts`, migration `022_model_configs`):
   read from the model's own `config.json` where its runs mount the weights —
   experts and active experts, built-in draft layers for speculative decoding,

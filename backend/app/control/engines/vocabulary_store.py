@@ -6,10 +6,12 @@ so what it reads is exactly what a run of that image would get. One row per
 image digest: a moved tag reads again.
 
 The engine's docs are an optional extra on top: sglang describes in its docs
-many environment variables its code does not, so when the docs page for the
-image's version can be fetched, those descriptions fill the gaps. Nothing
-depends on it — no route, a missing page, or an empty URL setting just leaves
-those descriptions out, with a note.
+many environment variables its code does not, so those descriptions fill the
+gaps. The pages ship with the platform (engines/docs/, per engine version);
+an image of a version not shipped there tries the configured URL for its
+version, then the nearest shipped version. Nothing depends on it — no route,
+a missing page, or an empty URL setting just leaves those descriptions out or
+older, with a note.
 """
 
 import base64
@@ -107,24 +109,74 @@ def _plain(cell: str) -> str:
     return " ".join(html.unescape(text).split())
 
 
+_DOCS = Path(__file__).with_name("docs")
+# The engine docs page each parser reads, by engine.
+_DOC_PAGES = {"sglang": ("environment_variables.mdx", parse_sglang_docs)}
+
+
+def _version_key(version: str) -> tuple[int, ...] | None:
+    parts = version.split(".")
+    return tuple(int(p) for p in parts) if all(p.isdigit() for p in parts) else None
+
+
+def shipped_docs(
+    engine: str, version: str
+) -> tuple[dict[str, dict[str, str]] | None, str, bool]:
+    """(descriptions, a note, whether they are for exactly this version) from
+    the docs shipped with the platform (engines/docs/): the image's own
+    version, else the nearest older one, else the oldest."""
+    page = _DOC_PAGES.get(engine)
+    root = _DOCS / engine
+    if page is None or not root.is_dir():
+        return None, "", False
+    shipped = sorted(
+        (d.name for d in root.iterdir() if (d / page[0]).is_file() and _version_key(d.name)),
+        key=_version_key,
+    )
+    if not shipped:
+        return None, "", False
+    want = _version_key(version) if version else None
+    if version in shipped:
+        pick = version
+    elif want is None:
+        pick = shipped[-1]
+    else:
+        older = [v for v in shipped if _version_key(v) <= want]
+        pick = older[-1] if older else shipped[0]
+    docs = page[1]((root / pick / page[0]).read_text())
+    note = f"{len(docs)} descriptions from the engine's docs for v{pick}, shipped with the platform"
+    if pick != version:
+        note += f" (the image is {'v' + version if version else 'of an unknown version'})"
+    return docs, note, pick == version
+
+
 def fetch_docs(engine: str, version: str) -> tuple[dict[str, dict[str, str]] | None, str]:
-    """(descriptions by name, a note) — None when there are none to be had."""
+    """(descriptions by name, a note) — None when there are none to be had.
+    The docs shipped for the image's version first; else the configured URL
+    for that version; else the nearest shipped version."""
     settings = get_settings()
+    clean = re.split(r"[+\-]", (version or "").lstrip("v"), maxsplit=1)[0]
+    shipped, shipped_note, exact = shipped_docs(engine, clean)
+    if exact:
+        return shipped, shipped_note
     template = getattr(settings, f"engine_docs_url_{engine}", "") or ""
     if not template:
-        return None, ""
-    clean = re.split(r"[+\-]", (version or "").lstrip("v"), maxsplit=1)[0]
+        return shipped, shipped_note
     if not clean:
-        return None, "engine docs not fetched: the image did not say its version"
-    url = template.format(version=clean)
-    try:
-        response = httpx.get(url, timeout=settings.engine_docs_timeout_seconds,
-                             follow_redirects=True)
-        response.raise_for_status()
-        docs = parse_sglang_docs(response.text) if engine == "sglang" else {}
-    except Exception as exc:  # noqa: BLE001 — the docs are an extra, never a failure
-        return None, f"engine docs not fetched ({url}): {str(exc)[:200]}"
-    return docs, f"{len(docs)} descriptions from the engine's docs for v{clean}"
+        fetched, note = None, "engine docs not fetched: the image did not say its version"
+    else:
+        url = template.format(version=clean)
+        try:
+            response = httpx.get(url, timeout=settings.engine_docs_timeout_seconds,
+                                 follow_redirects=True)
+            response.raise_for_status()
+            fetched = _DOC_PAGES[engine][1](response.text) if engine in _DOC_PAGES else {}
+            note = f"{len(fetched)} descriptions from the engine's docs for v{clean}"
+        except Exception as exc:  # noqa: BLE001 — the docs are an extra, never a failure
+            fetched, note = None, f"engine docs not fetched ({url}): {str(exc)[:200]}"
+    if fetched is not None:
+        return fetched, note
+    return shipped, "; ".join(n for n in (note, shipped_note) if n)
 
 
 # -- ingest --------------------------------------------------------------------

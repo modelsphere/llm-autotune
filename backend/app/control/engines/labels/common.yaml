@@ -58,7 +58,11 @@ forbidden:
   - enable_auto_tool_choice
   - trust_remote_code
   - load_format
-  - tokenizer*
+  # Which tokenizer, not how many workers run it or how they batch.
+  - tokenizer
+  - tokenizer_path
+  - tokenizer_mode
+  - tokenizer_revision
   - skip_tokenizer_init
   - revision
   - json_model_override_args
