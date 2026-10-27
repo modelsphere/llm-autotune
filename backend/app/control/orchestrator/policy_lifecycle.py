@@ -21,7 +21,8 @@ from typing import Any
 
 from app.control.orchestrator import timing
 from app.control.orchestrator.lifecycle import as_utc, now
-from app.control.search.validation import cards_used, widest_cards
+from app.control.recipe.campaign import config_cards
+from app.control.recipe.campaign import widest_cards as campaign_widest_cards
 from app.core.config import get_settings
 from app.db.models import (
     Campaign,
@@ -108,7 +109,7 @@ def gpu_budget(campaign: Campaign, machine: Machine | None) -> int:
         return knobs.cards
     if machine is not None and not is_node_pool(machine) and machine.gpu_count:
         return machine.gpu_count
-    return max(widest_cards(campaign.search_space or {}), 1)
+    return max(campaign_widest_cards(campaign), 1)
 
 
 def validation_rounds(campaign: Campaign, machine: Machine | None) -> int:
@@ -116,7 +117,7 @@ def validation_rounds(campaign: Campaign, machine: Machine | None) -> int:
     by side on the GPU budget. Each launch is sized like production (the base
     config), the best guess before the contenders exist."""
     knobs = settings_of(campaign)
-    per_launch = max(cards_used((campaign.search_space or {}).get("base") or {}), 1)
+    per_launch = max(config_cards(campaign, (campaign.search_space or {}).get("base") or {}), 1)
     budget = max(gpu_budget(campaign, machine), per_launch)
     side_by_side = max(budget // per_launch, 1)
     return -(-knobs.validation_launches() // side_by_side)

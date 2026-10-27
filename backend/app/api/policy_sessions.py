@@ -43,10 +43,11 @@ from app.control.orchestrator.policy_lifecycle import (
     deadlines,
     settings_of,
 )
+from app.control.recipe.campaign import config_cards
 from app.control.search.base import CandidateConfig
 from app.control.search.space import deviations as space_deviations
 from app.control.search.space import forbidden_hits, prune_inactive
-from app.control.search.validation import ValidationContext, cards_used, validate_config
+from app.control.search.validation import ValidationContext, validate_config
 from app.core.auth import PolicyCaller, get_policy_session
 from app.core.config import get_settings
 from app.db.base import get_async_session
@@ -907,7 +908,7 @@ async def request_launch(
         return _launch_out(existing, await db.get(Candidate, existing.candidate_id))
 
     canonical, dev = await _validated_or_audit(db, caller, body.engine_args, campaign, machine)
-    needed = cards_used(canonical)
+    needed = config_cards(campaign, canonical)
     # A machine with no cards (a CPU-only slice: kind, the demo's mock
     # engine) gives the session none, and its launches ask for none whatever
     # the config's parallelism, the way a plain campaign runs there. Asking
@@ -1200,7 +1201,7 @@ async def check_config(
     return ConfigCheckOut(
         ok=not problems,
         config=canonical,
-        cards=cards_used(args),
+        cards=config_cards(campaign, canonical),
         command=command,
         env=env,
         problems=problems,

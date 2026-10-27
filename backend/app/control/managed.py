@@ -32,7 +32,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 from app import plugins
-from app.campaign_rules import campaign_errors
+from app.campaign_rules import campaign_errors, read_recipe
 from app.control.orchestrator.lifecycle import as_utc
 from app.datasets.profiles import DatasetBuild
 from app.db.models import (
@@ -68,6 +68,8 @@ class ManagedCampaignRefused(ValueError):
 # creates a campaign. A managed campaign names its benchmarks by slug: making
 # one is a call to LLMBench, which does not belong in a worker tick.
 _NOT_FOR_MANAGED = ("benchmark_spec", "verify_benchmark_spec")
+# Read into `recipe` at save, never stored.
+_CREATE_ONLY = ("recipe_text",)
 
 
 def create_managed_campaign(
@@ -95,6 +97,9 @@ def create_managed_campaign(
         raise ManagedCampaignRefused(
             f"{', '.join(given)}: a managed campaign names its benchmarks by slug"
         )
+    problem = read_recipe(body)
+    if problem:
+        raise ManagedCampaignRefused(problem)
     errors = campaign_errors(session, body)
     if errors:
         raise ManagedCampaignRefused("; ".join(errors))
@@ -103,7 +108,7 @@ def create_managed_campaign(
 
     campaign = Campaign(
         owner_id=owner_id,
-        **body.model_dump(exclude={"extensions", *_NOT_FOR_MANAGED}),
+        **body.model_dump(exclude={"extensions", *_NOT_FOR_MANAGED, *_CREATE_ONLY}),
     )
     if start_for is not None:
         moment = at or datetime.now(UTC)

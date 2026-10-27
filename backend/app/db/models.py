@@ -524,6 +524,11 @@ class Campaign(Base):
     served_model_name: Mapped[str] = mapped_column(String(128))
     # {"base": {fixed args}, "grid": {param: [values]}, "tied": [{param: [values]}]}
     search_space: Mapped[dict] = mapped_column(JsonCol)
+    # The configuration every run starts from, as the engine chart reads it
+    # (app/control/recipe): {engine, chart, values}. A run launches this with
+    # its candidate's config applied, and a winner is published as it. Empty =
+    # a campaign from before recipes, built from the fields above.
+    recipe: Mapped[dict] = mapped_column(JsonCol, default=dict)
     # {"target_metric": "...", "redlines": [{"metric": "...", "op": "<=", "value": x}]}
     objective: Mapped[dict] = mapped_column(JsonCol, default=dict)
     status: Mapped[str] = mapped_column(String(16), default=CampaignStatus.DRAFT.value, index=True)

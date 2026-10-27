@@ -48,7 +48,7 @@ from app.schemas.core import CampaignCreate
 _RUNTIME_ONLY = frozenset({"window_start", "window_end"})
 # Workloads that become benchmark slugs when the campaign is created; a saved
 # campaign carries the slugs, so that is what its spec says.
-_CREATE_ONLY = frozenset({"benchmark_spec", "verify_benchmark_spec"})
+_CREATE_ONLY = frozenset({"benchmark_spec", "verify_benchmark_spec", "recipe_text"})
 
 # Every field a campaign is defined by — exactly CampaignCreate's, minus the
 # runtime ones. Derived, not listed, so a field added to CampaignCreate travels
@@ -75,6 +75,9 @@ def spec_of(
     keep about it (`extensions`) as read by the caller."""
     spec = {k: getattr(campaign, k) for k in SPEC_KEYS if k not in _NOT_COLUMNS}
     spec["extensions"] = extensions or {}
+    # Unset on a campaign object not yet flushed (the column default applies
+    # at insert); a spec always says "no recipe" the same way.
+    spec["recipe"] = spec.get("recipe") or {}
     if spec.get("schedule_until") is not None:
         spec["schedule_until"] = spec["schedule_until"].isoformat()
     return spec

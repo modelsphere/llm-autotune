@@ -70,6 +70,7 @@ from app.control.orchestrator.machine_queue import campaign_key, session_key, wa
 from app.control.orchestrator.occupancy import holds, reservations_on
 from app.control.orchestrator.packing import Placement, choose_next, free_indices
 from app.control.orchestrator.states import can_transition
+from app.control.recipe.campaign import base_recipe, config_cards, recipe_for
 from app.control.run_nodes import machine_hosts_live_gang, nodes_of, run_ids_on_machine
 from app.control.search import CandidateConfig
 from app.control.search.space import expand
@@ -1183,7 +1184,7 @@ class Supervisor:
             self._maybe_finish_campaign(session, campaign)
             return False
         by_id = {c.id: c for c in pending}
-        placements = [Placement(c.id, _cards_used(c.config)) for c in pending]
+        placements = [Placement(c.id, config_cards(campaign, c.config)) for c in pending]
 
         # A group campaign places a GANG, not a run on one machine: the group is
         # the unit, and the single-machine packer below would put a 2-node config
@@ -2007,7 +2008,7 @@ class Supervisor:
             # variants if each is credited with the GPUs it occupies. A baseline
             # now carries production's real engine args, so it is counted the
             # same way as any candidate — no special case.
-            cards = _cards_used(config)
+            cards = config_cards(campaign, config)
             # `cards` is the config's WORLD size (tp×dp×pp), which is the whole
             # deployment for a single node and the total across the gang for a
             # multi-node one. LLMBench card-normalizes per machine, so the two
@@ -2108,7 +2109,15 @@ class Supervisor:
         # the interconnect the boxes are actually wired with.
         # The config's own `env.<NAME>` keys go over the campaign's env; the
         # group's fabric settings still win over both.
-        engine_args, config_env = split_env(run.candidate.config or {})
+        recipe = base_recipe(campaign)
+        if recipe is not None:
+            # A recipe campaign: the run is the recipe with its config applied.
+            # The flat fields below are read from it, for the drivers that
+            # take them (ssh_docker); the LLMService driver takes the recipe.
+            recipe = recipe_for(campaign, run.candidate.config or {})
+            engine_args, config_env = dict(recipe.flags()), dict(recipe.env())
+        else:
+            engine_args, config_env = split_env(run.candidate.config or {})
         env = {**(campaign.extra_env or {}), **config_env}
         volumes = dict(campaign.extra_volumes or {})
         group = self._group_for_run(session, run)
@@ -2132,10 +2141,13 @@ class Supervisor:
         return LaunchSpec(
             run_id=run.id,
             machine=master_info,
-            engine=campaign.engine,
-            image=campaign.image,
+            engine=recipe.engine if recipe is not None else campaign.engine,
+            image=recipe.image if recipe is not None else campaign.image,
             model_path=campaign.model_path,
-            served_model_name=campaign.served_model_name,
+            served_model_name=(
+                recipe.served_name if recipe is not None else campaign.served_model_name
+            ),
+            recipe=recipe.model_dump() if recipe is not None else None,
             engine_args=engine_args,
             gpu_indices=list(nodes[0].gpu_indices) if nodes else list(run.gpu_indices or []),
             port=run.service_port or campaign.service_port,

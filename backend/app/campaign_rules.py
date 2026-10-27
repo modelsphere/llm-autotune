@@ -50,6 +50,8 @@ def campaign_errors(session: Session, body: CampaignCreate) -> list[str]:
     space = space_errors(body.search_space or {})
     if space:
         errors.append("; ".join(space))
+    if body.recipe:
+        errors += recipe_space_errors(body.search_space or {})
     # A schedule that does not parse leaves the campaign asleep forever, and
     # the only symptom is nothing happening at 23:00 — the worst possible time
     # to discover a typo.
@@ -126,3 +128,45 @@ def node_group_errors(session: Session, body: CampaignCreate) -> list[str]:
             "deployment is only implemented for ssh+docker hosts so far"
         ]
     return []
+
+
+def recipe_space_errors(space: dict) -> list[str]:
+    """A recipe campaign's space keys are addresses into the recipe; one that
+    is not, or that names what only the site or a run sets, is refused here."""
+    from app.control.recipe.check import config_problems
+
+    keys: dict[str, None] = {}
+    for part in ("base", "grid", "range", "conditions"):
+        keys.update(dict.fromkeys((space.get(part) or {}).keys()))
+    for group in space.get("tied") or []:
+        keys.update(dict.fromkeys((group or {}).keys()))
+    return [p["message"] for p in config_problems(dict.fromkeys(keys, True))]
+
+
+def read_recipe(body: CampaignCreate) -> str | None:
+    """A recipe given in any form, read into one, checked, and made the source
+    of the campaign's engine, image and served name: the problem, or None. A
+    campaign without one only needs an image."""
+    from app.control.recipe import importer
+    from app.control.recipe.check import recipe_problems
+
+    source = body.recipe_text if (body.recipe_text or "").strip() else body.recipe
+    if not source:
+        return None if body.image.strip() else "image is required"
+    try:
+        recipe = importer.parse(source).recipe
+    except importer.NotARecipe as exc:
+        return f"recipe: {exc}"
+    if body.extra_env or body.extra_volumes:
+        return "with a recipe, env and volumes are the recipe's (values.env, values.volumes)"
+    if not recipe.served_name:
+        recipe.values.setdefault("model", {})["name"] = body.served_model_name
+    problems = recipe_problems(recipe)
+    if problems:
+        return f"recipe: {problems[0]['message']}"
+    body.recipe = recipe.model_dump()
+    body.recipe_text = None
+    body.engine = recipe.engine
+    body.image = recipe.image
+    body.served_model_name = recipe.served_name
+    return None

@@ -30,6 +30,7 @@ export const PORTABLE_KEYS = [
   'extra_env',
   'extra_volumes',
   'search_space',
+  'recipe',
   'objective',
   'benchmark_slug',
   'confirm_top_k',

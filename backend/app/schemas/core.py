@@ -280,12 +280,20 @@ def served_name_for(model_path: str) -> str:
 
 class CampaignCreate(BaseModel):
     name: str
-    engine: str  # sglang | vllm
-    image: str
+    # With a recipe, engine and image are the recipe's and may be left empty.
+    engine: str = ""  # sglang | vllm
+    image: str = ""
     model_path: str
     # Empty = derived from the model path (served_name_for).
     served_model_name: str = ""
     search_space: dict[str, Any]
+    # The configuration every run starts from (app/control/recipe): a recipe,
+    # a model-catalog variant or an LLMService, read into a recipe at save.
+    # The search space's keys then address it (a flag, env.<NAME>,
+    # prefill./decode.<flag>, values.<path>). Empty = built from the fields.
+    recipe: dict[str, Any] = Field(default_factory=dict)
+    # The same as text (YAML, or a `docker run` command line). Not stored.
+    recipe_text: str | None = None
     objective: dict[str, Any] = Field(default_factory=dict)
     benchmark_slug: str = ""  # "" = platform default
     # The workload instead of a slug (app/evaluation/benchmark_spec.py):
@@ -395,6 +403,7 @@ class CampaignOut(BaseModel):
     model_path: str
     served_model_name: str
     search_space: dict[str, Any]
+    recipe: dict[str, Any] = {}
     objective: dict[str, Any]
     status: str
     benchmark_slug: str
