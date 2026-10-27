@@ -45,7 +45,6 @@ from app.control.orchestrator.policy_lifecycle import (
     settings_of,
 )
 from app.control.recipe import Recipe
-from app.control.recipe import diff as recipe_diff
 from app.control.recipe import shape as recipe_shape
 from app.control.recipe.address import BadAddress
 from app.control.recipe.address import parse as parse_address
@@ -236,19 +235,6 @@ def _anchor(campaign: Campaign) -> Recipe:
     """What every launch starts from: the campaign's recipe (or the one its
     fields make) with the space's base applied."""
     return recipe_for(campaign, (campaign.search_space or {}).get("base") or {})
-
-
-def _requested(engine_args: dict[str, Any], recipe: dict[str, Any] | None,
-               campaign: Campaign) -> dict[str, Any]:
-    """The config a request names: its addresses, plus, for a whole recipe,
-    the addresses at which that recipe differs from the anchor (1.6)."""
-    if not recipe:
-        return dict(engine_args or {})
-    try:
-        sent = Recipe.model_validate(recipe)
-    except ValueError as exc:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"recipe: {exc}") from exc
-    return {**dict(engine_args or {}), **recipe_diff(_anchor(campaign), sent)}
 
 
 def _launches_recipes(machine: Machine | None) -> bool:
@@ -994,7 +980,7 @@ async def request_launch(
         return _launch_out(existing, await db.get(Candidate, existing.candidate_id))
 
     canonical, dev = await _validated_or_audit(
-        db, caller, _requested(body.engine_args, body.recipe, campaign), campaign, machine
+        db, caller, dict(body.engine_args or {}), campaign, machine
     )
     needed = config_cards(campaign, canonical)
     # A machine with no cards (a CPU-only slice: kind, the demo's mock
@@ -1268,7 +1254,7 @@ async def check_config(
     _session, campaign, machine = await _context(db, caller)
     vocab = await _vocabulary(db, campaign)
     canonical, problems = _config_problems(
-        _requested(body.engine_args, body.recipe, campaign), campaign, machine, vocab
+        dict(body.engine_args or {}), campaign, machine, vocab
     )
     # With the image's own parser at hand an unknown flag is a refusal above;
     # the platform's catalog is only the fallback guess.
@@ -1476,7 +1462,7 @@ async def put_contenders(
             continue
         try:
             canonical, dev = _validated(
-                _requested(entry.launch_spec.engine_args, entry.launch_spec.recipe, campaign),
+                dict(entry.launch_spec.engine_args or {}),
                 campaign, machine, vocab,
             )
         except HTTPException as exc:

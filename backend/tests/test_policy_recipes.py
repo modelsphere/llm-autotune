@@ -1,11 +1,9 @@
-"""Contract 1.6: configs address a recipe, and a recipe can be sent whole.
+"""Contract 1.6: configs address a recipe.
 
 A policy sees the recipe every launch starts from in its manifest. A config's
 keys may name a pd role's flags (`prefill.`/`decode.`) or any chart value
-(`values.<path>`) as well as flags and env, and a launch, check or contender
-may carry a whole recipe instead, read as the addresses where it differs."""
-
-import copy
+(`values.<path>`) as well as flags and env. A policy sends configs only; the
+check answers with the recipe the platform builds from one."""
 
 from app.control.recipe.legacy import from_fields
 from app.db.models import Campaign
@@ -66,17 +64,18 @@ async def test_chart_values_are_addressable_and_site_values_are_not(night, monke
     }
 
 
-async def test_a_whole_recipe_reads_as_the_addresses_it_changes(night):  # noqa: F811
+async def test_the_check_answers_with_the_recipe_a_config_builds(night):  # noqa: F811
     supervisor, driver, http = night
     policy = await _boot(supervisor, driver, http)
-    recipe = copy.deepcopy((await policy.get("/session")).json()["model"]["recipe"])
-    recipe["values"]["extraArgs"].append("--mem-fraction-static=0.8")
-    checked = (await policy.post("/configs/check", json={"recipe": recipe})).json()
+    checked = (
+        await policy.post("/configs/check", json={"engine_args": {"mem_fraction_static": 0.8}})
+    ).json()
     assert checked["ok"] is True, checked["problems"]
-    assert checked["config"]["mem_fraction_static"] == 0.8
-    launched = await policy.post("/launches", json={"recipe": recipe, "gpu_indices": [0]})
-    assert launched.status_code == 201, launched.text
-    assert launched.json()["config"]["mem_fraction_static"] == 0.8
+    assert "--mem-fraction-static=0.8" in checked["recipe"]["values"]["extraArgs"]
+    # A whole recipe is not a config: the platform builds it, a policy does not.
+    recipe = (await policy.get("/session")).json()["model"]["recipe"]
+    ignored = (await policy.post("/configs/check", json={"recipe": recipe})).json()
+    assert "mem_fraction_static" not in ignored["config"]
 
 
 async def test_a_recipe_campaign_refuses_what_its_chart_would(night):  # noqa: F811
@@ -91,9 +90,9 @@ async def test_a_recipe_campaign_refuses_what_its_chart_would(night):  # noqa: F
         ).model_dump()
         await session.commit()
     policy = await _boot(supervisor, driver, http)
-    recipe = copy.deepcopy((await policy.get("/session")).json()["model"]["recipe"])
-    recipe["values"]["extraArgs"].append("--port=9000")
-    checked = (await policy.post("/configs/check", json={"recipe": recipe})).json()
+    checked = (
+        await policy.post("/configs/check", json={"engine_args": {"node_rank": 1}})
+    ).json()
     assert checked["ok"] is False
     assert any("rendered by the chart" in p["message"] for p in checked["problems"])
 

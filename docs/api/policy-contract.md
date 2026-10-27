@@ -402,13 +402,14 @@ their own addresses). Refused as `placement`: what only the site or a run sets
 on a machine whose launches are not LLMServices, since its driver applies
 flags and env only.
 
-Instead of a config, `POST /launches`, `POST /configs/check` and each entry of
-`PUT /contenders` take a whole `recipe`: edit the YAML you were given and send
-it back. The platform reads it as the addresses at which it differs from
-`model.recipe`, and echoes that config as usual. A recipe campaign also refuses
-what its chart would (`not_renderable`, `placement`): a flag the chart renders
-itself (`--port`, `--model-path`, …), an image without a tag. A contender's
-stored `launch_spec.recipe` is the document a publish writes.
+A policy sends configs only; the platform builds the recipe. `POST
+/configs/check` answers with the `recipe` a launch of the config runs, its
+`shape` (the pods and the cards each claims) and `commands` (each role's engine
+command as the chart builds it), so a policy can see exactly what would run
+without reading the chart. A recipe campaign also refuses what its chart would
+(`not_renderable`, `placement`): a flag the chart renders itself (`--port`,
+`--model-path`, …), an image without a tag. A winner is published as the
+recipe its config builds.
 
 ---
 
@@ -778,8 +779,7 @@ from their specs, time permitting. Either way the machine's own guarantees
   plus the watchdog govern it exactly as before.
 - **1.6** (additive): [recipes](#config-format). `model.recipe` in the
   manifest and `services.recipes` on the menu; `prefill.`, `decode.` and
-  `values.` config addresses; a whole `recipe` accepted by launches, checks
-  and contenders; `recipe`, `shape` (pods and cards) and `commands` (each
+  `values.` config addresses; `recipe`, `shape` (pods and cards) and `commands` (each
   role's engine argv as the chart builds it) on the `/configs/check` answer.
   New refusals only for the new addresses. A 1.5 policy runs unchanged.
 - **1.5** (additive): `env.<NAME>` config keys and `GET /engine/vocabulary`,

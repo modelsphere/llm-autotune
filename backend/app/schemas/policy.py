@@ -228,8 +228,9 @@ class ManifestServices(BaseModel):
     # each one's recommendation level.
     env_keys: bool = False
     vocabulary: bool = False
-    # 1.6: configs address a recipe (manifest.model.recipe); launches, checks
-    # and contenders also take a whole `recipe` in place of a config.
+    # 1.6: config keys may also address a pd role's flags (`prefill.`/`decode.`)
+    # and chart values (`values.<path>`); the manifest carries the recipe every
+    # launch starts from, and /configs/check returns the recipe it builds.
     recipes: bool = False
 
 
@@ -385,8 +386,6 @@ class LaunchIn(BaseModel):
     model_config = _lenient
 
     engine_args: dict[str, Any] = Field(default_factory=dict)
-    # 1.6: a whole recipe in place of a config (see ConfigCheckIn.recipe).
-    recipe: dict[str, Any] | None = None
     # The cards the config runs on, as many as it uses (tp×dp×pp). Empty only
     # on a machine with no cards, whose session holds none.
     gpu_indices: list[int] = Field(default_factory=list)
@@ -477,9 +476,6 @@ class ConfigCheckIn(BaseModel):
     model_config = _lenient
 
     engine_args: dict[str, Any] = Field(default_factory=dict)
-    # 1.6: a whole recipe instead of (or as well as) a config; read as the
-    # addresses at which it differs from manifest.model.recipe.
-    recipe: dict[str, Any] | None = None
 
 
 class ConfigProblem(BaseModel):
@@ -548,8 +544,6 @@ class ContenderLaunchSpec(BaseModel):
     model_config = _lenient
 
     engine_args: dict[str, Any] = Field(default_factory=dict)
-    # 1.6: a whole recipe in place of a config (see ConfigCheckIn.recipe).
-    recipe: dict[str, Any] | None = None
     image: str = Field(min_length=1)
     env: dict[str, str] = Field(default_factory=dict)
     volumes: dict[str, str] = Field(default_factory=dict)
