@@ -507,6 +507,8 @@ class ClientApi(K8sApi):
                 resp = self._core.list_namespaced_event(self._ns, **kwargs)
             elif resource == "nodes":
                 resp = self._core.list_node(**kwargs)
+            elif resource == "resourcequotas":
+                resp = self._core.list_namespaced_resource_quota(self._ns, **kwargs)
             elif resource == LLMSVC_RESOURCE:
                 return list(
                     self._custom.list_namespaced_custom_object(

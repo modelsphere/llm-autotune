@@ -35,6 +35,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   whole life (`chart_version`, migration `025_campaign_chart_version`): the
   one given, the recipe's own when it names an exact version, or else the one
   the operator installed for the first run.
+- **Pools without node access.** Where the platform may not read nodes, a
+  pool's capacity is the namespace's GPU quota (`resourcequotas`, now in the
+  namespaced role); the cluster still places every pod. A gang or pd recipe
+  must fit a node pod by pod, not as a whole.
 - **Policy contract 1.6.** Config keys may also address a pd role's flags
   and chart values; the manifest carries the recipe every launch starts from;
   the check answers with the recipe a config builds, its pods and cards, and

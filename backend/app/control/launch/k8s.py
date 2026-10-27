@@ -1397,9 +1397,7 @@ class K8sDriver(DeploymentDriver):
         try:
             nodes = self.api.list("nodes", label_selector=selector.strip())
         except Exception as exc:
-            return {"supported": True, "gpu_count": 0, "gpu_type": "", "node_count": 0,
-                    "node_gpu_max": 0, "gpu_free": None, "gpu_types": [],
-                    "nodes": [], "warnings": [f"could not read nodes: {exc}"]}
+            return self._quota_capacity(f"could not read nodes: {exc}")
 
         resource = self.settings.k8s_gpu_resource
         held: dict[str, int] | None = None
@@ -1468,6 +1466,43 @@ class K8sDriver(DeploymentDriver):
             "gpu_free": None if held is None else free_total,
             "nodes": detail,
             "warnings": warnings,
+        }
+
+    def _quota_capacity(self, why: str) -> dict[str, Any]:
+        """Capacity without node access: the namespace's GPU quota, which a
+        namespace-scoped role can read. It bounds how many cards our pods may
+        request at once, which is what admission needs; the cluster still
+        places them. Node sizes and card type stay unknown, so the node-fit
+        check passes and a pod no node can hold waits, then reads as
+        unplaceable."""
+        empty = {"supported": True, "gpu_count": 0, "gpu_type": "", "node_count": 0,
+                 "node_gpu_max": 0, "gpu_free": None, "gpu_types": [], "nodes": []}
+        keys = (f"requests.{self.settings.k8s_gpu_resource}", self.settings.k8s_gpu_resource)
+        hard: int | None = None
+        used = 0
+        try:
+            quotas = self.api.list("resourcequotas")
+        except Exception as exc:
+            return {**empty, "warnings": [why, f"could not read the namespace quota: {exc}"]}
+        for quota in quotas:
+            status = quota.get("status") or {}
+            limits = status.get("hard") or (quota.get("spec") or {}).get("hard") or {}
+            spent = status.get("used") or {}
+            for key in keys:
+                if key in limits:
+                    value = _quantity_int(limits[key])
+                    if hard is None or value < hard:
+                        hard, used = value, _quantity_int(spent.get(key, 0))
+                    break
+        if hard is None:
+            return {**empty, "warnings": [why, "and the namespace has no GPU quota to go by; "
+                                          "set the machine's card count by hand"]}
+        return {
+            **empty,
+            "gpu_count": hard,
+            "gpu_free": max(hard - used, 0),
+            "quota": True,
+            "warnings": [why + f"; capacity is the namespace's GPU quota ({hard})"],
         }
 
     # -- smoke test ----------------------------------------------------------
@@ -2289,3 +2324,11 @@ def _yaml_ish(manifests: list[dict]) -> str:
     record. Not a YAML serializer — JSON is valid YAML — just indented so the
     stored command reads like what an operator would apply by hand."""
     return json.dumps(manifests, indent=2, sort_keys=True)
+
+
+def _quantity_int(value: Any) -> int:
+    """A quota quantity as a card count ("8", 8; GPUs are whole numbers)."""
+    try:
+        return int(float(str(value).strip()))
+    except (TypeError, ValueError):
+        return 0

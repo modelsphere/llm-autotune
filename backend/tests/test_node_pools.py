@@ -382,3 +382,59 @@ async def test_a_pool_spanning_two_card_types_cannot_be_leased(client, monkeypat
     async with client.db() as session:
         machine = (await session.execute(select(Machine))).scalars().one()
     assert (machine.node_count, machine.node_gpu_max, machine.gpu_free) == (2, 8, 5)
+
+
+class _NoNodesApi(FakeK8sApi):
+    quotas: list[dict] = []
+
+    def list(self, resource, label_selector=""):
+        if resource == "nodes":
+            raise RuntimeError("nodes is forbidden")
+        if resource == "resourcequotas":
+            return list(self.quotas)
+        return super().list(resource, label_selector)
+
+
+def test_without_node_access_the_namespace_quota_is_the_capacity():
+    from app.hardware import record_capacity
+
+    settings = _clone(k8s_api_mode="kubectl")
+    api = _NoNodesApi(settings)
+    api.quotas = [{"status": {"hard": {"requests.nvidia.com/gpu": "16", "pods": "50"},
+                              "used": {"requests.nvidia.com/gpu": "6"}}}]
+    machine = MachineInfo(name="pool", host="", driver="k8s", node_selector=POOL)
+    probe = _driver(settings, api).probe_capacity(machine)
+    assert probe["gpu_count"] == 16 and probe["gpu_free"] == 10
+    # Node sizes are unknown: the node-fit check lets every pod through.
+    assert probe["node_gpu_max"] == 0
+    assert any("namespace's GPU quota" in w for w in probe["warnings"])
+    row = Machine(name="pool", host="", driver="k8s", gpu_count=0)
+    assert record_capacity(row, probe) and row.gpu_count == 16
+
+    # No quota either: nothing to go by, and the row is left alone.
+    api.quotas = []
+    probe = _driver(settings, api).probe_capacity(machine)
+    assert probe["gpu_count"] == 0 and not record_capacity(row, probe)
+    assert row.gpu_count == 16
+
+
+def test_a_pod_must_fit_a_node_not_the_whole_launch():
+    from types import SimpleNamespace
+
+    import pytest
+    from fastapi import HTTPException
+
+    from app.api.policy_sessions import _check_fits_a_node
+    from app.control.recipe.campaign import config_cards, config_pod_cards
+    from app.control.recipe.importer import parse
+    from tests.test_recipe_publish import PD
+
+    recipe = parse(PD.read_text()).recipe
+    campaign = SimpleNamespace(recipe=recipe.model_dump(), search_space={})
+    total, widest = config_cards(campaign, {}), config_pod_cards(campaign, {})
+    assert total > widest > 0  # a pd recipe spreads over several pods
+    pool = SimpleNamespace(name="pool", driver="k8s", node_selector=POOL, node_gpu_max=widest)
+    _check_fits_a_node(pool, widest)
+    pool.node_gpu_max = widest - 1
+    with pytest.raises(HTTPException):
+        _check_fits_a_node(pool, widest)

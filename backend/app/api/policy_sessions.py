@@ -48,7 +48,12 @@ from app.control.recipe import Recipe
 from app.control.recipe import shape as recipe_shape
 from app.control.recipe.address import BadAddress
 from app.control.recipe.address import parse as parse_address
-from app.control.recipe.campaign import config_cards, recipe_for, split_flat
+from app.control.recipe.campaign import (
+    config_cards,
+    config_pod_cards,
+    recipe_for,
+    split_flat,
+)
 from app.control.recipe.check import config_problems as recipe_config_problems
 from app.control.recipe.check import recipe_problems
 from app.control.recipe.render import chart_commands
@@ -426,16 +431,18 @@ async def _idempotent_run(
     ).scalar_one_or_none()
 
 
-def _check_fits_a_node(machine: Machine | None, needed: int) -> None:
-    """On a node pool a launch's cards are all on one node, so a config wider
+def _check_fits_a_node(machine: Machine | None, per_pod: int) -> None:
+    """On a node pool each pod's cards are all on one node, so a pod wider
     than the widest node could never be scheduled: refuse it now, rather than
-    let it wait for room that will never come. Unknown sizes pass."""
+    let it wait for room that will never come. A gang or a pd recipe spreads
+    over several pods, so its widest pod is what must fit, not its total.
+    Unknown sizes pass (a pool read from a namespace quota has no node sizes)."""
     if machine is None or not is_node_pool(machine) or not machine.node_gpu_max:
         return
-    if needed > machine.node_gpu_max:
+    if per_pod > machine.node_gpu_max:
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
-            f"config uses {needed} card(s) (tp×dp×pp), but the largest node in "
+            f"a pod of this config uses {per_pod} card(s), but the largest node in "
             f"{machine.name} has {machine.node_gpu_max}: no node could ever hold it",
         )
 
@@ -993,7 +1000,7 @@ async def request_launch(
             f"config uses {needed} card(s) (tp×dp×pp) but {len(body.gpu_indices)} were "
             "requested — they must match",
         )
-    _check_fits_a_node(machine, needed)
+    _check_fits_a_node(machine, config_pod_cards(campaign, canonical))
     live = await _live_session_runs(db, session)
     port = _check_cards_and_port(session, live, body.gpu_indices, body.port)
 

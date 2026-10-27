@@ -61,6 +61,16 @@ def config_cards(campaign: Any, config: dict[str, Any] | None) -> int:
     return shape(apply(base, dict(config or {}))).total_gpus
 
 
+def config_pod_cards(campaign: Any, config: dict[str, Any] | None) -> int:
+    """Cards the widest pod of one launch of `config` claims: what one node
+    must hold. The whole launch for a one-pod config; one pod of a gang or a
+    pd role otherwise, since those spread over several nodes."""
+    base = base_recipe(campaign)
+    if base is None:
+        return cards_used(dict(config or {}))
+    return shape(apply(base, dict(config or {}))).max_pod_gpus
+
+
 def widest_cards(campaign: Any) -> int:
     """The most cards any configuration of the campaign's space claims."""
     from app.control.search.space import expand

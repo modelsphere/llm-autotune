@@ -38,6 +38,10 @@ rules:
   - apiGroups: [""]
     resources: ["events"]
     verbs: ["get", "list"]
+  # The namespace's GPU quota: a pool's capacity where nodes cannot be read.
+  - apiGroups: [""]
+    resources: ["resourcequotas"]
+    verbs: ["get", "list"]
   # A policy is a CONTROLLER, not a service: it dials the platform API and asks
   # for launches. So it runs as a Job — narrower than a Deployment grant on
   # purpose, because a Job cannot become a long-lived service.

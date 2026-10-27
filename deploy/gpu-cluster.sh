@@ -129,6 +129,10 @@ rules:
   - apiGroups: [""]
     resources: ["events"]
     verbs: ["get", "list"]
+  # The namespace's GPU quota: a pool's capacity where nodes cannot be read.
+  - apiGroups: [""]
+    resources: ["resourcequotas"]
+    verbs: ["get", "list"]
   # A search policy runs to completion as a Job.
   - apiGroups: ["batch"]
     resources: ["jobs"]
