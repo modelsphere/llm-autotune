@@ -135,7 +135,7 @@ class K8sClusterSettings:
     k8s_context: str = ""
     k8s_kubeconfig: str = ""
     k8s_in_cluster: bool = False
-    k8s_workload_kind: str = "deployment"
+    k8s_workload_kind: str = "llmservice"
     k8s_chart_repo: str = "https://modelsphere.github.io/helm-charts"
     k8s_chart_credentials_secret: str = ""
     k8s_endpoint: str = "dns"

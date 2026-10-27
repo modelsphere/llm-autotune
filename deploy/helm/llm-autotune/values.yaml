@@ -181,7 +181,7 @@ gpuCluster:
   #   Needs llm-operator on the cluster (the modelsphere stack installs it).
   # "deployment" (deprecated) = a Deployment + NodePort Service, no operator.
   # "custom" (deprecated) = a TuningRun for the autotune operator.
-  workloadKind: deployment
+  workloadKind: llmservice
   # llmservice mode: where the operator pulls the engine charts from. The
   # stack install passes its own `chartRepo`; credentialsSecret names a Secret
   # in the run namespace with `username`/`password` for a private repository.

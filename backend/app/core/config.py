@@ -252,13 +252,13 @@ class Settings(BaseSettings):
     k8s_in_cluster: bool = False
     # Which object the driver renders for one run. The cluster design is still
     # TBD, so this is a switch, not a commitment:
-    #   "deployment" — a plain Deployment + NodePort Service. The universal k8s
-    #                  primitive: works on any cluster, no CRD/operator needed,
-    #                  right for single-node. This is the concrete, non-speculative
-    #                  path we can run today.
-    #   "custom"     — a TuningRun the autotune-operator reconciles (fields below).
-    #                  Set this once the operator is deployed on the cluster.
-    k8s_workload_kind: str = "deployment"
+    #   "llmservice" — an LLMService per run (llm-operator installs the engine
+    #                  chart with the run's recipe), the object a production
+    #                  deploy uses. The default; the stack install brings it.
+    #   "deployment" — (deprecated) a plain Deployment + NodePort Service, for a
+    #                  cluster without llm-operator.
+    #   "custom"     — (deprecated) a TuningRun the autotune-operator reconciles.
+    k8s_workload_kind: str = "llmservice"
     # "llmservice" mode: the engine chart an LLMService installs, and where it
     # is pulled from. The default is the chart repository the stack install
     # publishes to; a site with its own (an oci:// mirror) sets it.

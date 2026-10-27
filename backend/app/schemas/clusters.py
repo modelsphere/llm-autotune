@@ -29,7 +29,7 @@ class ClusterIn(BaseModel):
     # Where engine pods run. Empty = the namespace the kubeconfig's context
     # names, which is how deploy/gpu-cluster.sh writes it.
     namespace: str = ""
-    workload_kind: WorkloadKind = "deployment"
+    workload_kind: WorkloadKind = "llmservice"
     chart_repo: str = Field("", max_length=512)
     chart_credentials_secret: str = Field("", max_length=253)
     endpoint: EndpointMode = "dns"

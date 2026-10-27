@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **llmservice is the default workload kind** (`gpuCluster.workloadKind`, a
+  new cluster's setting, `AUTOTUNE_K8S_WORKLOAD_KIND`). The cluster needs
+  llm-operator, which the modelsphere stack installs. Upgrading an install
+  whose GPU cluster has no llm-operator: set `gpuCluster.workloadKind:
+  deployment` to keep the old kind. Clusters added before keep their own.
+  `deployment` and `custom` are deprecated.
+
 ### Added
 
 - **Runs as LLMServices.** A cluster set to `workload_kind: llmservice`

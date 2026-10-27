@@ -281,10 +281,10 @@ class Cluster(Base):
     kubeconfig_enc: Mapped[str] = mapped_column(Text, default="")
     context: Mapped[str] = mapped_column(String(128), default="")
     namespace: Mapped[str] = mapped_column(String(128), default="autotune")
-    # "deployment" (the driver manages Deployment + NodePort Service) or
-    # "custom" (a TuningRun the operator reconciles). Per cluster because an
-    # operator may be installed on one cluster and not another.
-    workload_kind: Mapped[str] = mapped_column(String(24), default="deployment")
+    # "llmservice" (an LLMService per run), or the deprecated "deployment"
+    # (Deployment + NodePort Service) and "custom" (a TuningRun). Per cluster
+    # because an operator may be installed on one cluster and not another.
+    workload_kind: Mapped[str] = mapped_column(String(24), default="llmservice")
     # "llmservice" mode (an LLMService per run; see app/control/recipe). Empty
     # chart_repo = the install's AUTOTUNE_K8S_CHART_REPO.
     chart_repo: Mapped[str] = mapped_column(String(512), default="", server_default="")
