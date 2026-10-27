@@ -187,16 +187,46 @@ def test_sglang_docs_fill_in_what_the_code_does_not_say(tmp_path):
     assert "SGLANG_HF_TOKEN" not in env
 
 
-def test_the_docs_are_optional(monkeypatch):
-    def unreachable(*a, **k):
+def test_the_docs_ship_with_the_platform(monkeypatch):
+    fetched = []
+
+    def unreachable(url, **k):
+        fetched.append(url)
         raise httpx.ConnectError("no route to host")
 
     monkeypatch.setattr(httpx, "get", unreachable)
+    # The image's own version is shipped: read from disk, nothing fetched.
     docs, note = vs.fetch_docs("sglang", "0.5.19")
-    assert docs is None and "not fetched" in note and "v0.5.19" in note
-    assert vs.fetch_docs("vllm", "0.32.0") == (None, "")  # vllm's comments are in the image
+    assert fetched == [] and "shipped with the platform" in note and "v0.5.19" in note
+    assert "Overlap Spec V2" in docs["SGLANG_ENABLE_OVERLAP_PLAN_STREAM"]["help"]
+    # Another version: the URL for it first, then the nearest older shipped one.
+    docs, note = vs.fetch_docs("sglang", "0.5.21.post1")
+    assert fetched and "v0.5.21" in fetched[0] and docs
+    assert "not fetched" in note and "for v0.5.19, shipped" in note and "image is v0.5.21" in note
+    # An older image than any shipped still gets the oldest, said as such.
     monkeypatch.setattr(vs.get_settings(), "engine_docs_url_sglang", "")
-    assert vs.fetch_docs("sglang", "0.5.19") == (None, "")
+    docs, note = vs.fetch_docs("sglang", "0.5.15")
+    assert docs and note.endswith("(the image is v0.5.15)")
+    assert vs.fetch_docs("vllm", "0.32.0") == (None, "")  # vllm's comments are in the image
+
+
+def test_a_fetched_page_for_the_exact_version_beats_a_shipped_older_one(monkeypatch):
+    page = (
+        "## Scheduler & Batching\n"
+        "<table><tbody><tr><td>`SGLANG_NEW_SWITCH`</td><td>New in 0.5.21</td>"
+        "<td>`false`</td></tr></tbody></table>\n"
+    )
+
+    class Response:
+        text = page
+
+        def raise_for_status(self):
+            pass
+
+    monkeypatch.setattr(httpx, "get", lambda url, **k: Response())
+    docs, note = vs.fetch_docs("sglang", "0.5.21")
+    assert list(docs) == ["SGLANG_NEW_SWITCH"]
+    assert note == "1 descriptions from the engine's docs for v0.5.21"
 
 
 class _Driver:
@@ -251,3 +281,17 @@ def test_the_shipped_label_files_name_real_switches_shapes():
     for engine in ("sglang", "vllm"):
         for label in v.load_labels(engine):
             assert label.level in v.LEVELS
+
+
+def test_no_label_recommends_what_a_config_may_not_set():
+    import fnmatch
+
+    from app.control.engines import vocabulary as v
+    from app.control.engines.rules import default_forbidden, never
+
+    v.load_labels.cache_clear()
+    rules = [*never(), *default_forbidden()]
+    for engine in ("sglang", "vllm"):
+        for label in v.load_labels(engine):
+            key = f"env.{label.name}" if label.kind == "env" else label.name
+            assert not [p for p in rules if fnmatch.fnmatchcase(key, p)], (engine, key)

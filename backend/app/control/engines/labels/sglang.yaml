@@ -1,21 +1,440 @@
 # Recommendation labels for sglang switches: which are worth a policy's
 # trials first.
 #
-# Hand-written, optional, and only from experience: a switch that measurably
-# helped on real runs, with the situation it helped in. Anything not listed
-# is "unknown"; an empty file is fine. A label applies
-# only when the campaign's image actually reads the switch (its vocabulary,
-# dumped from the image) and the card matches `hardware`, so a label for a
-# switch an image lacks, or for other hardware, is dropped, never shown.
-# What may not be set at all lives in common.yaml. A switch's type, default
-# and allowed values come from the image itself, never from here.
+# Hand-written and optional, and generic: for any model on the hardware
+# named, with `when` saying where a switch applies. A switch is labeled only
+# when sglang's own code, docs or published recipes say it can change
+# performance (the evidence is in a comment on each entry or group); anything
+# not listed is "unknown". `high` is for the levers sglang's own tuning guide
+# (docs/advanced_features/hyperparameter_tuning.mdx) names for every
+# deployment. A label applies only when the campaign's image actually reads
+# the switch (its vocabulary, dumped from the image) and the card matches
+# `hardware`, so a label for a switch an image lacks, or for other hardware,
+# is dropped, never shown. What may not be set at all lives in common.yaml.
+# A switch's type, default and allowed values come from the image itself,
+# never from here.
 #
 #   level     high | mid | low   (high: try early; mid: worth a trial when
 #                                 the record points at it; low: rarely helps)
 #   when      when it is worth trying, in a few words ("MoE models")
 #   hardware  vendor/architecture tags it applies to (nvidia, amd, npu,
 #             ampere, hopper, blackwell); omit for any hardware
+#
+# Read against sglang v0.5.19 (503 flags, 676 env vars).
 
+flag:
+  # -- high: the tuning guide's levers ---------------------------------------
+  # Guide: "maximize the KV cache pool capacity by setting
+  # --mem-fraction-static as high as possible while still reserving enough
+  # memory for activations and CUDA graph buffers" (5-8 GB left is good).
+  - name: mem_fraction_static
+    level: high
+    when: any model; the KV cache size against activation headroom
+  # Guide: "If OOM occurs during decoding, try lowering
+  # --max-running-requests"; large batches are "the most important thing"
+  # for throughput.
+  - name: max_running_requests
+    level: high
+    when: any model; caps the decode batch
+  # Guide: reducing it "saves memory but slows down the prefill speed for
+  # long prompts".
+  - name: chunked_prefill_size
+    level: high
+    when: any model; larger speeds long prefills, smaller saves memory
+  # Guide: lower (0.3) when token usage stays under 0.9 with requests
+  # queued; higher (1.3) when the log shows frequent retractions.
+  - name: schedule_conservativeness
+    level: high
+    when: token usage under 0.9 with a queue (lower), or frequent retractions (higher)
+  # Guide: CUDA graphs cover small batches by default; raising the cap "may
+  # be beneficial", especially at large tp, at some memory.
+  - name: cuda_graph_max_bs_decode
+    level: high
+    when: decode batches larger than the captured graphs, especially at large tp
+  # Guide: "Tune --dp-size and --tp-size ... Data parallelism is better for
+  # throughput. When there is enough GPU memory, always favor data
+  # parallelism."
+  - name: tp
+    level: high
+    when: any model; the GPUs one replica spans
+  - name: dp
+    level: high
+    when: the model fits on fewer GPUs than the trial has
 
-flag: []
-env: []
+  # -- mid ------------------------------------------------------------------
+  # Help: "Choose the kernels for attention layers"; the prefill/decode
+  # variants take priority per phase.
+  - name: attention_backend
+    level: mid
+    when: any model; which attention kernels fit the card and model
+  - name: prefill_attention_backend
+    level: mid
+    when: prefill and decode favour different attention kernels
+  - name: decode_attention_backend
+    level: mid
+    when: prefill and decode favour different attention kernels
+  # Guide: "If the workload has many shared prefixes, try --schedule-policy
+  # lpm ... more cache hits but more scheduling overhead".
+  - name: schedule_policy
+    level: mid
+    when: requests share long prefixes (lpm)
+  # Guide: "torch.compile accelerates small models on small batch sizes".
+  - name: enable_torch_compile
+    level: mid
+    when: small models at small batch sizes
+  # Help: "The maximum number of tokens in a prefill batch".
+  - name: max_prefill_tokens
+    level: mid
+    when: long prompts or many prefills at once
+  # Help: "Run multiple continuous decoding steps to reduce scheduling
+  # overhead ... may also increase time-to-first-token latency."
+  - name: num_continuous_decode_steps
+    level: mid
+    when: throughput objectives with loose TTFT limits
+  # Help: "A smaller value makes streaming smoother, while a larger value
+  # makes the throughput higher".
+  - name: stream_interval
+    level: mid
+    when: streaming clients that tolerate coarser chunks
+  # Help: builtins EAGLE, EAGLE3, NEXTN, STANDALONE, NGRAM, DFLASH, DSPARK.
+  # The Qwen3.5/3.6/Next cookbooks run NEXTN on the model's own MTP layers.
+  - name: speculative_algorithm
+    level: mid
+    when: the model has built-in draft layers (NEXTN/EAGLE), or a draft model is available
+  # The cookbooks' speculative commands set all three (e.g. 3 / 1 / 4).
+  - name: speculative_num_steps
+    level: mid
+    when: with speculative decoding
+  - name: speculative_eagle_topk
+    level: mid
+    when: with speculative decoding
+  - name: speculative_num_draft_tokens
+    level: mid
+    when: with speculative decoding
+  # Guide: "Try other parallelism strategies (e.g. expert parallelism) or DP
+  # attention for deepseek models"; help: DP attention supports DeepSeek-V2
+  # and Qwen 2/3 MoE.
+  - name: ep
+    level: mid
+    when: MoE models over several GPUs
+  - name: enable_dp_attention
+    level: mid
+    when: MoE models (DeepSeek, Qwen MoE) at high concurrency
+  # Help: "Choose the runner backend for MoE"; the Kimi-K3 cookbook pins it
+  # per card.
+  - name: moe_runner_backend
+    level: mid
+    when: MoE models
+  # Help: "NCCL symmetric memory for fast collectives"; Qwen3.5 cookbook:
+  # "H100 FP8: add --enable-symm-mem ... under multi-GPU settings".
+  - name: enable_symm_mem
+    level: mid
+    when: tp 2 or more
+    hardware: [nvidia]
+  # Help: "~1.2-1.5x at batch >= 64" for GDN decode.
+  - name: enable_linear_replayssm
+    level: mid
+    when: hybrid linear-attention (GDN) models at decode batch 64 or more
+  # Help: replaces per-draft state snapshots in speculative verify; GDN/KDA,
+  # topk 1 only.
+  - name: enable_linear_replayssm_spec
+    level: mid
+    when: hybrid linear-attention models with speculative decoding at topk 1
+  # Qwen3.5/3.6 cookbooks: no_buffer (default) runs without the overlap
+  # scheduler; extra_buffer enables it at more state memory (FLA backend,
+  # NVIDIA only). Canonical key of --mamba-radix-cache-strategy.
+  - name: mamba_scheduler_strategy
+    level: mid
+    when: hybrid linear-attention models
+  # Help: "The ratio of mamba state memory to full kv cache memory"; the
+  # Qwen3.8-27B cookbook sizes it per strategy and workload.
+  - name: mamba_full_memory_ratio
+    level: mid
+    when: hybrid linear-attention models whose state cache or KV cache runs out first
+  # Kimi-K3 cookbook: "--mamba-ssm-dtype bfloat16 | ~halves state bytes";
+  # Qwen3.8-27B cookbook: "bfloat16 remains the faster choice regardless".
+  # Lower state precision than float32.
+  - name: mamba_ssm_dtype
+    level: mid
+    when: hybrid linear-attention models; bfloat16 halves state memory at lower state precision
+  # Help: radix-cached linear-attn states in int8 "for ~2x cached-prefix
+  # capacity at fixed memory".
+  - name: enable_int8_mamba_checkpoint
+    level: mid
+    when: hybrid linear-attention models with prefix reuse; cached states kept in int8
+  # HiCache docs: a host-memory tier below the device KV cache keeps more
+  # prefix cached (Qwen3.5 cookbook: "reach higher concurrency").
+  - name: enable_hierarchical_cache
+    level: mid
+    when: reused prefixes larger than the GPU KV cache
+
+  # -- low ------------------------------------------------------------------
+  # CUDA graph shape and backends (tuning guide, help).
+  - name: cuda_graph_bs_decode
+    level: low
+    when: decode batch sizes the default capture list misses
+  - name: cuda_graph_max_bs_prefill
+    level: low
+    when: short prefills at high concurrency
+  - name: cuda_graph_backend_prefill
+    level: low
+    when: short prefills at high concurrency
+  - name: cuda_graph_backend_decode
+    level: low
+    when: decode graphs that fail or cost too much memory
+  # Help: mixing prefill and decode in one batch under chunked prefill.
+  - name: enable_mixed_chunk
+    level: low
+    when: chunked prefill alongside steady decode traffic
+  - name: page_size
+    level: low
+    when: required or favoured by the attention backend (64 with mamba extra_buffer)
+  - name: disable_radix_cache
+    level: low
+    when: no prefix reuse at all
+  - name: radix_eviction_policy
+    level: low
+    when: prefix reuse with a cache that keeps filling
+  - name: disable_overlap_schedule
+    level: low
+    when: the overlap scheduler is suspected of hurting a model
+  # Help: "Can be set to >1 to reduce the overhead of this."
+  - name: scheduler_recv_interval
+    level: low
+    when: very high request rates
+  # Help: "for improved performance when multiple requests arrive
+  # concurrently", "for faster tokenization", "for improved performance when
+  # processing multiple text inputs"; more tokenizer workers for high rates.
+  - name: enable_dynamic_batch_tokenizer
+    level: low
+    when: very high request rates
+  - name: tokenizer_worker_num
+    level: low
+    when: very high request rates
+  - name: tokenizer_backend
+    level: low
+    when: very high request rates or long prompts
+  - name: enable_tokenizer_batch_encode
+    level: low
+    when: requests that batch several text inputs
+  # Speculative decoding refinements (help).
+  - name: speculative_adaptive
+    level: low
+    when: speculative decoding with acceptance that varies by request
+  - name: speculative_attention_mode
+    level: low
+    when: with speculative decoding
+  - name: min_free_slots_delay
+    level: low
+    when: speculative decoding with a separate draft prefill
+  - name: enable_multi_layer_eagle
+    level: low
+    when: models with several MTP layers
+  # Help: accept a draft token at a lower target probability than exact
+  # verification; more accepted tokens per step, outputs no longer match the
+  # target model's distribution exactly.
+  - name: speculative_accept_threshold_single
+    level: low
+    when: speculative decoding with sampling; looser acceptance than exact verification
+  - name: speculative_accept_threshold_acc
+    level: low
+    when: speculative decoding with sampling; looser acceptance than exact verification
+  # MoE and expert parallel (help).
+  - name: moe_a2a_backend
+    level: low
+    when: MoE models with expert parallel
+  - name: enable_two_batch_overlap
+    level: low
+    when: MoE models with expert parallel all-to-all
+  - name: enable_single_batch_overlap
+    level: low
+    when: MoE models with expert parallel all-to-all
+  - name: deepep_mode
+    level: low
+    when: MoE models on the DeepEP backend
+  - name: enable_eplb
+    level: low
+    when: MoE models with expert parallel and skewed expert load
+  - name: ep_num_redundant_experts
+    level: low
+    when: MoE models with expert parallel and skewed expert load
+  - name: enable_prefill_delayer
+    level: low
+    when: DP attention
+  # Collectives (help: fusion and alternatives to NCCL).
+  - name: flashinfer_allreduce_fusion_backend
+    level: low
+    when: tp 2 or more
+    hardware: [hopper, blackwell]
+  - name: enable_torch_symm_mem
+    level: low
+    when: tp 4, 6 or 8
+    hardware: [hopper, blackwell]
+  - name: enable_mscclpp
+    level: low
+    when: tp 2 or more, small messages
+  - name: enable_nccl_nvls
+    level: low
+    when: tp 2 or more, prefill-heavy traffic
+    hardware: [nvidia]
+  - name: disable_custom_all_reduce
+    level: low
+    when: tp 2 or more
+  # Help: "INT8 quantization of TP communications (limited support)".
+  - name: enable_quant_communications
+    level: low
+    when: tp 2 or more with communication-bound steps; all-reduce in int8
+  # Help: "TensorFloat32 precision for better performance" for float32
+  # matmuls (CUDA only); bf16/fp16 models do few of those.
+  - name: enable_tf32_matmul
+    level: low
+    when: models or layers that run float32 matmuls
+    hardware: [nvidia]
+  # Hybrid linear-attention kernels and state (help).
+  - name: linear_attn_backend
+    level: low
+    when: hybrid linear-attention models
+  - name: linear_attn_decode_backend
+    level: low
+    when: hybrid linear-attention models
+  - name: linear_attn_prefill_backend
+    level: low
+    when: hybrid linear-attention models
+  - name: mamba_backend
+    level: low
+    when: Mamba models
+  - name: max_mamba_cache_size
+    level: low
+    when: hybrid linear-attention models whose state cache runs out first
+  - name: enable_unified_memory
+    level: low
+    when: hybrid models whose KV and state pools fill unevenly (Triton backends)
+  # Long contexts (help: "Larger value is better in longer context
+  # scenarios"; Lean attention "for long-context serving").
+  - name: triton_attention_num_kv_splits
+    level: low
+    when: Triton attention at long contexts
+  - name: enable_lean_attention
+    level: low
+    when: long-context decode
+  - name: enable_prefill_cp
+    level: low
+    when: very long prompts over several GPUs
+  - name: swa_full_tokens_ratio
+    level: low
+    when: sliding-window attention models
+  # Kernel choices for other paths (help).
+  - name: torch_compile_max_bs
+    level: low
+    when: with torch compile
+  - name: enable_fused_qk_norm_rope
+    level: low
+    when: models with QK norm
+  - name: mm_attention_backend
+    level: low
+    when: multimodal requests
+  - name: fp8_gemm_runner_backend
+    level: low
+    when: FP8 models
+  - name: hicache_ratio
+    level: low
+    when: with the hierarchical cache
+  - name: hicache_write_policy
+    level: low
+    when: with the hierarchical cache
+
+env:
+  # -- mid ------------------------------------------------------------------
+  # Read only by the v2 speculative workers (spec_utils.get_plan_stream):
+  # plans the next step on a separate stream. Docs: "Overlap Spec V2".
+  - name: SGLANG_ENABLE_OVERLAP_PLAN_STREAM
+    level: mid
+    when: speculative decoding with EAGLE, EAGLE3, NEXTN, DFLASH or STANDALONE
+  # kv_cache_configurator: one fewer mamba state slot per running request on
+  # the extra_buffer strategies. Kimi-K3 and Qwen3.8-27B cookbooks: frees
+  # one more slot per request "(experimental, under validation)".
+  - name: SGLANG_OPT_MAMBA_SKIP_DECODE_LOCK
+    level: mid
+    when: hybrid linear-attention models on mamba_scheduler_strategy extra_buffer
+  # schedule_policy.py: the scheduler reserves memory for up to this many new
+  # tokens per request, "to prevent the server from being too conservative".
+  - name: SGLANG_CLIP_MAX_NEW_TOKENS_ESTIMATION
+    level: mid
+    when: requests ask for large max_tokens but answer much shorter
+  # scheduler.py pins each scheduler process to its GPU's CPUs; docs: "often
+  # set to 1 in Docker builds"; exported in sglang's recipes.
+  - name: SGLANG_SET_CPU_AFFINITY
+    level: mid
+    when: high request rates or small models, where the scheduler's CPU time shows
+
+  # -- low ------------------------------------------------------------------
+  # The new-token reservation that schedule_conservativeness scales.
+  - name: SGLANG_INIT_NEW_TOKEN_RATIO
+    level: low
+    when: after schedule_conservativeness, when retractions or idle KV cache persist
+  - name: SGLANG_MIN_NEW_TOKEN_RATIO_FACTOR
+    level: low
+    when: after schedule_conservativeness, when retractions or idle KV cache persist
+  - name: SGLANG_NEW_TOKEN_RATIO_DECAY_STEPS
+    level: low
+    when: after schedule_conservativeness, when retractions or idle KV cache persist
+  - name: SGLANG_RETRACT_DECODE_STEPS
+    level: low
+    when: frequent retractions
+  # Overlap scheduler (docs, help).
+  - name: SGLANG_DISABLE_CONSECUTIVE_PREFILL_OVERLAP
+    level: low
+    when: long-prompt workloads where back-to-back prefills dominate
+  - name: SGLANG_ENABLE_DELAY_SAMPLE
+    level: low
+    when: sampling overhead shows on the decode critical path
+  # CUDA graphs and host overhead (help: "collapsing its host dispatch cost";
+  # "skips a per-iter device-to-device copy").
+  - name: SGLANG_ENABLE_METADATA_GLUE_GRAPH
+    level: low
+    when: speculative decoding with host-bound steps
+  - name: SGLANG_EAGER_INPUT_NO_COPY
+    level: low
+    when: batches running outside CUDA graphs
+  - name: SGLANG_ENABLE_GRAPH_POOL_BORROW
+    level: low
+    when: memory-bound configs with CUDA graphs
+  - name: SGLANG_ENABLE_POST_CAPTURE_KV_SIZING
+    level: low
+    when: memory-bound configs with large CUDA graphs
+  - name: SGLANG_VIT_ENABLE_CUDA_GRAPH
+    level: low
+    when: multimodal requests
+  # Kernels (docs, help).
+  - name: SGLANG_ENABLE_JIT_DEEPGEMM
+    level: low
+    when: FP8 models, to compare against the non-DeepGEMM kernels
+    hardware: [hopper, blackwell]
+  - name: SGLANG_TRITON_DECODE_ATTN_STATIC_KV_SPLITS
+    level: low
+    when: Triton decode attention
+  - name: SGLANG_TRTLLM_MHA_DECODE_SEQ_LEN_SPLITS
+    level: low
+    when: TRT-LLM decode attention with a wide spread of sequence lengths
+    hardware: [blackwell]
+  - name: SGLANG_FLASHINFER_AUTOTUNE_EXTEND
+    level: low
+    when: FlashInfer kernels with memory headroom
+  # Collectives and parallelism (help: "saves an all-reduce/all-gather").
+  - name: SGLANG_ENABLE_EMBED_REPLICATION
+    level: low
+    when: tp 2 or more
+  - name: SGLANG_SYMM_MEM_PREALLOC_GB_SIZE
+    level: low
+    when: with enable_symm_mem
+  - name: SGLANG_FLASHINFER_MNNVL_CUTEDSL_AR_FUSION
+    level: low
+    when: multi-node NVLink systems
+    hardware: [blackwell]
+  # MoE (recipes set these for DeepEP / shared-expert MoE).
+  - name: SGLANG_DEEPEP_NUM_MAX_DISPATCH_TOKENS_PER_RANK
+    level: low
+    when: MoE models on the DeepEP backend
+  - name: SGLANG_SHARED_EXPERT_TP1
+    level: low
+    when: MoE models with a shared expert under DP attention

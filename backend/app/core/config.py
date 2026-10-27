@@ -170,9 +170,10 @@ class Settings(BaseSettings):
     # The engine vocabulary (control/engines/vocabulary_store.py): how long the
     # job that reads an image's flags and env vars may take (it imports the
     # engine, torch included), and where the engine's docs are fetched from to
-    # describe env vars the image's code does not ({version} is the engine's).
-    # The fetch is optional: empty, unreachable or a missing page just leaves
-    # those descriptions out.
+    # describe env vars the image's code does not ({version} is the engine's)
+    # when the platform does not ship that version's docs (engines/docs/).
+    # The fetch is optional: empty, unreachable or a missing page falls back
+    # to the nearest shipped version.
     engine_vocab_timeout_seconds: int = 900
     engine_docs_url_sglang: str = (
         "https://raw.githubusercontent.com/sgl-project/sglang/v{version}"
