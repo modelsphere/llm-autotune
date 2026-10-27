@@ -398,8 +398,7 @@ into it:
 means what it always meant. Refused as `bad_key`: an address that does not
 parse, and `values.extraArgs` / `values.env` as a whole (set their entries by
 their own addresses). Refused as `placement`: what only the site or a run sets
-(scheduling, routing, scaling, naming, `values.model.localPath`'s placement
-neighbours, the image). Refused as `substrate`: a pd role flag or chart value
+(scheduling, routing, scaling, naming, the Service type, the image). Refused as `substrate`: a pd role flag or chart value
 on a machine whose launches are not LLMServices, since its driver applies
 flags and env only.
 
