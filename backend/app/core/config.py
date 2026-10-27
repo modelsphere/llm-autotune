@@ -270,8 +270,8 @@ class Settings(BaseSettings):
     # cluster and dials the run's Service by name) or "nodeport" (opt-in: from
     # outside the cluster, through a node at k8s_node_host).
     k8s_endpoint: str = "dns"
-    # Registry prefix a recipe's image is rewritten under ("" = as written),
-    # the same rule the stack install's `registry` value applies.
+    # The site's engine-image mirror ("" = as written): an image is pulled as
+    # <mirror>/<last path component>, swiss's rule for the same images.
     k8s_image_mirror: str = ""
     # Chart values every engine on this cluster gets (JSON), under the run's
     # own: resources a quota demands, securityContext, shm.

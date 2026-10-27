@@ -87,8 +87,8 @@ class Site:
     # Where the weights are on the node. A recipe names a model, never a path.
     model_local_path: str = ""
     model_host_path_type: str = ""
-    # Image registry prefix to rewrite the recipe's repository under ("" = as
-    # written). The same rule the stack install's `registry` value applies.
+    # The site's engine-image mirror ("" = images as written), with swiss's
+    # rewrite rule (mirror_image).
     image_mirror: str = ""
     node_selector: dict[str, str] = field(default_factory=dict)
     tolerations: list[dict[str, Any]] = field(default_factory=list)
@@ -116,16 +116,15 @@ class RunPlan:
 
 
 def mirror_image(repository: str, mirror: str) -> str:
-    """`lmsysorg/sglang` under `harbor.example/team` → `harbor.example/team/lmsysorg/sglang`.
-    A repository already under the mirror is left alone; a registry host on
-    the original (anything before the first "/" with a "." or ":") is dropped,
-    as the stack's offline loader retags."""
+    """`lmsysorg/sglang` under `registry.example/team` → `registry.example/team/sglang`.
+
+    swiss's rule (site.Profile.MirrorImage): the mirror plus the image's last
+    path component. Engine images reach a site's mirror for swiss's deploys,
+    so a tuning run pulls exactly what a production deploy of the same recipe
+    would. A repository already under the mirror is left alone."""
     if not mirror or repository.startswith(mirror.rstrip("/") + "/"):
         return repository
-    first, _, rest = repository.partition("/")
-    if rest and ("." in first or ":" in first or first == "localhost"):
-        repository = rest
-    return f"{mirror.rstrip('/')}/{repository}"
+    return f"{mirror.rstrip('/')}/{repository.rsplit('/', 1)[-1]}"
 
 
 def site_layer(recipe: Recipe, site: Site) -> dict[str, Any]:

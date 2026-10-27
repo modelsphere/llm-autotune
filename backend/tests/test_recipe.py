@@ -331,8 +331,8 @@ def test_nodeport_is_opt_in():
 
 
 def test_mirror_and_service_names():
-    assert mirror_image("lmsysorg/sglang", "reg.example/x") == "reg.example/x/lmsysorg/sglang"
-    assert mirror_image("ghcr.io/a/b", "reg.example/x") == "reg.example/x/a/b"
+    assert mirror_image("lmsysorg/sglang", "reg.example/x") == "reg.example/x/sglang"
+    assert mirror_image("ghcr.io/a/b", "reg.example/x") == "reg.example/x/b"
     assert mirror_image("reg.example/x/a", "reg.example/x") == "reg.example/x/a"
     lws = Recipe(values={"lws": {"enabled": True}})
     assert service_name(lws, "autotune-run-3") == "autotune-run-3-leader"

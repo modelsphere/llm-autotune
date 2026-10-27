@@ -204,7 +204,7 @@ def test_site_values_land_in_the_site_layer():
     site = {layer["name"]: layer["values"] for layer in api.applied[0]["spec"]["layers"]}["site"]
     assert site["securityContext"]["capabilities"]["add"] == ["IPC_LOCK"]
     assert site["resources"]["requests"]["memory"] == "64Gi"
-    assert site["image"]["repository"] == "reg.example/team/lmsysorg/sglang"
+    assert site["image"]["repository"] == "reg.example/team/sglang"
 
 
 def test_a_stored_recipe_launches_as_it_is():

@@ -191,8 +191,9 @@ gpuCluster:
   # How the benchmark reaches a run: "dns" (it runs in this cluster, as in the
   # stack install) or "nodeport" (opt-in, from outside the cluster).
   endpoint: dns
-  # Registry prefix every engine image is pulled through (the stack's
-  # `registry` in rewrite mode). Empty = images as the recipe names them.
+  # The site's engine-image mirror: an image is pulled as
+  # <imageMirror>/<last path component>, the rule swiss uses for the same
+  # images. Empty = images as the recipe names them.
   imageMirror: ""
   # Chart values every run gets, under its own: resources a quota demands,
   # securityContext. Never part of a tuned config.
