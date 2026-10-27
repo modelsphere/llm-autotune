@@ -984,6 +984,9 @@ const configRows = computed(() => {
             : 'pinned to the version the first run installs',
         }]
       : []),
+    ...(c.recipe_source
+      ? [{ label: 'Recipe from', value: c.recipe_source, hint: 'the catalog variant it started as' }]
+      : []),
     { label: 'Model path', value: c.model_path, hint: 'bind-mounted to /model' },
     { label: 'Served model name', value: c.served_model_name },
     { label: 'Engine port', value: String(c.service_port) },

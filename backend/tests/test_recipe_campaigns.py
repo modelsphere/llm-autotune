@@ -269,3 +269,51 @@ def test_the_first_run_pins_what_the_operator_installed():
     env["chart_version"] = "0.9.27"
     Supervisor._snapshot_environment(fake, run(), SimpleNamespace(machine=None))
     assert campaign.chart_version == "0.9.26"
+
+
+def _catalog_transport():
+    index = {
+        "raw": "https://raw.example/",
+        "commit": "c0ffee",
+        "models": [{
+            "name": "qwen3.6-35b-a3b",
+            "displayName": "Qwen3.6 35B-A3B",
+            "variants": [{"id": "sglang-tp2-h100", "version": "1.1.0",
+                          "path": "models/qwen3.6-35b-a3b/sglang-tp2-h100.yaml",
+                          "commit": "abc123"}],
+        }],
+    }
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("index-v2.json"):
+            return httpx.Response(200, json=index)
+        if request.url.path == "/abc123/models/qwen3.6-35b-a3b/sglang-tp2-h100.yaml":
+            return httpx.Response(200, text=QWEN.read_text())
+        return httpx.Response(404)
+
+    return httpx.MockTransport(handle)
+
+
+@pytest.mark.asyncio
+async def test_a_campaign_starts_from_a_catalog_variant_as_published(client, monkeypatch):
+    from app.control.catalog_export import catalog_index
+
+    transport = _catalog_transport()
+    models, variant = catalog_index.models, catalog_index.variant
+    monkeypatch.setattr(catalog_index, "models", lambda url: models(url, transport))
+    monkeypatch.setattr(
+        catalog_index, "variant", lambda url, n, v: variant(url, n, v, transport)
+    )
+    listed = (await client.get("/api/catalog/models")).json()["models"]
+    assert listed[0]["variants"] == [{"id": "sglang-tp2-h100", "version": "1.1.0"}]
+    got = (await client.get("/api/catalog/models/qwen3.6-35b-a3b/variants/sglang-tp2-h100")).json()
+    # The file as the catalog serves it, read at the variant's own commit.
+    assert got["text"] == QWEN.read_text()
+    assert got["source"] == "https://raw.example/abc123/models/qwen3.6-35b-a3b/sglang-tp2-h100.yaml"
+    resp = await client.post(
+        "/api/campaigns", json=_body(recipe_text=got["text"], recipe_source=got["ref"])
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["recipe_source"] == "qwen3.6-35b-a3b/sglang-tp2-h100@1.1.0"
+    missing = await client.get("/api/catalog/models/qwen3.6-35b-a3b/variants/nope")
+    assert missing.status_code == 404

@@ -345,6 +345,8 @@ export interface Campaign {
   recipe?: { engine?: string; chart?: { name?: string; version?: string }; values?: Record<string, unknown> }
   /** The exact chart version every run renders; empty until it is pinned. */
   chart_version?: string
+  /** The catalog variant the recipe was read from ("<model>/<variant>@<version>"). */
+  recipe_source?: string
   objective: Record<string, unknown>
   status: string
   /** The benchmark every candidate runs. Single-stage replay is the default:

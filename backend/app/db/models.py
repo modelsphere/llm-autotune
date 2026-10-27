@@ -535,6 +535,9 @@ class Campaign(Base):
     # when the recipe names an exact version, else from the version the
     # operator installed for the first run. Empty = not pinned yet.
     chart_version: Mapped[str] = mapped_column(String(64), default="")
+    # Where the recipe came from, when it is a catalog variant:
+    # "<model>/<variant>@<version>". Empty = pasted or built from the fields.
+    recipe_source: Mapped[str] = mapped_column(String(255), default="")
     # {"target_metric": "...", "redlines": [{"metric": "...", "op": "<=", "value": x}]}
     objective: Mapped[dict] = mapped_column(JsonCol, default=dict)
     status: Mapped[str] = mapped_column(String(16), default=CampaignStatus.DRAFT.value, index=True)

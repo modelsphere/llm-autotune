@@ -297,6 +297,8 @@ class CampaignCreate(BaseModel):
     # The exact chart version every run renders. Empty = the recipe's own when
     # it names one exactly, else what the operator installs for the first run.
     chart_version: str = Field("", max_length=64)
+    # The catalog variant the recipe was read from ("<model>/<variant>@<version>").
+    recipe_source: str = Field("", max_length=255)
     objective: dict[str, Any] = Field(default_factory=dict)
     benchmark_slug: str = ""  # "" = platform default
     # The workload instead of a slug (app/evaluation/benchmark_spec.py):
@@ -408,6 +410,7 @@ class CampaignOut(BaseModel):
     search_space: dict[str, Any]
     recipe: dict[str, Any] = {}
     chart_version: str = ""
+    recipe_source: str = ""
     objective: dict[str, Any]
     status: str
     benchmark_slug: str

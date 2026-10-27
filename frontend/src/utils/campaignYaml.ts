@@ -32,6 +32,7 @@ export const PORTABLE_KEYS = [
   'search_space',
   'recipe',
   'chart_version',
+  'recipe_source',
   'objective',
   'benchmark_slug',
   'confirm_top_k',

@@ -970,6 +970,11 @@ export default {
   },
   campaignNew: {
     recipe: {
+      fromCatalog: 'From the catalog',
+      catalogModel: 'Model',
+      catalogVariant: 'Variant',
+      catalogUnreadable: 'Could not read the model catalog',
+      fromSource: 'The catalog variant {source}, as published. Editing the text below makes it your own.',
       mode: 'Configuration',
       modeHint: 'Image + flags: the search space sets engine flags on this image. Recipe: the engine chart\'s values, exactly as a model-catalog variant or an LLMService writes them; the search space addresses them (a flag, env.<NAME>, prefill./decode.<flag>, values.<path>), and a winner is published as this document.',
       byImage: 'Image + flags',

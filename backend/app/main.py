@@ -13,6 +13,7 @@ from app.api import (
     baselines,
     benchmarks,
     campaigns,
+    catalog,
     catalog_export,
     clusters,
     datasets,
@@ -154,6 +155,7 @@ app.include_router(objectives.router, prefix=api_prefix)
 app.include_router(datasets.router, prefix=api_prefix)
 app.include_router(benchmarks.router, prefix=api_prefix)
 app.include_router(baselines.router, prefix=api_prefix)
+app.include_router(catalog.router, prefix=api_prefix)
 app.include_router(catalog_export.router, prefix=api_prefix)
 app.include_router(policies.router, prefix=api_prefix)
 app.include_router(policy_sessions.router, prefix=api_prefix)

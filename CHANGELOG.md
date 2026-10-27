@@ -39,7 +39,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   between a flat config and a recipe is lossless, checked on every variant the
   catalog publishes. Cards are counted from what the pods ask for. The create
   form takes a recipe in place of an image (`POST /api/campaigns/recipe` reads
-  one and says what it would launch), and the campaign page shows it.
+  one and says what it would launch), and the campaign page shows it. It can
+  also start from a published catalog variant: pick the model and variant, and
+  the variant's file, read from the platform's catalog at its own commit,
+  becomes the recipe (`GET /api/catalog/models`, `recipe_source`, migration
+  `026_campaign_recipe_source`).
 - **Pinned chart version.** A campaign renders one chart version for its
   whole life (`chart_version`, migration `025_campaign_chart_version`): the
   one given, the recipe's own when it names an exact version, or else the one

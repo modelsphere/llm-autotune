@@ -958,6 +958,11 @@ const zh: typeof en = {
   },
   campaignNew: {
     recipe: {
+      fromCatalog: '从模型目录',
+      catalogModel: '模型',
+      catalogVariant: 'Variant',
+      catalogUnreadable: '无法读取模型目录',
+      fromSource: '模型目录中的 variant {source}，与发布版本一致。修改下方文本后即为自定义 recipe。',
       mode: '配置方式',
       modeHint: '镜像 + 参数：搜索空间在该镜像上设置引擎参数。Recipe：引擎 chart 的 values，与 model-catalog 的 variant 或 LLMService 写法一致；搜索空间按地址修改它（参数、env.<NAME>、prefill./decode.<参数>、values.<路径>），最优结果按此文档发布。',
       byImage: '镜像 + 参数',
