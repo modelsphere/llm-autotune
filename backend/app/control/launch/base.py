@@ -150,6 +150,9 @@ class LaunchSpec(BaseModel):
     # LLMService driver launches it as is; None = build one from the fields
     # above. The other drivers read the fields.
     recipe: dict[str, Any] | None = None
+    # The chart version the campaign pinned (Campaign.chart_version): every
+    # run renders the same chart. Empty = the recipe's own version or range.
+    chart_version: str = ""
     # THIS spec's own rank, set by `for_node`. 0 on the gang spec.
     rank: int = 0
     nnodes: int = 1

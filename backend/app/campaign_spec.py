@@ -78,6 +78,7 @@ def spec_of(
     # Unset on a campaign object not yet flushed (the column default applies
     # at insert); a spec always says "no recipe" the same way.
     spec["recipe"] = spec.get("recipe") or {}
+    spec["chart_version"] = spec.get("chart_version") or ""
     if spec.get("schedule_until") is not None:
         spec["schedule_until"] = spec["schedule_until"].isoformat()
     return spec

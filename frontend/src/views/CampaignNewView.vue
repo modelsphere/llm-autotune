@@ -82,6 +82,11 @@ const policyAdvanced = ref<string[]>([])
 
 const form = ref({
   name: '',
+  // 'image': an image and the engine flags the search space sets.
+  // 'recipe': the engine chart's values (a model-catalog variant, an
+  // LLMService, or a command line read into one); the space addresses it.
+  config_mode: 'image' as 'image' | 'recipe',
+  recipe_text: '',
   engine: 'sglang',
   image: '',
   model_path: '',
@@ -139,6 +144,40 @@ const form = ref({
   schedule_until: null as string | null,
 })
 
+/** What the recipe text reads as, from the API (`POST /campaigns/recipe`). */
+interface RecipeRead {
+  source: string
+  recipe: Record<string, unknown>
+  yaml: string
+  engine: string
+  image: string
+  served_model_name: string
+  notes: string[]
+  problems: { kind: string; param: string; message: string }[]
+  warnings: string[]
+  shape: { topology: string; total_gpus: number; pods: { role: string; gpus: number; count: number }[] }
+}
+const recipeRead = ref<RecipeRead | null>(null)
+const recipeError = ref('')
+const readingRecipe = ref(false)
+const recipeMode = computed(() => form.value.config_mode === 'recipe')
+
+async function readRecipe() {
+  recipeError.value = ''
+  recipeRead.value = null
+  if (!form.value.recipe_text.trim()) return
+  readingRecipe.value = true
+  try {
+    const { data } = await api.post<RecipeRead>('/campaigns/recipe', { text: form.value.recipe_text })
+    recipeRead.value = data
+    form.value.engine = data.engine
+  } catch (error: any) {
+    recipeError.value = apiErrorText(error, t('campaignNew.recipe.unreadable'))
+  } finally {
+    readingRecipe.value = false
+  }
+}
+
 const STEPS = computed(() => [
   { title: t('campaignNew.steps.model') },
   { title: t('campaignNew.steps.machines') },
@@ -161,6 +200,7 @@ const defaultName = computed(() => `${servedName.value || 'model'} · ${localDat
 /** What the engine serves the model as: the typed name, else the last part of
  *  the model path — the same rule the API applies to an empty field. */
 const servedName = computed(() =>
+  (recipeMode.value && recipeRead.value?.served_model_name) ||
   form.value.served_model_name.trim() ||
   form.value.model_path.trim().replace(/\/+$/, '').split('/').pop() || '')
 
@@ -263,7 +303,9 @@ const verifyObjectiveMismatch = computed(() => {
  *  end and is told the first page was wrong. */
 const problems = computed<string[][]>(() => [
   [
-    !form.value.image.trim() && t('campaignNew.need.image'),
+    !recipeMode.value && !form.value.image.trim() && t('campaignNew.need.image'),
+    recipeMode.value && !recipeRead.value && t('campaignNew.need.recipe'),
+    recipeMode.value && !!recipeRead.value?.problems.length && t('campaignNew.need.recipeOk'),
     !form.value.model_path.trim() && t('campaignNew.need.modelPath'),
   ].filter(Boolean) as string[],
   [] as string[], // machines may be left empty (= any), so nothing is required
@@ -359,7 +401,8 @@ async function runPreflight() {
       machine_names: form.value.machine_names,
       node_group: form.value.node_group,
       service_port: form.value.service_port,
-      extra_volumes: extras.volumes ?? {},
+      extra_volumes: recipeMode.value ? {} : (extras.volumes ?? {}),
+      recipe: recipeMode.value ? (recipeRead.value?.recipe ?? {}) : {},
       search_space: {
         base: selectedSpace.value.base,
         grid: selectedSpace.value.grid,
@@ -870,11 +913,13 @@ async function create() {
     const { data } = await api.post('/campaigns', {
       name: form.value.name.trim() || defaultName.value,
       engine: form.value.engine,
-      image: form.value.image.trim(),
+      image: recipeMode.value ? '' : form.value.image.trim(),
       model_path: form.value.model_path,
       served_model_name: servedName.value,
-      extra_env: extras.env ?? {},
-      extra_volumes: extras.volumes ?? {},
+      // With a recipe, env and volumes are the recipe's.
+      extra_env: recipeMode.value ? {} : (extras.env ?? {}),
+      extra_volumes: recipeMode.value ? {} : (extras.volumes ?? {}),
+      recipe_text: recipeMode.value ? form.value.recipe_text : null,
       machine_names: form.value.machine_names,
       node_group: form.value.node_group,
       service_port: form.value.service_port,
@@ -991,11 +1036,47 @@ onMounted(async () => {
             <el-form-item :label="t('campaignNew.name')">
               <el-input v-model="form.name" :placeholder="defaultName" />
             </el-form-item>
-            <el-form-item :label="t('campaignNew.image')">
+            <el-form-item>
+              <template #label>
+                <span>{{ t('campaignNew.recipe.mode') }}</span>
+                <InfoHint :width="420">{{ t('campaignNew.recipe.modeHint') }}</InfoHint>
+              </template>
+              <el-radio-group v-model="form.config_mode">
+                <el-radio-button value="image">{{ t('campaignNew.recipe.byImage') }}</el-radio-button>
+                <el-radio-button value="recipe">{{ t('campaignNew.recipe.byRecipe') }}</el-radio-button>
+              </el-radio-group>
+            </el-form-item>
+            <el-form-item v-if="!recipeMode" :label="t('campaignNew.image')">
               <el-autocomplete v-model="form.image" class="mono wide-input"
                 :fetch-suggestions="suggest('image')"
                 placeholder="lmsysorg/sglang:v0.5.13.post1" />
             </el-form-item>
+            <template v-else>
+              <el-form-item :label="t('campaignNew.recipe.text')">
+                <el-input v-model="form.recipe_text" type="textarea" :rows="10" class="mono"
+                  :placeholder="t('campaignNew.recipe.placeholder')" @change="readRecipe" />
+                <div class="recipe-actions">
+                  <el-button size="small" :loading="readingRecipe" @click="readRecipe">
+                    {{ t('campaignNew.recipe.read') }}</el-button>
+                  <span v-if="recipeError" class="danger small">{{ recipeError }}</span>
+                </div>
+              </el-form-item>
+              <div v-if="recipeRead" class="recipe-summary small">
+                <div>
+                  <b>{{ recipeRead.engine }}</b> · <span class="mono">{{ recipeRead.image }}</span>
+                  · {{ t('campaignNew.recipe.serves', { name: recipeRead.served_model_name || '—' }) }}
+                </div>
+                <div class="muted">
+                  {{ t('campaignNew.recipe.shape', { topology: recipeRead.shape.topology, gpus: recipeRead.shape.total_gpus }) }}
+                  <template v-for="g in recipeRead.shape.pods" :key="g.role">
+                    · {{ g.role }} {{ g.count }}×{{ g.gpus }}</template>
+                  · {{ t('campaignNew.recipe.source', { source: recipeRead.source }) }}
+                </div>
+                <el-alert v-for="p in recipeRead.problems" :key="p.param + p.message" type="error"
+                  :closable="false" :title="p.message" />
+                <div v-for="n in [...recipeRead.notes, ...recipeRead.warnings]" :key="n" class="muted">· {{ n }}</div>
+              </div>
+            </template>
             <el-form-item>
               <template #label>
                 <span>{{ t('campaignNew.modelPath') }}</span>
@@ -1015,7 +1096,7 @@ onMounted(async () => {
                     :fetch-suggestions="suggest('served_model_name')"
                     :placeholder="servedName || t('campaignNew.fromPath')" />
                 </el-form-item>
-                <el-form-item>
+                <el-form-item v-if="!recipeMode">
                   <template #label>
                     <span>{{ t('campaignNew.extras') }}</span>
                     <InfoHint>{{ t('campaignNew.extrasHint') }}</InfoHint>
@@ -1836,4 +1917,6 @@ dd.empty {
   margin: 0 0 12px;
   line-height: 1.5;
 }
+.recipe-actions { display: flex; gap: 8px; align-items: center; margin-top: 6px; }
+.recipe-summary { display: grid; gap: 6px; margin: -6px 0 16px; }
 </style>

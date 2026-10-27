@@ -969,6 +969,19 @@ export default {
     omit: '(omit)',
   },
   campaignNew: {
+    recipe: {
+      mode: 'Configuration',
+      modeHint: 'Image + flags: the search space sets engine flags on this image. Recipe: the engine chart\'s values, exactly as a model-catalog variant or an LLMService writes them; the search space addresses them (a flag, env.<NAME>, prefill./decode.<flag>, values.<path>), and a winner is published as this document.',
+      byImage: 'Image + flags',
+      byRecipe: 'Recipe',
+      text: 'Recipe',
+      placeholder: 'Paste a model-catalog variant, an LLMService (kubectl get llmsvc <name> -o yaml), or a docker run / sglang serve command line',
+      read: 'Read',
+      unreadable: 'Could not read it as a recipe',
+      serves: 'serves {name}',
+      shape: '{topology}, {gpus} GPU(s)',
+      source: 'read from a {source}',
+    },
     steps: {
       model: 'Model',
       machines: 'Machines',
@@ -985,6 +998,8 @@ export default {
       default: 'the platform default',
     },
     need: {
+      recipe: 'Paste or read a recipe first',
+      recipeOk: 'Fix what the recipe check found',
       image: 'a container image',
       modelPath: 'the model path on the machine',
       space: 'a search space',

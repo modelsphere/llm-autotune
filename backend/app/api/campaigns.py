@@ -170,6 +170,43 @@ class DraftOut(BaseModel):
     warnings: list[str]
 
 
+class RecipeReadIn(BaseModel):
+    # A model-catalog variant or an LLMService (YAML), a recipe, or a command line.
+    text: str
+
+
+@router.post("/recipe", summary="Read a recipe from a variant, an LLMService or a command line")
+async def read_recipe_text(body: RecipeReadIn, _: User = Depends(get_current_user)):
+    """What a campaign started from this text would launch: the recipe, as
+    YAML too, what the reading noticed, what would refuse it, and the pods it
+    makes. Never saves anything."""
+    import yaml as _yaml
+
+    from app.control.recipe import importer
+    from app.control.recipe import shape as recipe_shape
+    from app.control.recipe.check import recipe_problems, recipe_warnings
+    from app.control.recipe.render import chart_commands
+
+    try:
+        imported = importer.parse(body.text)
+    except importer.NotARecipe as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+    recipe = imported.recipe
+    return {
+        "source": imported.source,
+        "recipe": recipe.model_dump(),
+        "yaml": _yaml.safe_dump(recipe.model_dump(), sort_keys=False, width=1000),
+        "engine": recipe.engine,
+        "image": recipe.image,
+        "served_model_name": recipe.served_name,
+        "notes": imported.notes,
+        "problems": recipe_problems(recipe),
+        "warnings": recipe_warnings(recipe),
+        "shape": recipe_shape(recipe).payload(),
+        "commands": chart_commands(recipe),
+    }
+
+
 @router.post(
     "/draft", response_model=DraftOut, summary="Draft a campaign from what the platform knows"
 )

@@ -148,7 +148,7 @@ class LLMServiceDriver(K8sDriver):
             release=spec.container_name,
             allowed_nodes=list(spec.allowed_nodes),
         )
-        return recipe, llmservice(recipe, self.site(spec, recipe), run)
+        return recipe, llmservice(recipe, self.site(spec, recipe), run, spec.chart_version)
 
     # -- DeploymentDriver ----------------------------------------------------
 
@@ -248,6 +248,8 @@ class LLMServiceDriver(K8sDriver):
             chart = (obj.get("status") or {}).get("chart") or {}
             if chart.get("version"):
                 snapshot["chart"] = f"{chart.get('name')}-{chart['version']}"
+                # What the operator resolved: the campaign pins it (supervisor).
+                snapshot["chart_version"] = str(chart["version"])
         except Exception as exc:
             logger.warning("llmservice environment for %s failed: %s", handle.container_name, exc)
         return {k: v for k, v in snapshot.items() if v}

@@ -2149,6 +2149,7 @@ class Supervisor:
                 recipe.served_name if stored is not None else campaign.served_model_name
             ),
             recipe=recipe.model_dump(),
+            chart_version=(campaign.chart_version or "") if stored is not None else "",
             engine_args=engine_args,
             gpu_indices=list(nodes[0].gpu_indices) if nodes else list(run.gpu_indices or []),
             port=run.service_port or campaign.service_port,
@@ -2541,6 +2542,13 @@ class Supervisor:
             snapshot["card_type"] = card_type
         snapshot["gpu_indices"] = list(run.gpu_indices or [])
         run.env_snapshot = snapshot
+        # The first run of a recipe campaign whose recipe names a range pins
+        # the version the operator installed: every later trial renders it.
+        campaign = run.campaign
+        resolved = str(snapshot.get("chart_version") or "")
+        if resolved and campaign is not None and campaign.recipe and not campaign.chart_version:
+            campaign.chart_version = resolved
+            logger.info("campaign %d pinned chart version %s", campaign.id, resolved)
 
     def _ready_timed_out(self, run: Run) -> bool:
         if run.started_at is None:

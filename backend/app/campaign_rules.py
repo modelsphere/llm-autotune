@@ -9,6 +9,8 @@ a machine.
 
 from __future__ import annotations
 
+import re
+
 from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -164,9 +166,21 @@ def read_recipe(body: CampaignCreate) -> str | None:
     problems = recipe_problems(recipe)
     if problems:
         return f"recipe: {problems[0]['message']}"
+    body.chart_version = body.chart_version.strip()
+    if not body.chart_version and is_exact_version(recipe.chart.version):
+        body.chart_version = recipe.chart.version
     body.recipe = recipe.model_dump()
     body.recipe_text = None
     body.engine = recipe.engine
     body.image = recipe.image
     body.served_model_name = recipe.served_name
     return None
+
+
+_EXACT = re.compile(r"^v?\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$")
+
+
+def is_exact_version(version: str) -> bool:
+    """A single chart version rather than a helm constraint ("0.9.26", not
+    "~0.9" or ">=0.9.0 <1.0.0")."""
+    return bool(_EXACT.match((version or "").strip()))

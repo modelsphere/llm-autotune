@@ -28,11 +28,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   every policy address it: a flag, `env.<NAME>`, a pd role's flags
   (`prefill.`/`decode.`) or any chart value (`values.<path>`). Converting
   between a flat config and a recipe is lossless, checked on every variant the
-  catalog publishes. Cards are counted from what the pods ask for.
-- **Policy contract 1.6.** The manifest carries the recipe every launch starts
-  from; launches, checks and contenders also take a whole recipe; the check
-  answers with the recipe, its pods and cards, and each role's engine
-  command.
+  catalog publishes. Cards are counted from what the pods ask for. The create
+  form takes a recipe in place of an image (`POST /api/campaigns/recipe` reads
+  one and says what it would launch), and the campaign page shows it.
+- **Pinned chart version.** A campaign renders one chart version for its
+  whole life (`chart_version`, migration `025_campaign_chart_version`): the
+  one given, the recipe's own when it names an exact version, or else the one
+  the operator installed for the first run.
+- **Policy contract 1.6.** Config keys may also address a pd role's flags
+  and chart values; the manifest carries the recipe every launch starts from;
+  the check answers with the recipe a config builds, its pods and cards, and
+  each role's engine command. Policies still send configs only.
 
 - **Environment variables in configs (contract 1.5).** Some engine switches
   exist only as environment variables, which a config of command-line flags

@@ -222,3 +222,50 @@ async def test_env_and_volumes_live_in_the_recipe(client):
 async def test_a_campaign_without_a_recipe_still_needs_an_image(client):
     resp = await client.post("/api/campaigns", json=_body(engine="sglang"))
     assert resp.status_code == 422 and "image" in resp.text
+
+
+@pytest.mark.asyncio
+async def test_reading_a_recipe_says_what_it_would_launch(client):
+    resp = await client.post("/api/campaigns/recipe", json={"text": QWEN.read_text()})
+    assert resp.status_code == 200, resp.text
+    out = resp.json()
+    assert out["source"] == "variant" and out["engine"] == "sglang"
+    assert out["problems"] == [] and out["shape"]["total_gpus"] == 2
+    assert out["commands"]["engine"][:2] == ["sglang", "serve"]
+    assert "extraArgs" in out["yaml"]
+    bad = await client.post("/api/campaigns/recipe", json={"text": "hello: world"})
+    assert bad.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_a_range_is_pinned_later_and_an_exact_version_now(client):
+    ranged = await client.post("/api/campaigns", json=_body(recipe_text=QWEN.read_text()))
+    assert ranged.status_code == 200, ranged.text
+    assert ranged.json()["chart_version"] == ""
+    exact = QWEN.read_text().replace("version: '>=0.7.1'", "version: 0.9.26")
+    pinned = await client.post("/api/campaigns", json=_body(recipe_text=exact))
+    assert pinned.json()["chart_version"] == "0.9.26"
+    chosen = await client.post(
+        "/api/campaigns", json=_body(recipe_text=QWEN.read_text(), chart_version="0.9.20")
+    )
+    assert chosen.json()["chart_version"] == "0.9.20"
+
+
+def test_the_first_run_pins_what_the_operator_installed():
+    from app.control.orchestrator.supervisor import Supervisor
+
+    recipe = parse(QWEN.read_text()).recipe
+    campaign = SimpleNamespace(id=1, recipe=recipe.model_dump(), chart_version="")
+    env = {"chart_version": "0.9.26"}
+    driver = SimpleNamespace(environment=lambda handle: env)
+    fake = SimpleNamespace(_driver_for=lambda machine: driver)
+
+    def run():
+        return SimpleNamespace(id=1, machine=None, gpu_indices=[0], campaign=campaign)
+
+    Supervisor._snapshot_environment(fake, run(), SimpleNamespace(machine=None))
+    assert campaign.chart_version == "0.9.26"
+    # Pinned once: a later run that met a newer chart does not move it.
+    env["chart_version"] = "0.9.27"
+    Supervisor._snapshot_environment(fake, run(), SimpleNamespace(machine=None))
+    assert campaign.chart_version == "0.9.26"

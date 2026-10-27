@@ -529,6 +529,12 @@ class Campaign(Base):
     # its candidate's config applied, and a winner is published as it. Empty =
     # a campaign from before recipes, built from the fields above.
     recipe: Mapped[dict] = mapped_column(JsonCol, default=dict)
+    # The exact chart version every run renders. The recipe may name a range
+    # (the catalog does); a campaign pins it once, so a chart released mid-way
+    # cannot change what later trials measure. Set at creation when given or
+    # when the recipe names an exact version, else from the version the
+    # operator installed for the first run. Empty = not pinned yet.
+    chart_version: Mapped[str] = mapped_column(String(64), default="")
     # {"target_metric": "...", "redlines": [{"metric": "...", "op": "<=", "value": x}]}
     objective: Mapped[dict] = mapped_column(JsonCol, default=dict)
     status: Mapped[str] = mapped_column(String(16), default=CampaignStatus.DRAFT.value, index=True)

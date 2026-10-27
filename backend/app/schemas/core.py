@@ -294,6 +294,9 @@ class CampaignCreate(BaseModel):
     recipe: dict[str, Any] = Field(default_factory=dict)
     # The same as text (YAML, or a `docker run` command line). Not stored.
     recipe_text: str | None = None
+    # The exact chart version every run renders. Empty = the recipe's own when
+    # it names one exactly, else what the operator installs for the first run.
+    chart_version: str = Field("", max_length=64)
     objective: dict[str, Any] = Field(default_factory=dict)
     benchmark_slug: str = ""  # "" = platform default
     # The workload instead of a slug (app/evaluation/benchmark_spec.py):
@@ -404,6 +407,7 @@ class CampaignOut(BaseModel):
     served_model_name: str
     search_space: dict[str, Any]
     recipe: dict[str, Any] = {}
+    chart_version: str = ""
     objective: dict[str, Any]
     status: str
     benchmark_slug: str

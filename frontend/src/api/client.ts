@@ -340,6 +340,11 @@ export interface Campaign {
   model_path: string
   served_model_name: string
   search_space: Record<string, unknown>
+  /** The configuration every run starts from, as the engine chart reads it
+   *  ({engine, chart, values}); empty for a campaign built from its fields. */
+  recipe?: { engine?: string; chart?: { name?: string; version?: string }; values?: Record<string, unknown> }
+  /** The exact chart version every run renders; empty until it is pinned. */
+  chart_version?: string
   objective: Record<string, unknown>
   status: string
   /** The benchmark every candidate runs. Single-stage replay is the default:

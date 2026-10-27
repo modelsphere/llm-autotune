@@ -957,6 +957,19 @@ const zh: typeof en = {
     omit: '（不设置）',
   },
   campaignNew: {
+    recipe: {
+      mode: '配置方式',
+      modeHint: '镜像 + 参数：搜索空间在该镜像上设置引擎参数。Recipe：引擎 chart 的 values，与 model-catalog 的 variant 或 LLMService 写法一致；搜索空间按地址修改它（参数、env.<NAME>、prefill./decode.<参数>、values.<路径>），最优结果按此文档发布。',
+      byImage: '镜像 + 参数',
+      byRecipe: 'Recipe',
+      text: 'Recipe',
+      placeholder: '粘贴 model-catalog 的 variant、LLMService（kubectl get llmsvc <name> -o yaml），或 docker run / sglang serve 命令行',
+      read: '读取',
+      unreadable: '无法读取为 recipe',
+      serves: '服务名 {name}',
+      shape: '{topology}，{gpus} 张 GPU',
+      source: '读取自 {source}',
+    },
     steps: {
       model: '模型',
       machines: '机器',
@@ -973,6 +986,8 @@ const zh: typeof en = {
       default: '平台默认',
     },
     need: {
+      recipe: '请先粘贴并读取 recipe',
+      recipeOk: '请先修正 recipe 检查发现的问题',
       image: '容器镜像',
       modelPath: '机器上的模型路径',
       space: '搜索空间',

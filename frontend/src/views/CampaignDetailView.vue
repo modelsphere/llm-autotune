@@ -974,6 +974,16 @@ const configRows = computed(() => {
   return [
     { label: 'Engine', value: c.engine },
     { label: 'Image', value: c.image },
+    ...(hasRecipe.value
+      ? [{
+          label: 'Chart',
+          value: `${c.recipe?.chart?.name ?? c.engine} ` +
+            (c.chart_version || `${c.recipe?.chart?.version || 'latest'} — not pinned yet`),
+          hint: c.chart_version
+            ? 'pinned: every run renders this version'
+            : 'pinned to the version the first run installs',
+        }]
+      : []),
     { label: 'Model path', value: c.model_path, hint: 'bind-mounted to /model' },
     { label: 'Served model name', value: c.served_model_name },
     { label: 'Engine port', value: String(c.service_port) },
@@ -1070,6 +1080,8 @@ const extrasYaml = computed(() =>
   }),
 )
 const searchSpaceYaml = computed(() => toYaml(campaign.value?.search_space ?? {}))
+const hasRecipe = computed(() => Object.keys(campaign.value?.recipe ?? {}).length > 0)
+const recipeYaml = computed(() => toYaml(campaign.value?.recipe ?? {}))
 const objectiveYaml = computed(() => toYaml(campaign.value?.objective ?? {}))
 
 const hasExtras = computed(
@@ -1728,14 +1740,27 @@ onMounted(() => {
           </el-table-column>
         </el-table>
 
-        <div class="block-head">
+        <template v-if="hasRecipe">
+          <div class="block-head">
+            <h3>Recipe</h3>
+            <InfoHint>The engine chart's values every run starts from, as a model-catalog
+              variant writes them. A run is this with its configuration applied, and a
+              winner is published as the recipe it ran.</InfoHint>
+            <span class="spacer" />
+            <el-button size="small" text type="primary"
+              @click="copyText(recipeYaml, 'Recipe copied')">Copy YAML</el-button>
+          </div>
+          <pre class="mono block">{{ recipeYaml }}</pre>
+        </template>
+
+        <div v-if="!hasRecipe" class="block-head">
           <h3>Launch extras</h3>
           <InfoHint>Env vars and bind mounts every container in this campaign gets.</InfoHint>
           <span class="spacer" />
           <el-button size="small" text type="primary"
             @click="copyText(extrasYaml, 'Launch extras copied')">Copy YAML</el-button>
         </div>
-        <pre class="mono block">{{ hasExtras ? extrasYaml : '(none)' }}</pre>
+        <pre v-if="!hasRecipe" class="mono block">{{ hasExtras ? extrasYaml : '(none)' }}</pre>
 
         <div class="block-head">
           <h3>Difference from production</h3>

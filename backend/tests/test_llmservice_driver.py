@@ -239,3 +239,26 @@ def test_the_factory_picks_this_driver_for_an_llmservice_cluster(monkeypatch):
         k8s_module, "resolve_cluster", lambda cluster_id: k8s_module.as_cluster(_settings())
     )
     assert isinstance(get_driver("k8s"), LLMServiceDriver)
+
+
+def test_the_campaigns_pinned_chart_version_wins_over_the_recipes_range():
+    from app.control.recipe.legacy import from_fields
+
+    recipe = from_fields(engine="sglang", image="i:t", served_model_name="m", engine_args={"tp": 1})
+    recipe.chart.version = ">=0.7.1"
+    driver, api = _driver()
+    driver.launch_nodes(_spec(recipe=recipe.model_dump()))
+    assert api.applied[0]["spec"]["chart"]["version"] == ">=0.7.1"
+    driver.launch_nodes(_spec(run_id=8, recipe=recipe.model_dump(), chart_version="0.9.26"))
+    assert api.applied[1]["spec"]["chart"]["version"] == "0.9.26"
+
+
+def test_the_environment_says_which_chart_the_operator_installed():
+    driver, api = _driver()
+    handle, _ = driver.launch_nodes(_spec())
+    api.objects[(LLMSVC_RESOURCE, "autotune-run-7")]["status"] = {
+        "phase": "Applied",
+        "chart": {"name": "sglang", "version": "0.9.26"},
+    }
+    env = driver.environment(handle)
+    assert env["chart"] == "sglang-0.9.26" and env["chart_version"] == "0.9.26"
