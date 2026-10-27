@@ -146,6 +146,10 @@ class LaunchSpec(BaseModel):
     # k8s only: hostnames the pod may land on, within the machine's selector
     # (Campaign.node_names). Empty = any node the machine matches.
     allowed_nodes: list[str] = Field(default_factory=list)
+    # The run's recipe (app/control/recipe), when the campaign stores one. The
+    # LLMService driver launches it as is; None = build one from the fields
+    # above. The other drivers read the fields.
+    recipe: dict[str, Any] | None = None
     # THIS spec's own rank, set by `for_node`. 0 on the gang spec.
     rank: int = 0
     nnodes: int = 1

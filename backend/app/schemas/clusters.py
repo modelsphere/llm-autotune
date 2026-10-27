@@ -11,7 +11,9 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 ApiMode = Literal["client", "kubectl", "unavailable"]
-WorkloadKind = Literal["deployment", "custom"]
+# "deployment" and "custom" are deprecated: kept running, no new features.
+WorkloadKind = Literal["llmservice", "deployment", "custom"]
+EndpointMode = Literal["dns", "nodeport"]
 
 
 class ClusterIn(BaseModel):
@@ -28,6 +30,11 @@ class ClusterIn(BaseModel):
     # names, which is how deploy/gpu-cluster.sh writes it.
     namespace: str = ""
     workload_kind: WorkloadKind = "deployment"
+    chart_repo: str = Field("", max_length=512)
+    chart_credentials_secret: str = Field("", max_length=253)
+    endpoint: EndpointMode = "dns"
+    image_mirror: str = Field("", max_length=255)
+    site_values: str = ""
     node_host: str = ""
     gpu_resource: str = "nvidia.com/gpu"
     gpu_product_label: str = Field(default="nvidia.com/gpu.product", min_length=1, max_length=253)
@@ -91,6 +98,11 @@ class ClusterOut(BaseModel):
     context: str
     namespace: str
     workload_kind: str
+    chart_repo: str = ""
+    chart_credentials_secret: str = ""
+    endpoint: str = "dns"
+    image_mirror: str = ""
+    site_values: str = ""
     node_host: str
     gpu_resource: str
     gpu_product_label: str

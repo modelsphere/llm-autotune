@@ -41,6 +41,11 @@ _OVERRIDABLE: tuple[str, ...] = (
     "k8s_kubeconfig",
     "k8s_in_cluster",
     "k8s_workload_kind",
+    "k8s_chart_repo",
+    "k8s_chart_credentials_secret",
+    "k8s_endpoint",
+    "k8s_image_mirror",
+    "k8s_site_values",
     "k8s_cr_group",
     "k8s_cr_version",
     "k8s_cr_kind",
@@ -79,6 +84,10 @@ _ROW_MAP: dict[str, str] = {
     "context": "k8s_context",
     "namespace": "k8s_namespace",
     "workload_kind": "k8s_workload_kind",
+    "chart_credentials_secret": "k8s_chart_credentials_secret",
+    "endpoint": "k8s_endpoint",
+    "image_mirror": "k8s_image_mirror",
+    "site_values": "k8s_site_values",
     "node_host": "k8s_node_host",
     "gpu_resource": "k8s_gpu_resource",
     "gpu_product_label": "k8s_gpu_product_label",
@@ -127,6 +136,11 @@ class K8sClusterSettings:
     k8s_kubeconfig: str = ""
     k8s_in_cluster: bool = False
     k8s_workload_kind: str = "deployment"
+    k8s_chart_repo: str = "https://modelsphere.github.io/helm-charts"
+    k8s_chart_credentials_secret: str = ""
+    k8s_endpoint: str = "dns"
+    k8s_image_mirror: str = ""
+    k8s_site_values: str = ""
     k8s_cr_group: str = "tuning.modelsphere.dev"
     k8s_cr_version: str = "v1alpha1"
     k8s_cr_kind: str = "TuningRun"
@@ -184,9 +198,13 @@ class K8sClusterSettings:
 
         values = _copyable(settings)
         for column, attr in _ROW_MAP.items():
-            values[attr] = getattr(row, column)
+            # A row from before a column existed (a stand-in, a half-migrated
+            # read) keeps the install's value for it.
+            values[attr] = getattr(row, column, values.get(attr))
         # Unlike the columns above, an empty one keeps the install's value: the
         # install-wide pin is what a cluster without its own still relies on.
+        if (repo := (getattr(row, "chart_repo", "") or "").strip()):
+            values["k8s_chart_repo"] = repo
         if (policy := (getattr(row, "policy_node_selector", "") or "").strip()):
             values["k8s_policy_node_selector"] = policy
         values["k8s_api_mode"] = "unavailable" if not row.api_mode else row.api_mode

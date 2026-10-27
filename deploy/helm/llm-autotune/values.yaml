@@ -176,9 +176,27 @@ gpuCluster:
   countFreeCards: false
   # Where engine pods go. Empty = this release's namespace.
   namespace: ""
-  # "deployment" = a Deployment + NodePort Service, which works on any cluster.
-  # "custom" = a TuningRun for the autotune operator to reconcile.
+  # "llmservice" = an LLMService per run: llm-operator installs the sglang or
+  #   vllm chart with the run's recipe, exactly as a production deploy does.
+  #   Needs llm-operator on the cluster (the modelsphere stack installs it).
+  # "deployment" (deprecated) = a Deployment + NodePort Service, no operator.
+  # "custom" (deprecated) = a TuningRun for the autotune operator.
   workloadKind: deployment
+  # llmservice mode: where the operator pulls the engine charts from. The
+  # stack install passes its own `chartRepo`; credentialsSecret names a Secret
+  # in the run namespace with `username`/`password` for a private repository.
+  engineCharts:
+    repo: https://modelsphere.github.io/helm-charts
+    credentialsSecret: ""
+  # How the benchmark reaches a run: "dns" (it runs in this cluster, as in the
+  # stack install) or "nodeport" (opt-in, from outside the cluster).
+  endpoint: dns
+  # Registry prefix every engine image is pulled through (the stack's
+  # `registry` in rewrite mode). Empty = images as the recipe names them.
+  imageMirror: ""
+  # Chart values every run gets, under its own: resources a quota demands,
+  # securityContext. Never part of a tuned config.
+  siteValues: {}
   gpuResource: nvidia.com/gpu
   runtimeClass: nvidia
   # GPU nodes are commonly tainted so that pods with no use for cards keep off

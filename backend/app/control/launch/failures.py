@@ -46,6 +46,10 @@ INFRASTRUCTURE_FAILURES = frozenset(
         # "unschedulable" it will not come true by waiting, so it fails the run
         # at once instead of queueing.
         "unplaceable",
+        # The cluster cannot install the engine chart at all (its repository
+        # refused or unreachable, a release someone else owns): every config
+        # would fail the same way, so none is to blame.
+        "cluster_setup",
     }
 )
 
@@ -102,7 +106,17 @@ def classify_failure(log_text: str) -> str:
         # First: an engine refuses its arguments before it does anything else,
         # so a log that says so failed for that reason, whatever else it
         # mentions (its own args dump names nccl options, for one).
-        ("bad_config", ("unrecognized arguments", "invalid argument", "error: argument")),
+        (
+            "bad_config",
+            (
+                "unrecognized arguments",
+                "invalid argument",
+                "error: argument",
+                # The engine chart's render guards, and our own recipe checks.
+                "the chart refuses",
+            ),
+        ),
+        ("cluster_setup", ("cluster setup:",)),
         ("oom", ("cuda out of memory", "outofmemoryerror", "out of memory")),
         # NCCL's own error spellings, not the word: a startup banner or an
         # args dump (`enable_nccl_nvls=False`) mentions it on every launch.

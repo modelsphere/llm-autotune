@@ -90,7 +90,12 @@ const emptyClusterForm = () => ({
   api_mode: 'client',
   kubeconfig: '',
   namespace: '',
-  workload_kind: 'deployment',
+  workload_kind: 'llmservice',
+  chart_repo: '',
+  chart_credentials_secret: '',
+  endpoint: 'dns',
+  image_mirror: '',
+  site_values: '',
   node_host: '',
   service_nodeport: 0,
   gpu_resource: 'nvidia.com/gpu',
@@ -147,7 +152,7 @@ const showAddCluster = ref(false)
 const addStep = ref<'connect' | 'nodes'>('connect')
 const clusterAdvanced = ref<string[]>([])
 const newCluster = ref({
-  name: '', kubeconfig: '', namespace: '', workload_kind: 'deployment',
+  name: '', kubeconfig: '', namespace: '', workload_kind: 'llmservice', endpoint: 'dns',
   node_host: '', service_nodeport: 0,
   runtime_class: 'nvidia', gpu_resource: 'nvidia.com/gpu',
   gpu_product_label: 'nvidia.com/gpu.product', tolerations: '',
@@ -182,7 +187,7 @@ watch(() => newCluster.value.kubeconfig, (text, before) => {
 
 function openAddCluster() {
   newCluster.value = {
-    name: '', kubeconfig: '', namespace: '', workload_kind: 'deployment',
+    name: '', kubeconfig: '', namespace: '', workload_kind: 'llmservice', endpoint: 'dns',
     node_host: '', service_nodeport: 0,
     runtime_class: 'nvidia', gpu_resource: 'nvidia.com/gpu',
     gpu_product_label: 'nvidia.com/gpu.product', tolerations: '',
@@ -446,6 +451,11 @@ function openEditCluster(c: Cluster) {
     kubeconfig: '',
     namespace: c.namespace,
     workload_kind: c.workload_kind,
+    chart_repo: c.chart_repo ?? '',
+    chart_credentials_secret: c.chart_credentials_secret ?? '',
+    endpoint: c.endpoint ?? 'dns',
+    image_mirror: c.image_mirror ?? '',
+    site_values: c.site_values ?? '',
     node_host: c.node_host,
     service_nodeport: c.service_nodeport,
     gpu_resource: c.gpu_resource,
@@ -1167,7 +1177,8 @@ onMounted(() => {
           <el-input v-model="newCluster.name" placeholder="gpu-cluster-a" />
         </el-form-item>
         <ClusterEndpointFields v-model:host="newCluster.node_host"
-          v-model:port="newCluster.service_nodeport" :workload-kind="newCluster.workload_kind" />
+          v-model:port="newCluster.service_nodeport" v-model:endpoint="newCluster.endpoint"
+          :workload-kind="newCluster.workload_kind" />
         <el-collapse v-model="clusterAdvanced" class="dialog-advanced">
           <el-collapse-item name="advanced" :title="t('resources.advanced')">
             <div class="grid-2">
@@ -1177,8 +1188,9 @@ onMounted(() => {
               </el-form-item>
               <el-form-item :label="t('resources.workloadKind')">
                 <el-select v-model="newCluster.workload_kind" style="width: 100%">
-                  <el-option :label="t('resources.wkDeployment')" value="deployment" />
-                  <el-option label="custom (TuningRun CRD)" value="custom" />
+                  <el-option :label="t('resources.wkLlmservice')" value="llmservice" />
+                  <el-option :label="`${t('resources.wkDeployment')} ${t('resources.wkDeprecated')}`" value="deployment" />
+                  <el-option :label="`custom (TuningRun CRD) ${t('resources.wkDeprecated')}`" value="custom" />
                 </el-select>
               </el-form-item>
               <el-form-item label="RuntimeClass">
@@ -1381,8 +1393,9 @@ onMounted(() => {
           </el-form-item>
           <el-form-item :label="t('resources.workloadKind')">
             <el-select v-model="clusterForm.workload_kind" style="width: 100%">
-              <el-option :label="t('resources.wkDeployment')" value="deployment" />
-              <el-option label="custom (TuningRun CRD)" value="custom" />
+              <el-option :label="t('resources.wkLlmservice')" value="llmservice" />
+              <el-option :label="`${t('resources.wkDeployment')} ${t('resources.wkDeprecated')}`" value="deployment" />
+              <el-option :label="`custom (TuningRun CRD) ${t('resources.wkDeprecated')}`" value="custom" />
             </el-select>
           </el-form-item>
         </div>
@@ -1397,7 +1410,31 @@ onMounted(() => {
               : t('resources.keepCred')" />
         </el-form-item>
         <ClusterEndpointFields v-model:host="clusterForm.node_host"
-          v-model:port="clusterForm.service_nodeport" :workload-kind="clusterForm.workload_kind" />
+          v-model:port="clusterForm.service_nodeport" v-model:endpoint="clusterForm.endpoint"
+          :workload-kind="clusterForm.workload_kind" />
+        <template v-if="clusterForm.workload_kind === 'llmservice'">
+          <div class="grid-2">
+            <el-form-item :label="t('resources.chartRepo')">
+              <el-input v-model.trim="clusterForm.chart_repo" class="mono"
+                placeholder="https://modelsphere.github.io/helm-charts" />
+              <div class="muted small">{{ t('resources.chartRepoHint') }}</div>
+            </el-form-item>
+            <el-form-item :label="t('resources.chartCredentials')">
+              <el-input v-model.trim="clusterForm.chart_credentials_secret" class="mono"
+                :placeholder="t('resources.none')" />
+            </el-form-item>
+          </div>
+          <el-form-item :label="t('resources.imageMirror')">
+            <el-input v-model.trim="clusterForm.image_mirror" class="mono"
+              :placeholder="t('resources.none')" />
+            <div class="muted small">{{ t('resources.imageMirrorHint') }}</div>
+          </el-form-item>
+          <el-form-item :label="t('resources.siteValues')">
+            <el-input v-model="clusterForm.site_values" type="textarea" :rows="3" class="mono"
+              placeholder='{"securityContext": {"capabilities": {"add": ["IPC_LOCK"]}}}' />
+            <div class="muted small">{{ t('resources.siteValuesHint') }}</div>
+          </el-form-item>
+        </template>
         <div class="grid-2">
           <el-form-item label="RuntimeClass">
             <el-input v-model="clusterForm.runtime_class" class="mono" />

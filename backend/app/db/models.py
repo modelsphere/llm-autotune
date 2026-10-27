@@ -285,6 +285,17 @@ class Cluster(Base):
     # "custom" (a TuningRun the operator reconciles). Per cluster because an
     # operator may be installed on one cluster and not another.
     workload_kind: Mapped[str] = mapped_column(String(24), default="deployment")
+    # "llmservice" mode (an LLMService per run; see app/control/recipe). Empty
+    # chart_repo = the install's AUTOTUNE_K8S_CHART_REPO.
+    chart_repo: Mapped[str] = mapped_column(String(512), default="", server_default="")
+    chart_credentials_secret: Mapped[str] = mapped_column(
+        String(253), default="", server_default=""
+    )
+    # "dns" (the benchmark is in this cluster) or "nodeport" (opt-in).
+    endpoint: Mapped[str] = mapped_column(String(16), default="dns", server_default="dns")
+    image_mirror: Mapped[str] = mapped_column(String(255), default="", server_default="")
+    # Chart values for every engine on this cluster, as JSON text.
+    site_values: Mapped[str] = mapped_column(Text, default="", server_default="")
     # The host LLMBench is given for a run's NodePort endpoint. Empty = derive
     # from a node InternalIP, which needs the cluster-scoped `nodes` read.
     node_host: Mapped[str] = mapped_column(String(255), default="")

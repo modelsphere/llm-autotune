@@ -237,6 +237,18 @@ def _probe(cluster: K8sClusterSettings) -> dict:
                 "endpoint URL — set node_host to a node/control-plane IP"
             )
 
+    if cluster.k8s_workload_kind == "llmservice":
+        from app.control.launch.k8s_api import LLMSVC_RESOURCE
+
+        try:
+            api.list(LLMSVC_RESOURCE)
+            result["crd_present"] = True
+        except Exception as exc:  # noqa: BLE001
+            result["crd_present"] = False
+            result["warnings"].append(
+                f"workload_kind=llmservice but {LLMSVC_RESOURCE} cannot be listed — install "
+                f"llm-operator, or grant this credential llmservices ({str(exc)[:160]})"
+            )
     if cluster.k8s_workload_kind == "custom":
         cr = f"{cluster.k8s_cr_plural}.{cluster.k8s_cr_group}"
         try:

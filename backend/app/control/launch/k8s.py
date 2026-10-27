@@ -1520,6 +1520,12 @@ class K8sDriver(DeploymentDriver):
         if s.k8s_workload_kind == "custom":
             needs = [("create", s.k8s_cr_plural, s.k8s_cr_group),
                      ("delete", s.k8s_cr_plural, s.k8s_cr_group)]
+        elif s.k8s_workload_kind == "llmservice":
+            # The object, and the reads the driver does itself: the chart's
+            # Service (its endpoints are readiness) and the pods.
+            needs = [("create", "llmservices", "serving.modelsphere.dev"),
+                     ("delete", "llmservices", "serving.modelsphere.dev"),
+                     ("get", "endpoints", ""), ("list", "pods", "")]
         else:
             needs = [("create", "deployments", "apps"), ("delete", "deployments", "apps"),
                      ("create", "services", ""), ("delete", "services", "")]
@@ -1586,6 +1592,12 @@ class K8sDriver(DeploymentDriver):
         s = self.settings
         if s.k8s_workload_kind == "custom":
             return smoke_check("endpoint", "skip", "custom workloads publish their own URL")
+        if s.k8s_workload_kind == "llmservice" and (s.k8s_endpoint or "dns") != "nodeport":
+            return smoke_check(
+                "endpoint", "pass",
+                f"runs are reached by Service name in {s.k8s_namespace} (in-cluster DNS); "
+                "the benchmark must run in this cluster",
+            )
         host = s.k8s_node_host or self._first_node_ip()
         if not host:
             return smoke_check(
