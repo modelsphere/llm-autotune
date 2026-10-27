@@ -7,7 +7,9 @@ WORKDIR /opt/mock
 COPY mock_engine.py landscape.py ./
 COPY sglang ./sglang
 COPY vllm /usr/local/bin/vllm
-RUN chmod +x /usr/local/bin/vllm
+# `sglang serve ...`, the command the engine charts run.
+COPY sglang-cli /usr/local/bin/sglang
+RUN chmod +x /usr/local/bin/vllm /usr/local/bin/sglang
 ENV PYTHONPATH=/opt/mock
 # No ENTRYPOINT: the autotune driver supplies one (python3 or vllm), exactly
 # as it does for real engine images.
