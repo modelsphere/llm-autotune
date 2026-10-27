@@ -211,9 +211,11 @@ def test_the_docs_ship_with_the_platform(monkeypatch):
 
 
 def test_a_fetched_page_for_the_exact_version_beats_a_shipped_older_one(monkeypatch):
-    page = """## Scheduler & Batching
-<table><tbody><tr><td>`SGLANG_NEW_SWITCH`</td><td>New in 0.5.21</td><td>`false`</td></tr></tbody></table>
-"""
+    page = (
+        "## Scheduler & Batching\n"
+        "<table><tbody><tr><td>`SGLANG_NEW_SWITCH`</td><td>New in 0.5.21</td>"
+        "<td>`false`</td></tr></tbody></table>\n"
+    )
 
     class Response:
         text = page
