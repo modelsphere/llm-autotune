@@ -136,3 +136,6 @@ class ClusterOut(BaseModel):
     # How many machines name this cluster — the UI's "in use" signal, and what
     # makes a delete worth refusing.
     machine_count: int = 0
+    # Whether this is the cluster AutoTune itself runs in (locality.py), which
+    # decides whether a run's Service name resolves. None = cannot tell.
+    same_cluster: bool | None = None

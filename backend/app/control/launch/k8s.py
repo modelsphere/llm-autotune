@@ -61,6 +61,7 @@ from app.control.launch.base import (
 from app.control.launch.clusters import K8sClusterSettings, as_cluster, resolve_cluster
 from app.control.launch.failures import TRANSIENT_PLACEMENT_FAILURES
 from app.control.launch.k8s_api import K8sApi, get_k8s_api
+from app.control.launch.locality import ANOTHER_CLUSTER, same_cluster, unreachable_by_name
 from app.core.config import Settings, get_settings
 from app.hardware import normalize_gpu_type
 
@@ -1651,10 +1652,18 @@ class K8sDriver(DeploymentDriver):
         if s.k8s_workload_kind == "custom":
             return smoke_check("endpoint", "skip", "custom workloads publish their own URL")
         if s.k8s_workload_kind == "llmservice" and (s.k8s_endpoint or "dns") != "nodeport":
+            local = same_cluster(s)
+            if local is False:
+                return smoke_check(
+                    "endpoint", "fail",
+                    f"runs are reached by Service name in {s.k8s_namespace}, but {ANOTHER_CLUSTER}",
+                )
             return smoke_check(
-                "endpoint", "pass",
+                "endpoint", "pass" if local else "warn",
                 f"runs are reached by Service name in {s.k8s_namespace} (in-cluster DNS); "
-                "the benchmark must run in this cluster",
+                + ("this is the cluster AutoTune runs in" if local else
+                   "AutoTune cannot tell whether this is its own cluster: the benchmark "
+                   "must run in this cluster"),
             )
         host = s.k8s_node_host or self._first_node_ip()
         if not host:
@@ -1771,6 +1780,14 @@ class K8sDriver(DeploymentDriver):
         except Exception as exc:  # noqa: BLE001 — a preflight reports, never raises
             return [pf.Check("cluster", "Cluster", pf.FAIL, f"transport unavailable: {exc}")]
         checks: list[Any] = []
+        if unreachable_by_name(self.settings):
+            # Every run would load its model and then fail its health check.
+            checks.append(pf.Check(
+                "endpoint", "Endpoint", pf.FAIL,
+                f"runs on {self.settings.k8s_namespace} are reached by Service name, but "
+                f"{ANOTHER_CLUSTER}",
+                "Edit the cluster under Resources ▸ Clusters: NodePort, and its public host.",
+            ))
         nodes, node = self._smoke_nodes(api, machine)
         checks.append(pf.Check("node", "Node", node["status"], node["detail"]))
         if widest_candidate_cards and nodes:

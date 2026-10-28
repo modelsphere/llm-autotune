@@ -1,7 +1,10 @@
 <script setup lang="ts">
 import { useI18n } from '../i18n'
 
-defineProps<{ workloadKind: string }>()
+/** `sameCluster`: whether the cluster is AutoTune's own (null = unknown, or
+ *  not saved yet). Service names only resolve there, so another cluster is
+ *  offered NodePort alone. */
+const props = defineProps<{ workloadKind: string; sameCluster?: boolean | null }>()
 const host = defineModel<string>('host', { required: true })
 const port = defineModel<number>('port', { required: true })
 const endpoint = defineModel<string>('endpoint', { default: 'dns' })
@@ -12,12 +15,15 @@ const { t } = useI18n()
   <template v-if="workloadKind === 'llmservice'">
     <el-form-item :label="t('resources.endpointMode')">
       <el-radio-group v-model="endpoint">
-        <el-radio value="dns">{{ t('resources.endpointDns') }}</el-radio>
+        <el-radio value="dns" :disabled="props.sameCluster === false">
+          {{ t('resources.endpointDns') }}</el-radio>
         <el-radio value="nodeport">{{ t('resources.endpointNodeport') }}</el-radio>
       </el-radio-group>
       <div class="muted small">
         {{ endpoint === 'nodeport' ? t('resources.endpointNodeportHint') : t('resources.endpointDnsHint') }}
       </div>
+      <div v-if="props.sameCluster === false" class="small">{{ t('resources.anotherCluster') }}</div>
+      <div v-else-if="props.sameCluster === true" class="muted small">{{ t('resources.ownCluster') }}</div>
     </el-form-item>
     <el-form-item v-if="endpoint === 'nodeport'" :label="t('resources.endpointHost')">
       <el-input v-model.trim="host" class="mono" placeholder="198.51.100.10" />
