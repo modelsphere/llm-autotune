@@ -1130,6 +1130,8 @@ onMounted(() => {
         <span class="mono">{{ c.namespace }}</span>
         <span class="mono">{{ c.gpu_resource }}</span>
         <span>{{ c.api_mode }}</span>
+        <span v-if="c.same_cluster === true">{{ t('resources.ownClusterShort') }}</span>
+        <span v-else-if="c.same_cluster === false">{{ t('resources.anotherClusterShort') }}</span>
         <span v-if="c.node_host" class="mono">endpoint {{ c.node_host }}</span>
         <span v-if="c.runtime_class" class="mono">runtimeClass {{ c.runtime_class }}</span>
       </div>
@@ -1663,7 +1665,8 @@ onMounted(() => {
         </el-form-item>
         <ClusterEndpointFields v-model:host="clusterForm.node_host"
           v-model:port="clusterForm.service_nodeport" v-model:endpoint="clusterForm.endpoint"
-          :workload-kind="clusterForm.workload_kind" />
+          :workload-kind="clusterForm.workload_kind"
+          :same-cluster="clusters.find((c) => c.id === editingClusterId)?.same_cluster ?? null" />
         <template v-if="clusterForm.workload_kind === 'llmservice'">
           <div class="grid-2">
             <el-form-item :label="t('resources.chartRepo')">

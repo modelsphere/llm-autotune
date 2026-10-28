@@ -27,6 +27,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A cluster knows whether it is AutoTune's own.** Told apart by its
+  certificate authority (the kubeconfig's against the one mounted into
+  AutoTune's pod), shown on the cluster card and in its form. A run on another
+  cluster cannot be reached by its Service name, so saving such a cluster with
+  **Endpoint: dns** is refused, its probe warns, and the campaign checks and
+  the machine smoke test fail until it uses NodePort and a public host. Before
+  this, such a run loaded its model and then failed its health check with
+  `Name or service not known`.
+
 - **Adding a cluster checks it first.** Connect probes the cluster and keeps
   it only if it can reach it, showing which check failed otherwise; a row of
   checks (API, nodes, llm-operator) follows the cluster on its card. A
