@@ -55,20 +55,24 @@ def test_startup_status_is_running_once_a_container_started():
 # -- supervisor: the two budgets ----------------------------------------------
 
 
-def _sup(pull=45, ready=30):
+def _sup(pull=45):
     sup = Supervisor(
         session_factory=None,
         health_evaluator=SimpleNamespace(),
         bench_evaluator=SimpleNamespace(),
     )
     sup.settings = get_settings().model_copy(
-        update={"image_pull_timeout_minutes": pull, "ready_timeout_minutes": ready}
+        update={"image_pull_timeout_minutes": pull}
     )
     return sup
 
 
-def _run(started_min_ago: int):
-    return SimpleNamespace(started_at=datetime.now(UTC) - timedelta(minutes=started_min_ago))
+def _run(started_min_ago: int, ready: int = 30):
+    """A run whose campaign gives its engine `ready` minutes to answer."""
+    return SimpleNamespace(
+        started_at=datetime.now(UTC) - timedelta(minutes=started_min_ago),
+        campaign=SimpleNamespace(ready_timeout_minutes=ready),
+    )
 
 
 def _driver_with(status: dict):
@@ -80,7 +84,7 @@ def _running_since(min_ago: int) -> str:
 
 
 def test_a_slow_pull_is_not_failed_until_the_pull_budget():
-    sup = _sup(pull=45, ready=30)
+    sup = _sup(pull=45)
     pulling = _driver_with({"phase": "pulling", "running_since": None})
     # 35 min pulling: past the old 30-min ready timeout, but inside the pull budget.
     assert sup._startup_timed_out(_run(35), pulling, None)[0] is False
@@ -90,7 +94,7 @@ def test_a_slow_pull_is_not_failed_until_the_pull_budget():
 
 
 def test_the_model_load_clock_starts_when_the_container_does():
-    sup = _sup(pull=45, ready=30)
+    sup = _sup(pull=45)
     # Pull took 35 min, container has been running 10 min: load budget is fresh.
     running = _driver_with({"phase": "running", "running_since": _running_since(10)})
     assert sup._startup_timed_out(_run(45), running, None)[0] is False
@@ -100,15 +104,27 @@ def test_the_model_load_clock_starts_when_the_container_does():
     assert timed_out and "container started" in why and waiting == ""
 
 
+def test_the_ready_budget_is_the_campaigns():
+    sup = _sup(pull=45)
+    # A very large model: running 90 min is still loading under a 2 h budget.
+    loading = _driver_with({"phase": "running", "running_since": _running_since(90)})
+    assert sup._startup_timed_out(_run(95, ready=120), loading, None)[0] is False
+    # The same wait fails a campaign that gave its engines 30 min, and says so.
+    timed_out, why, _ = sup._startup_timed_out(_run(95, ready=30), loading, None)
+    assert timed_out and why.startswith("engine not ready 30 min")
+    stuck = _driver_with({"phase": "running", "running_since": _running_since(125)})
+    assert sup._startup_timed_out(_run(130, ready=120), stuck, None)[0] is True
+
+
 def test_an_unknown_substrate_keeps_the_single_ready_timeout():
-    sup = _sup(pull=45, ready=30)
+    sup = _sup(pull=45)
     unknown = _driver_with({"phase": "unknown", "running_since": None})
     assert sup._startup_timed_out(_run(20), unknown, None)[0] is False
     assert sup._startup_timed_out(_run(40), unknown, None)[0] is True
 
 
 def test_a_driver_that_raises_falls_back_to_the_single_timeout():
-    sup = _sup(pull=45, ready=30)
+    sup = _sup(pull=45)
 
     def _boom(handle):
         raise RuntimeError("cannot read pods")
@@ -131,7 +147,7 @@ def test_a_queued_run_is_never_failed_for_waiting():
     """Leasing a k8s pool buys the right to ASK for a schedule. A pod the
     cluster has not placed is queued, not late — production holding the cards
     for hours must not cost the campaign a candidate."""
-    sup = _sup(pull=45, ready=30)
+    sup = _sup(pull=45)
     busy = _queued_driver(("unschedulable", "0/40 nodes available: insufficient nvidia.com/gpu"))
     # Well past every budget, and still not a failure.
     for minutes in (50, 240, 60 * 12):
@@ -146,7 +162,7 @@ def test_placement_that_can_never_succeed_still_fails_fast():
     no node could ever take is a different class. It fails as soon as the
     cluster says so, well inside the pull budget, rather than sitting politely
     until the lease expires."""
-    sup = _sup(pull=45, ready=30)
+    sup = _sup(pull=45)
     hopeless = _queued_driver(
         ("unplaceable", "no cluster node matches this machine's node selector (gpu=typo)")
     )

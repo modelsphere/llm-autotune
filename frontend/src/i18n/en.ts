@@ -1094,6 +1094,8 @@ export default {
     parallelHint: 'Several candidates share a machine at once, each pinned to its own GPUs: an 8-card node running one tp=2 config would otherwise leave six cards idle. Widest candidates are placed first. Turn off if a config is sensitive to host-level contention.',
     port: 'First engine port',
     portHint: 'Each run takes the first free port from here. 30000–32767 is skipped: on k8s nodes kube-proxy hijacks that range.',
+    readyTimeout: 'Model load limit (minutes)',
+    readyTimeoutHint: 'How long a started engine may take to load the model and answer before its run fails as ready_timeout. Raise it for very large models.',
     maxMinutes: 'Max minutes per run',
     maxMinutesHint: 'A safety bound. The window is planned from how long this campaign\'s runs actually take, never more than this.',
     space: 'Search space',

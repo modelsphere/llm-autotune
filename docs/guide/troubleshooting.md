@@ -142,10 +142,11 @@ configs**.
 a valid result. Narrow the space (a lower `mem_fraction_static`, fewer
 `max_running_requests`, a larger `tp`) if they were expected to fit.
 
-**`ready_timeout`.** The engine did not respond within 30 minutes of starting.
-Very large models can take longer to load; an admin can raise the limit with
-`AUTOTUNE_READY_TIMEOUT_MINUTES` ([Deploying](../deploying.md#other-settings)).
-Otherwise the log usually shows the engine stalled or crashed.
+**`ready_timeout`.** The engine did not respond within the campaign's model
+load limit (2 hours by default) of starting. A model that needs longer to load
+needs a higher **Model load limit**, under **1 Model → Advanced** when the
+campaign is created. Otherwise the log usually shows the engine stalled or
+crashed.
 
 **`bench_preflight`.** LLMBench could not reach the engine. LLMBench's pods
 need to reach the GPU nodes' NodePorts, like the platform's.

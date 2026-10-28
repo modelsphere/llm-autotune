@@ -103,6 +103,8 @@ const form = ref({
   share_machine: true,
   // A safety bound only: the window plans from what runs have actually taken.
   max_run_minutes: 720,
+  // How long a started engine may take to load the model and answer.
+  ready_timeout_minutes: 120,
   benchmark_slug: '',
   // '' = no policy: the campaign tries every configuration in the space, in
   // order. `policy:<id>` = an external policy container searches it instead.
@@ -781,7 +783,8 @@ function applyImport(opts: { review?: boolean } = {}) {
   form.value.verify_enabled = Boolean(verifySlug)
   advancedNames.value = form.value.verify_enabled ? ['split'] : []
   if (form.value.served_model_name || Object.keys(parsed.fields.extra_env ?? {}).length ||
-    Object.keys(parsed.fields.extra_volumes ?? {}).length) modelAdvanced.value = ['model']
+    Object.keys(parsed.fields.extra_volumes ?? {}).length ||
+    form.value.ready_timeout_minutes !== 120) modelAdvanced.value = ['model']
 
   importOpen.value = false
   importText.value = ''
@@ -979,6 +982,7 @@ async function create() {
       service_port: form.value.service_port,
       share_machine: form.value.share_machine,
       max_run_minutes: form.value.max_run_minutes,
+      ready_timeout_minutes: form.value.ready_timeout_minutes,
       ...benchmarkFields(),
       policy_id: selectedPolicy.value?.id ?? null,
       extensions: form.value.extensions,
@@ -1178,6 +1182,14 @@ onMounted(async () => {
                     <InfoHint>{{ t('campaignNew.extrasHint') }}</InfoHint>
                   </template>
                   <el-input v-model="form.extras_text" type="textarea" :rows="4" class="mono" />
+                </el-form-item>
+                <el-form-item>
+                  <template #label>
+                    <span>{{ t('campaignNew.readyTimeout') }}</span>
+                    <InfoHint>{{ t('campaignNew.readyTimeoutHint') }}</InfoHint>
+                  </template>
+                  <el-input-number v-model="form.ready_timeout_minutes" :min="5" :max="1440"
+                    :step="30" />
                 </el-form-item>
               </el-collapse-item>
             </el-collapse>

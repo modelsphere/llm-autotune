@@ -341,6 +341,9 @@ class CampaignCreate(BaseModel):
     # runs have actually taken (control/orchestrator/timing.py), never more
     # than this.
     max_run_minutes: int = 720
+    # How long a started engine may take to load the model and answer
+    # /v1/models before its run fails as ready_timeout.
+    ready_timeout_minutes: int = Field(default=120, ge=5, le=1440)
     # The external search container for this campaign: when set, it decides
     # what to try and the platform stops enumerating the space itself
     # (docs/api/policy-contract.md). `policy_settings` is validated against
@@ -433,6 +436,7 @@ class CampaignOut(BaseModel):
     schedule_until: datetime | None
     override_until: datetime | None
     max_run_minutes: int
+    ready_timeout_minutes: int
     policy_id: int | None
     policy_settings: dict[str, Any]
     # What the campaign's runs have taken so far (timing.summary), in minutes;
