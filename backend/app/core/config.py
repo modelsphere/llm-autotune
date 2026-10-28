@@ -151,9 +151,10 @@ class Settings(BaseSettings):
     # Two clocks for a run that is coming up, because pulling a cold multi-GB
     # engine image is not the same failure as a wedged model load:
     #
-    #   ready_timeout_minutes — once the engine container is actually RUNNING,
-    #     how long it may take to answer /v1/models before it is called wedged.
-    #     Big models load for 5–15 min (per the prod deploy scripts).
+    #   the campaign's ready_timeout_minutes — once the engine container is
+    #     actually RUNNING, how long it may take to answer /v1/models before it
+    #     is called wedged. Per campaign, because it is the model that decides:
+    #     most load in 5–15 min, the biggest take well over an hour.
     #
     #   image_pull_timeout_minutes — while the pod is still scheduling or pulling
     #     its image (no container running yet), the more generous budget. A first
@@ -161,12 +162,15 @@ class Settings(BaseSettings):
     #     minutes, and a pod making that progress is not wedged. Kept separate so
     #     a slow pull does not eat the model-load budget and trip a false
     #     ready_timeout (which is exactly what bit a k8s node that had never
-    #     cached the image). Should be >= ready_timeout_minutes.
+    #     cached the image).
     #
     # Substrates that cannot distinguish the two phases (ssh_docker) fall back to
-    # the single ready_timeout, unchanged.
-    ready_timeout_minutes: int = 30
+    # the campaign's single ready timeout, unchanged.
     image_pull_timeout_minutes: int = 45
+    # How long a launched policy container may take to send its first
+    # heartbeat. A small image with no model in it: minutes, not the hours an
+    # engine may need.
+    policy_start_timeout_minutes: int = 30
     # The engine vocabulary (control/engines/vocabulary_store.py): how long the
     # job that reads an image's flags and env vars may take (it imports the
     # engine, torch included), and where the engine's docs are fetched from to

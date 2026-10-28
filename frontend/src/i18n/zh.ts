@@ -1082,6 +1082,8 @@ const zh: typeof en = {
     parallelHint: '多个候选同时共用一台机器，各自固定在自己的 GPU 上：否则一台 8 卡机器只跑一个 tp=2 配置，会空闲六张卡。最宽的候选先安排。如果配置对主机层面的资源争用敏感，请关闭。',
     port: '起始引擎端口',
     portHint: '每个 run 从这里开始取第一个空闲端口。会跳过 30000–32767：在 k8s 节点上 kube-proxy 会劫持这个范围。',
+    readyTimeout: '模型加载上限（分钟）',
+    readyTimeoutHint: '引擎启动后加载模型并开始响应的最长时间，超过则该 run 以 ready_timeout 失败。很大的模型需要调高。',
     maxMinutes: '每个 run 的最长分钟数',
     maxMinutesHint: '安全上限。时间窗口按这个调优任务的 run 实际耗时来规划，不会超过这个值。',
     space: '搜索空间',

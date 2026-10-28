@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The model load limit is a campaign setting, 2 hours by default.** How
+  long a started engine may take to answer before its run fails as
+  `ready_timeout` is now `ready_timeout_minutes` on the campaign (the form's
+  **1 Model → Advanced → Model load limit**), not a platform-wide setting.
+  The default goes from 30 to 120 minutes, existing campaigns included, so
+  very large models can load. Before a campaign has measured a start, the
+  window plans its first run with this limit. `AUTOTUNE_READY_TIMEOUT_MINUTES`
+  is gone; a policy container's first heartbeat has its own
+  `AUTOTUNE_POLICY_START_TIMEOUT_MINUTES` (30).
 - **llmservice is the default workload kind** (`gpuCluster.workloadKind`, a
   new cluster's setting, `AUTOTUNE_K8S_WORKLOAD_KIND`). The cluster needs
   llm-operator, which the modelsphere stack installs. Upgrading an install

@@ -381,6 +381,9 @@ export interface Campaign {
   /** Set by Force start: run regardless of the clock until this instant. */
   override_until: string | null
   max_run_minutes: number
+  /** How long a started engine may take to answer before its run fails as
+   *  ready_timeout. */
+  ready_timeout_minutes: number
   /** An external policy container (policy-as-code) that decides what to try.
    *  Null: the campaign tries every configuration in the space, in order. The
    *  platform launches, benchmarks and judges either way. */

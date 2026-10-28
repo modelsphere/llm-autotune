@@ -269,7 +269,7 @@ The ones installs usually reach for:
 | `AUTOTUNE_ALLOW_SIGNUP` | `true` | whether the sign-in page offers **Create account** (the chart's `allowSignup`) |
 | `AUTOTUNE_DEFAULT_DAILY_START`, `_END`, `AUTOTUNE_DEFAULT_SCHEDULE_TIMEZONE` | — | the window a drafted campaign gets when none is given |
 | `AUTOTUNE_DEFAULT_MAX_RUN_MINUTES` | `240` | window a run reserves when its length can be neither measured nor estimated from its benchmark |
-| `AUTOTUNE_READY_TIMEOUT_MINUTES` | `30` | how long a started engine may take to answer `/v1/models` |
+| `AUTOTUNE_POLICY_START_TIMEOUT_MINUTES` | `30` | how long a policy container may take to send its first heartbeat (how long an engine may take to load is the campaign's **Model load limit**) |
 | `AUTOTUNE_IMAGE_PULL_TIMEOUT_MINUTES` | `45` | how long a pod may spend scheduling and pulling its image, and how long an ssh machine may spend pulling one |
 | `AUTOTUNE_HEALTH_PROBE_TIMEOUT_SECONDS` | `600` | how long the first chat completion may take |
 | `AUTOTUNE_K8S_IMAGE_PULL_SECRETS` | — | pull secrets (comma-separated names) for engine and policy pods |

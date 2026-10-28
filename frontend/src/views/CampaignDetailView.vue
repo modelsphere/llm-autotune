@@ -1048,6 +1048,11 @@ const configRows = computed(() => {
       value: learnedRunLength(c),
       hint: `learned from this campaign's runs; capped at ${c.max_run_minutes} min`,
     },
+    {
+      label: 'Model load limit',
+      value: `${c.ready_timeout_minutes} min`,
+      hint: 'a started engine that has not answered by then fails as ready_timeout',
+    },
     Object.keys(c.recipe ?? {}).length
       ? {
           label: 'Production reference',
@@ -1114,6 +1119,7 @@ function copyEverything() {
       benchmark_slug: c.benchmark_slug,
       machine_names: c.machine_names,
       max_run_minutes: c.max_run_minutes,
+      ready_timeout_minutes: c.ready_timeout_minutes,
       run_baseline_canary: c.run_baseline_canary,
       extra_env: c.extra_env,
       extra_volumes: c.extra_volumes,

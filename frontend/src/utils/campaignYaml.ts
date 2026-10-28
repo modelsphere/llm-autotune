@@ -26,6 +26,7 @@ export const PORTABLE_KEYS = [
   'service_port',
   'share_machine',
   'max_run_minutes',
+  'ready_timeout_minutes',
   'run_baseline_canary',
   'extra_env',
   'extra_volumes',
