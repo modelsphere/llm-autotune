@@ -133,6 +133,9 @@ export interface Cluster {
   created_at: string | null
   /** How many machines name this cluster. */
   machine_count: number
+  /** Whether this is the cluster AutoTune runs in (told apart by its CA);
+   *  null when it cannot tell. A run's Service name resolves only there. */
+  same_cluster: boolean | null
 }
 
 /** The editable subset. `kubeconfig` is plaintext in, never out; '' on edit

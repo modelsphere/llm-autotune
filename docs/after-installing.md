@@ -150,7 +150,14 @@ engine chart with the run's recipe, exactly as a production deploy is. The
 cluster needs llm-operator (the modelsphere stack installs it; **Connect** says
 when it is missing). The benchmark reaches a run by its Service's in-cluster
 name (**Endpoint: dns**), which is right when AutoTune and LLMBench run on the
-GPU cluster; set **Endpoint: nodeport** when they run elsewhere. The
+GPU cluster; set **Endpoint: nodeport** when they run elsewhere. The platform
+tells the two apart by the cluster's certificate authority: the one in the
+kubeconfig against the one mounted into AutoTune's own pod. A cluster with a
+different CA is shown as **another cluster** and is refused with
+**Endpoint: dns**, because none of its runs could be reached. Give it
+**Endpoint: nodeport** and a node address that AutoTune and LLMBench can both
+reach. A campaign's checks and the machine smoke test fail on such a cluster
+until that is done. The
 **deployment** (a Deployment and a NodePort Service, no operator) and
 **custom** (TuningRun) kinds still work and are deprecated: they take engine
 flags and env only, not pd or chart values, and are no longer extended.

@@ -27,6 +27,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.control.launch.clusters import K8sClusterSettings, invalidate_cluster
 from app.control.launch.k8s import K8sDriver, _node_takes_pods
 from app.control.launch.k8s_api import forget_transport, get_k8s_api
+from app.control.launch.locality import ANOTHER_CLUSTER, same_cluster, unreachable_by_name
 from app.core.auth import get_current_user, require_admin
 from app.core.config import get_settings
 from app.core.secrets import encrypt_secret
@@ -70,8 +71,22 @@ def _kubeconfig_namespace(kubeconfig: str, context: str = "") -> str:
 def _out(row: Cluster, machine_count: int = 0) -> ClusterOut:
     out = ClusterOut.model_validate(row)
     return out.model_copy(
-        update={"has_kubeconfig": bool(row.kubeconfig_enc), "machine_count": machine_count}
+        update={
+            "has_kubeconfig": bool(row.kubeconfig_enc),
+            "machine_count": machine_count,
+            "same_cluster": same_cluster(K8sClusterSettings.from_row(row, get_settings())),
+        }
     )
+
+
+def _refuse_unreachable(row: Cluster) -> None:
+    """Runs named by Service DNS on a cluster that is not AutoTune's own would
+    each load their model and then fail their health check: refuse the save."""
+    if unreachable_by_name(K8sClusterSettings.from_row(row, get_settings())):
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            f"{row.name} cannot reach runs by Service name: {ANOTHER_CLUSTER}",
+        )
 
 
 async def _counts(session: AsyncSession) -> dict[int, int]:
@@ -128,6 +143,7 @@ async def create_cluster(
             "pods should run in",
         )
     row = Cluster(**data, kubeconfig_enc=encrypt_secret(body.kubeconfig))
+    _refuse_unreachable(row)
     session.add(row)
     await session.flush()
     if check:
@@ -189,6 +205,11 @@ async def update_cluster(
     # received). Anything non-empty rotates it.
     if body.kubeconfig.strip():
         row.kubeconfig_enc = encrypt_secret(body.kubeconfig)
+    try:
+        _refuse_unreachable(row)
+    except HTTPException:
+        await session.rollback()
+        raise
     session.add(
         Event(actor=user.username, kind="cluster_updated", payload={"name": row.name})
     )
@@ -295,8 +316,11 @@ def _probe(cluster: K8sClusterSettings) -> dict:
         "node_count": 0,
         "gpu_types": [],
         "crd_present": None,
+        "same_cluster": same_cluster(cluster),
         "warnings": [],
     }
+    if unreachable_by_name(cluster):
+        result["warnings"].append(f"runs are reached by Service name, but {ANOTHER_CLUSTER}")
     if not cluster.k8s_api_mode or cluster.k8s_api_mode == "unavailable":
         result["warnings"].append("api_mode is 'unavailable' — set it to client")
         return result
