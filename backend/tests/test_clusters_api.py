@@ -236,3 +236,66 @@ async def test_a_machine_row_defaults_to_the_default_cluster(client):
 
     async with client.factory() as session:
         assert (await session.get(Machine, 1)).cluster_id is None
+
+
+async def test_only_an_admin_adds_edits_or_removes_machines(client):
+    async with client.factory() as session:
+        session.add(User(id=2, username="bob", password_hash="x", role="user"))
+        session.add(Machine(id=5, name="box", host="10.0.0.1", gpu_count=8))
+        await session.commit()
+        bob = {"Authorization": f"Bearer {create_token(await session.get(User, 2))}"}
+    body = {"name": "mine", "host": "10.0.0.2", "gpu_count": 8}
+    assert (await client.post("/api/machines", json=body, headers=bob)).status_code == 403
+    assert (await client.put("/api/machines/5", json=body, headers=bob)).status_code == 403
+    assert (await client.delete("/api/machines/5", headers=bob)).status_code == 403
+    group = {"name": "g", "members": ["box"]}
+    assert (await client.post("/api/machine-groups", json=group, headers=bob)).status_code == 403
+    # Leasing registers a machine the first time: that part is admin work too.
+    lease = {"name": "new-box", "host": "10.0.0.3"}
+    assert (await client.post("/api/machines/lease", json=lease, headers=bob)).status_code == 403
+    # Everyone still sees them.
+    assert (await client.get("/api/machines", headers=bob)).status_code == 200
+
+
+async def _cluster_with_a_live_run(client, *, teardown_pending=False, status="serving"):
+    from app.db.models import Campaign, Candidate, Run
+
+    created = await _add(client)
+    async with client.factory() as session:
+        session.add(Machine(id=9, name="pool", host="", driver="k8s",
+                            cluster_id=created["id"], gpu_count=8))
+        session.add(Campaign(id=3, owner_id=1, name="night", engine="sglang", image="img",
+                             model_path="/m", served_model_name="m", search_space={},
+                             objective={}))
+        session.add(Candidate(id=1, campaign_id=3, config={}, config_hash="h"))
+        session.add(Run(id=11, campaign_id=3, candidate_id=1, machine_id=9, status=status,
+                        teardown_pending=teardown_pending))
+        await session.commit()
+    return created
+
+
+async def test_kind_or_namespace_cannot_change_under_live_runs(client):
+    created = await _cluster_with_a_live_run(client)
+    body = {"name": "gpu-cluster-a", "kubeconfig": "", "namespace": "gpu-test",
+            "workload_kind": "llmservice"}
+    resp = await client.put(f"/api/clusters/{created['id']}", json=body)
+    assert resp.status_code == 409
+    detail = resp.json()["detail"]
+    assert detail["fields"] == ["workload_kind"]
+    runs = [(r["id"], r["campaign"], r["machine"]) for r in detail["runs"]]
+    assert runs == [(11, "night", "pool")]
+    live = (await client.get(f"/api/clusters/{created['id']}/live")).json()
+    assert [r["id"] for r in live["runs"]] == [11]
+
+    # Anything else may change.
+    same = {**body, "workload_kind": "deployment", "notes": "re-labelled"}
+    assert (await client.put(f"/api/clusters/{created['id']}", json=same)).status_code == 200
+
+
+async def test_a_run_still_tearing_down_counts_as_live(client):
+    created = await _cluster_with_a_live_run(client, status="failed", teardown_pending=True)
+    body = {"name": "gpu-cluster-a", "kubeconfig": "", "namespace": "other",
+            "workload_kind": "deployment"}
+    resp = await client.put(f"/api/clusters/{created['id']}", json=body)
+    assert resp.status_code == 409
+    assert resp.json()["detail"]["runs"][0]["teardown_pending"] is True

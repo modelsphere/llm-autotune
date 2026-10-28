@@ -84,7 +84,10 @@ class RegisterPools(BaseModel):
     """Accelerator products of a cluster (its configured product label) to register
     as node pools: one machine per product, spanning every node that has it."""
 
-    products: list[str] = Field(..., min_length=1)
+    products: list[str] = Field(default_factory=list)
+    # With no node access: one pool for the whole namespace, sized by its GPU
+    # quota, instead of one per product.
+    namespace: bool = False
 
 
 class ClusterOut(BaseModel):

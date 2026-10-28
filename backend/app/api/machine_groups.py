@@ -31,7 +31,7 @@ from app.control.orchestrator.groups import (
     group_lease_warnings,
     members_by_rank,
 )
-from app.core.auth import get_current_user
+from app.core.auth import get_current_user, require_admin
 from app.db.base import get_async_session, sync_session_factory
 from app.db.models import (
     TERMINAL_RUN_STATES,
@@ -276,7 +276,7 @@ async def get_group(group_id: int, _: User = Depends(get_current_user)):
 @router.post("", response_model=MachineGroupOut, status_code=status.HTTP_201_CREATED)
 async def create_group(
     body: MachineGroupCreate,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_admin),
     session: AsyncSession = Depends(get_async_session),
 ):
     """Form a group from leased machines. `members[0]` is the master.
@@ -330,7 +330,7 @@ async def create_group(
 async def update_group(
     group_id: int,
     body: MachineGroupUpdate,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_admin),
     session: AsyncSession = Depends(get_async_session),
 ):
     """Edit a group. Replacing `members` re-ranks the whole set, so `members[0]`
@@ -442,7 +442,7 @@ async def preflight_group(
 @router.delete("/{group_id}")
 async def delete_group(
     group_id: int,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_admin),
     session: AsyncSession = Depends(get_async_session),
 ):
     """Dissolve a group. Never touches the machines — they simply go back to

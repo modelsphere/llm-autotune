@@ -55,8 +55,9 @@ X-API-Key: atk_…
 }
 ```
 
-`name` is the identity. The first call registers the machine; every later call
-updates its details and starts a fresh lease. **Retrying is safe** — a caller
+`name` is the identity. The first call registers the machine, which needs an
+admin's key (403 otherwise); every later call updates its details and starts a
+fresh lease. **Retrying is safe** — a caller
 that crashes mid-request and repeats it gets the same outcome, and never has to
 ask "did that one land?".
 

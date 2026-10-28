@@ -1387,6 +1387,10 @@ class K8sDriver(DeploymentDriver):
         selector = machine.node_selector or self.settings.k8s_node_selector
         warnings: list[str] = []
         if not selector.strip():
+            # No nodes named: the namespace's quota is the whole of what this
+            # machine may use, when there is one.
+            if self._quota_limit() is not None:
+                return self._quota_capacity("no node selector set")
             return {
                 "supported": True, "gpu_count": 0, "gpu_type": "", "node_count": 0,
                 "node_gpu_max": 0, "gpu_free": None, "gpu_types": [],
@@ -1425,11 +1429,13 @@ class K8sDriver(DeploymentDriver):
         for node in nodes:
             count = _node_gpu_count(node, self.settings.k8s_gpu_resource)
             gpu_type = _node_gpu_type(node, self.settings.k8s_gpu_product_label)
-            total += count
             schedulable = _node_takes_pods(node, self.settings)
             used = None if held is None else held.get(_node_name(node), 0)
             free = None if used is None else (max(count - used, 0) if schedulable else 0)
             if schedulable:
+                # Only nodes that take new pods are capacity: a cordoned or
+                # not-Ready node's cards cannot be planned against.
+                total += count
                 largest = max(largest, count)
                 free_total += free or 0
             if gpu_type:
@@ -1449,6 +1455,17 @@ class K8sDriver(DeploymentDriver):
 
         if not nodes:
             warnings.append(f"selector {selector!r} matched no nodes")
+        elif not total:
+            warnings.append("no matched node takes new pods (cordoned or not Ready)")
+        gpu_free = None if held is None else free_total
+        # The namespace's quota bounds what our pods may hold at once, however
+        # many cards the nodes have.
+        limit = self._quota_limit() if total else None
+        if limit is not None and limit[0] < total:
+            warnings.append(f"capped at the namespace's GPU quota ({limit[0]} of {total} cards)")
+            total = limit[0]
+            spare = max(limit[0] - limit[1], 0)
+            gpu_free = spare if gpu_free is None else min(gpu_free, spare)
         if len(types) > 1:
             warnings.append(
                 f"selector spans multiple card types {sorted(types)} — results "
@@ -1463,10 +1480,31 @@ class K8sDriver(DeploymentDriver):
             # The widest pod that could ever be placed here: the biggest node
             # that takes new pods.
             "node_gpu_max": largest,
-            "gpu_free": None if held is None else free_total,
+            "gpu_free": gpu_free,
             "nodes": detail,
             "warnings": warnings,
         }
+
+    def _quota_limit(self) -> tuple[int, int] | None:
+        """(hard, used) of the namespace's tightest GPU quota; None when there
+        is none or it cannot be read."""
+        keys = (f"requests.{self.settings.k8s_gpu_resource}", self.settings.k8s_gpu_resource)
+        try:
+            quotas = self.api.list("resourcequotas")
+        except Exception:
+            return None
+        found: tuple[int, int] | None = None
+        for quota in quotas:
+            status = quota.get("status") or {}
+            limits = status.get("hard") or (quota.get("spec") or {}).get("hard") or {}
+            spent = status.get("used") or {}
+            for key in keys:
+                if key in limits:
+                    value = _quantity_int(limits[key])
+                    if found is None or value < found[0]:
+                        found = (value, _quantity_int(spent.get(key, 0)))
+                    break
+        return found
 
     def _quota_capacity(self, why: str) -> dict[str, Any]:
         """Capacity without node access: the namespace's GPU quota, which a
@@ -1477,26 +1515,11 @@ class K8sDriver(DeploymentDriver):
         unplaceable."""
         empty = {"supported": True, "gpu_count": 0, "gpu_type": "", "node_count": 0,
                  "node_gpu_max": 0, "gpu_free": None, "gpu_types": [], "nodes": []}
-        keys = (f"requests.{self.settings.k8s_gpu_resource}", self.settings.k8s_gpu_resource)
-        hard: int | None = None
-        used = 0
-        try:
-            quotas = self.api.list("resourcequotas")
-        except Exception as exc:
-            return {**empty, "warnings": [why, f"could not read the namespace quota: {exc}"]}
-        for quota in quotas:
-            status = quota.get("status") or {}
-            limits = status.get("hard") or (quota.get("spec") or {}).get("hard") or {}
-            spent = status.get("used") or {}
-            for key in keys:
-                if key in limits:
-                    value = _quantity_int(limits[key])
-                    if hard is None or value < hard:
-                        hard, used = value, _quantity_int(spent.get(key, 0))
-                    break
-        if hard is None:
-            return {**empty, "warnings": [why, "and the namespace has no GPU quota to go by; "
-                                          "set the machine's card count by hand"]}
+        limit = self._quota_limit()
+        if limit is None:
+            return {**empty, "warnings": [why, "and the namespace has no readable GPU quota "
+                                          "to go by; set the machine's card count by hand"]}
+        hard, used = limit
         return {
             **empty,
             "gpu_count": hard,

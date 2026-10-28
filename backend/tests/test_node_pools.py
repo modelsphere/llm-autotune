@@ -85,7 +85,7 @@ def test_the_probe_counts_free_cards_on_nodes_that_take_pods():
     probe = _driver(settings, api).probe_capacity(
         MachineInfo(name="pool", host="", driver="k8s", node_selector=POOL)
     )
-    assert probe["gpu_count"] == 23  # installed, every matching node
+    assert probe["gpu_count"] == 16  # the nodes that take pods; cordoned gpu-c is not capacity
     assert probe["gpu_free"] == 5    # 0 on gpu-a, 5 on gpu-b, none on the cordoned gpu-c
     assert probe["node_gpu_max"] == 8
     assert probe["node_count"] == 3
@@ -418,6 +418,44 @@ def test_without_node_access_the_namespace_quota_is_the_capacity():
     assert row.gpu_count == 16
 
 
+class _QuotaApi(FakeK8sApi):
+    quotas: list[dict] = []
+
+    def list(self, resource, label_selector=""):
+        if resource == "resourcequotas":
+            return list(self.quotas)
+        return super().list(resource, label_selector)
+
+
+def test_the_namespace_quota_caps_a_pool_bigger_than_it():
+    settings = _clone(k8s_api_mode="kubectl")
+    api = _QuotaApi(settings)
+    api.nodes = [_node("gpu-a", 8), _node("gpu-b", 8)]
+    api.quotas = [{"status": {"hard": {"requests.nvidia.com/gpu": "12"},
+                              "used": {"requests.nvidia.com/gpu": "10"}}}]
+    probe = _driver(settings, api).probe_capacity(
+        MachineInfo(name="pool", host="", driver="k8s", node_selector=POOL)
+    )
+    assert probe["gpu_count"] == 12 and probe["gpu_free"] == 2
+    assert probe["node_gpu_max"] == 8 and probe["node_count"] == 2
+    assert any("quota (12 of 16" in w for w in probe["warnings"])
+
+
+def test_a_machine_with_no_selector_is_the_namespace_quota():
+    settings = _clone(k8s_api_mode="kubectl", k8s_node_selector="")
+    api = _QuotaApi(settings)
+    api.quotas = [{"status": {"hard": {"requests.nvidia.com/gpu": "16"}}}]
+    probe = _driver(settings, api).probe_capacity(
+        MachineInfo(name="ns", host="", driver="k8s", node_selector="")
+    )
+    assert probe["quota"] and probe["gpu_count"] == 16
+    api.quotas = []
+    probe = _driver(settings, api).probe_capacity(
+        MachineInfo(name="ns", host="", driver="k8s", node_selector="")
+    )
+    assert probe["gpu_count"] == 0 and "no node selector" in probe["warnings"][0]
+
+
 def test_a_pod_must_fit_a_node_not_the_whole_launch():
     from types import SimpleNamespace
 
@@ -438,3 +476,26 @@ def test_a_pod_must_fit_a_node_not_the_whole_launch():
     pool.node_gpu_max = widest - 1
     with pytest.raises(HTTPException):
         _check_fits_a_node(pool, widest)
+
+
+async def test_leasing_reads_the_machines_own_cluster(client, monkeypatch):  # noqa: F811
+    import app.control.launch as launch
+
+    asked: list = []
+
+    class _Probe:
+        def probe_capacity(self, machine):
+            return {"supported": True, "node_count": 1, "gpu_count": 8, "gpu_type": "H800",
+                    "gpu_types": ["H800"], "node_gpu_max": 8, "gpu_free": 8, "warnings": []}
+
+    def fake_driver(name, **kw):
+        asked.append(kw.get("cluster_id"))
+        return _Probe()
+
+    monkeypatch.setattr(launch, "get_driver", fake_driver)
+    async with client.db() as session:
+        session.add(Machine(name="node", host="", driver="k8s", cluster_id=7,
+                            node_selector="kubernetes.io/hostname=gpu-a", gpu_count=8))
+        await session.commit()
+    assert (await client.post("/api/machines/lease", json={"name": "node"})).status_code == 200
+    assert asked == [7]

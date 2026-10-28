@@ -18,6 +18,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Adding a cluster checks it first.** Connect probes the cluster and keeps
+  it only if it can reach it, showing which check failed otherwise; a row of
+  checks (API, nodes, llm-operator) follows the cluster on its card. A
+  credential that cannot read nodes registers the namespace's GPU quota as one
+  pool. Cordoned nodes set aside for the platform can be used from the
+  register step. The name comes from the kubeconfig's cluster (or its address),
+  and the namespace field asks only when the kubeconfig names none. Adding a
+  machine by hand defaults to a cluster and can lease it at once.
 - **Resources has a Machines tab and a Clusters tab.** Clusters were a dialog
   opened from a button; they are now a tab whose cards look and work like the
   machine cards (main action, Probe, More ▸ Edit / Remove). Cluster editing
@@ -212,6 +220,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `reports.sections` (above the list), so a plugin can write reports from there.
 
 ### Fixed
+
+- **Leasing read the wrong cluster's capacity.** A lease probed the platform's
+  default cluster with the machine's node selector, not the machine's own
+  cluster.
+- **Capacity counted cards that cannot be used.** A pool now counts only nodes
+  that take pods, capped at the namespace's GPU quota, and a node can no
+  longer be registered both alone and inside a pool.
+- **Only admins add, edit or remove machines and machine groups**, as with
+  clusters; registering a machine through the lease API is admin-only too.
+- **A cluster's workload kind or namespace cannot change under live runs**,
+  which would have left their pods holding GPUs out of the platform's reach.
+  The refusal lists the runs and policy sessions in the way
+  (`GET /api/clusters/{id}/live`).
 
 - **A recipe campaign's baseline.** Runs of the unchanged recipe (a policy's
   anchor sends the empty config) now count as the production baseline, so the
