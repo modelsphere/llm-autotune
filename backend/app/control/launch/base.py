@@ -12,7 +12,10 @@ Driver contract:
 """
 
 import logging
+import threading
+import time
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from enum import StrEnum
 from typing import Any
 
@@ -515,14 +518,19 @@ class DeploymentDriver(ABC):
 
     # -- smoke test ----------------------------------------------------------
 
-    def smoke_test(self, machine: MachineInfo, probe_pod: bool = False) -> dict[str, Any]:
+    def smoke_test(
+        self, machine: MachineInfo, probe_pod: bool = False,
+        progress: Callable[[dict], None] | None = None,
+    ) -> dict[str, Any]:
         """Can the platform reach this machine at all? Each substrate walks the
-        same path a launch takes, in order, and stops at the first step a launch
-        could not get past — so the first failure is the one to fix.
+        same path a launch takes and stops where a launch could not get past —
+        so the first failure is the one to fix. Steps that do not need each
+        other run side by side.
 
         Read-only unless `probe_pod`: a k8s driver may then place a throwaway
         pod on the machine's node, the only way a credential that cannot read
         nodes can confirm the node exists and accepts our pods.
+        `progress` hears each step as it starts and ends (see SmokeSteps).
         Shape when supported: see `smoke_result`."""
         return {"supported": False}
 
@@ -555,3 +563,63 @@ def smoke_result(checks: list[dict[str, str]]) -> dict[str, Any]:
         "ok": not any(check["status"] == "fail" for check in checks),
         "checks": checks,
     }
+
+
+class SmokeSteps:
+    """A smoke test's steps as they happen, for a caller showing progress.
+
+    Events, in order: {"event": "plan", "steps": [...]} once, then for each
+    step {"event": "start", "name"} and {"event": "step", **check, "ms"}. A
+    step stopped by an earlier failure ends as skip, "not reached". Steps may
+    run on several threads; events are sent one at a time."""
+
+    def __init__(self, steps: list[str], emit: Callable[[dict], None] | None = None):
+        self._order = list(steps)
+        self._emit = emit or (lambda event: None)
+        self._lock = threading.Lock()
+        self._done: dict[str, dict] = {}
+        self._send({"event": "plan", "steps": list(self._order)})
+
+    def _send(self, event: dict) -> None:
+        with self._lock:
+            try:
+                self._emit(event)
+            except Exception:  # noqa: BLE001 — a gone listener never stops the test
+                logger.debug("smoke progress listener failed", exc_info=True)
+
+    def start(self, name: str) -> None:
+        """A step is under way (for steps answered elsewhere, then `add`ed)."""
+        self._send({"event": "start", "name": name})
+
+    def run(self, name: str, check: Callable[[], dict]) -> dict:
+        """Run one step, timed; a step that raises is a failed step."""
+        self.start(name)
+        started = time.monotonic()
+        try:
+            result = check()
+        except Exception as exc:  # noqa: BLE001 — the test is the report
+            result = smoke_check(name, "fail", f"crashed: {exc}")
+        return self.add(result, int((time.monotonic() - started) * 1000))
+
+    def add(self, check: dict, ms: int = 0) -> dict:
+        """A step whose answer is already known."""
+        check = {**check, "ms": ms}
+        if check["name"] not in self._order:
+            with self._lock:
+                self._order.append(check["name"])
+        with self._lock:
+            self._done[check["name"]] = check
+        self._send({"event": "step", **check})
+        return check
+
+    def failed(self) -> bool:
+        with self._lock:
+            return any(c["status"] == "fail" for c in self._done.values())
+
+    def result(self) -> dict[str, Any]:
+        """Every planned step in plan order; the unreached ones as skipped."""
+        for name in list(self._order):
+            if name not in self._done:
+                self.add(smoke_check(name, "skip", "not reached: an earlier step failed"))
+        with self._lock:
+            return smoke_result([self._done[name] for name in self._order])

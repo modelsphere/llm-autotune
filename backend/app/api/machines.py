@@ -1,5 +1,10 @@
+import json
+
 import anyio
+import anyio.from_thread
+import anyio.lowlevel
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import StreamingResponse
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -336,50 +341,97 @@ async def update_machine(
     return await _one_out(session, machine)
 
 
+_CARD_TYPE_UNSET = (
+    "the platform does not know this machine's GPU model, so baselines and "
+    "campaigns that name a card type skip it; set it with More ▸ Edit, or "
+    "More ▸ Re-read GPUs"
+)
+
+
 @router.post("/{machine_id}/smoke-test")
 async def smoke_test(
     machine_id: int,
     pod: bool = False,
+    stream: bool = False,
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_async_session),
 ):
     """Can the platform reach this machine at all? The driver walks the path a
     launch takes (ssh → docker → GPUs, or credential → RBAC → node → endpoint)
     and reports each step. Changes nothing on the machine row; `pod=true` lets a
-    k8s machine place (and delete) a throwaway pod on its node."""
+    k8s machine place (and delete) a throwaway pod on its node.
+
+    `stream=true` answers as it goes, one JSON object per line
+    (application/x-ndjson): the plan, each step starting, each step's result
+    with its time, and last {"event": "done", ...the whole report}."""
     machine = await _get_machine(machine_id, session)
     driver = _driver_for(machine)
-    try:
-        result = await anyio.to_thread.run_sync(
-            lambda: driver.smoke_test(_machine_info(machine), probe_pod=pod)
-        )
-    except Exception as exc:  # noqa: BLE001 — the test is the report, never a 500
-        result = {"supported": True, "ok": False, "checks": [
-            {"name": "driver", "status": "fail", "detail": f"smoke test crashed: {exc}"},
-        ]}
-    if not result.get("supported"):
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            f"the {machine.driver or 'ssh_docker'} substrate has no smoke test",
-        )
-    # Not a reachability question, but the reason a machine that works can
-    # still not be picked: whatever matches machines by card type skips it.
-    if not machine.gpu_type:
-        result["checks"].append({
-            "name": "card type", "status": "warn",
-            "detail": "the platform does not know this machine's GPU model, so "
-                      "baselines and campaigns that name a card type skip it; set "
-                      "it with More ▸ Edit, or More ▸ Re-read GPUs",
-        })
-    session.add(
-        Event(
+    info = _machine_info(machine)
+    name, driver_name, gpu_type = machine.name, machine.driver or "ssh_docker", machine.gpu_type
+
+    def run(progress=None) -> dict:
+        try:
+            result = driver.smoke_test(info, probe_pod=pod, progress=progress)
+        except Exception as exc:  # noqa: BLE001 — the test is the report, never a 500
+            result = {"supported": True, "ok": False, "checks": [
+                {"name": "driver", "status": "fail", "detail": f"smoke test crashed: {exc}"},
+            ]}
+            if progress:
+                progress({"event": "step", **result["checks"][0], "ms": 0})
+        # Not a reachability question, but the reason a machine that works can
+        # still not be picked: whatever matches machines by card type skips it.
+        if result.get("supported") and not gpu_type:
+            check = {"name": "card type", "status": "warn", "detail": _CARD_TYPE_UNSET, "ms": 0}
+            result["checks"].append(check)
+            if progress:
+                progress({"event": "step", **check})
+        return result
+
+    async def record(result: dict) -> dict:
+        session.add(Event(
             actor=user.username,
             kind="machine_smoke_tested",
-            payload={"machine": machine.name, "pod": pod, **result},
-        )
+            payload={"machine": name, "pod": pod, **result},
+        ))
+        await session.commit()
+        return {"machine": name, "driver": driver_name, **result}
+
+    if not stream:
+        result = await anyio.to_thread.run_sync(run)
+        if not result.get("supported"):
+            raise HTTPException(
+                status.HTTP_409_CONFLICT, f"the {driver_name} substrate has no smoke test"
+            )
+        return await record(result)
+
+    async def events():
+        send, receive = anyio.create_memory_object_stream[dict](max_buffer_size=256)
+        token = anyio.lowlevel.current_token()
+
+        def progress(event: dict) -> None:
+            anyio.from_thread.run_sync(send.send_nowait, event, token=token)
+
+        async def worker() -> None:
+            async with send:
+                result = await anyio.to_thread.run_sync(lambda: run(progress))
+                if not result.get("supported"):
+                    result = {**result, "ok": False, "checks": [{
+                        "name": "driver", "status": "fail",
+                        "detail": f"the {driver_name} substrate has no smoke test",
+                    }]}
+                await send.send({"event": "done", **(await record(result))})
+
+        async with anyio.create_task_group() as tg, receive:
+            tg.start_soon(worker)
+            async for event in receive:
+                yield json.dumps(event) + "\n"
+
+    return StreamingResponse(
+        events(), media_type="application/x-ndjson",
+        # Each line as it is written: nginx would otherwise hold the answer
+        # back until the test is over.
+        headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache"},
     )
-    await session.commit()
-    return {"machine": machine.name, "driver": machine.driver or "ssh_docker", **result}
 
 
 @router.delete("/{machine_id}")

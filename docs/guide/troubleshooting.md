@@ -43,7 +43,9 @@ access, or enter the **GPU count** under **Advanced** and save again.
 **Smoke test fails at *endpoint*.** Runs are reached on a node's address and a
 NodePort. The platform's pods and LLMBench's must both reach the GPU nodes'
 NodePorts. If the nodes have several addresses, set the right one as
-**Endpoint host** under **Clusters ▸ More ▸ Edit**.
+**Endpoint host** under **Clusters ▸ More ▸ Edit**. A cluster that is not the
+one AutoTune runs in cannot reach runs by **Service name**: choose **NodePort**
+there.
 
 **Smoke test warns about *card type*.** The platform did not recognize the GPU
 model from the node's labels. Set it with **More ▸ Edit ▸ GPU type**; a

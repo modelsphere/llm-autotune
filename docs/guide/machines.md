@@ -149,6 +149,13 @@ permissions, that the node is ready with free GPUs, and that runs on it are
 reachable. Select **Probe pod** and press **Run again** to also schedule a
 small pod on the node, requesting no GPUs.
 
+The checks appear as a list right away and fill in while they run, each with
+the time it took. After the credential is accepted, the remaining checks run
+at the same time, so the test takes about as long as its slowest check. On an
+ssh machine, one ssh session answers all three checks. A check that an earlier
+failure made pointless shows as *not reached*. A probe pod that the cluster
+refuses to schedule fails at once rather than after the 40-second wait.
+
 ![Smoke test results](images/smoke-test.png)
 
 A *warn* line does not block runs. A *fail* line names what to fix.

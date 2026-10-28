@@ -36,11 +36,11 @@ from app.control.launch.base import (
     DeploymentState,
     LaunchDeferred,
     LaunchSpec,
+    SmokeSteps,
     WorkloadSpec,
     WorkloadState,
     merge_volumes,
     smoke_check,
-    smoke_result,
 )
 from app.control.launch.failures import classify_exit, classify_failure
 from app.core.config import get_settings
@@ -819,49 +819,57 @@ class SshDockerDriver(DeploymentDriver):
 
     # -- helpers -------------------------------------------------------------
 
-    def smoke_test(self, machine, probe_pod: bool = False) -> dict:
-        """ssh in, then ask docker and the driver what a launch would ask them.
-        Each step needs the one before it, so the first failure ends the test."""
-        checks: list[dict] = []
+    def smoke_test(self, machine, probe_pod: bool = False, progress=None) -> dict:
+        """ssh in, then ask docker and the driver what a launch would ask them —
+        all in ONE ssh session, since the handshake is most of the time. A
+        login that fails leaves the other two unreached; docker and the GPUs
+        are reported each on its own."""
+        steps = SmokeSteps(["ssh", "docker", "gpus"], progress)
         target = f"{machine.ssh_user}@{machine.host}:{machine.ssh_port}"
+        script = (
+            "echo __docker; docker info --format '{{.ServerVersion}}' 2>&1; echo \"__rc $?\"; "
+            "echo __gpus; nvidia-smi --query-gpu=name --format=csv,noheader 2>&1; "
+            "echo \"__rc $?\""
+        )
+        for name in ("ssh", "docker", "gpus"):
+            steps.start(name)
+        started = time.monotonic()
+        try:
+            result = self._ssh(machine, script, timeout=45)
+            out, err, code = result.stdout, result.stderr, result.returncode
+        except RuntimeError as exc:  # timed out
+            out, err, code = "", str(exc), -1
+        ms = int((time.monotonic() - started) * 1000)
+        if "__docker" not in out:
+            why = (err.strip() or f"exit {code}")[:400]
+            steps.add(smoke_check("ssh", "fail", f"cannot log in as {target}: {why}"), ms)
+            return steps.result()
+        steps.add(smoke_check("ssh", "pass", f"logged in as {target}"), ms)
 
-        def run(cmd: str) -> tuple[bool, str]:
-            """(ok, stdout) — or (False, why) when it failed or timed out."""
-            try:
-                result = self._ssh(machine, cmd, timeout=45)
-            except RuntimeError as exc:  # timed out
-                return False, str(exc)[:400]
-            if result.returncode != 0:
-                return False, (result.stderr.strip() or f"exit {result.returncode}")[:400]
-            return True, result.stdout
-
-        ok, out = run("true")
-        if not ok:
-            checks.append(smoke_check("ssh", "fail", f"cannot log in as {target}: {out}"))
-            return smoke_result(checks)
-        checks.append(smoke_check("ssh", "pass", f"logged in as {target}"))
-
-        ok, out = run("docker info --format '{{.ServerVersion}}'")
-        if not ok:
-            checks.append(smoke_check("docker", "fail", f"docker daemon not usable: {out}"))
-            return smoke_result(checks)
-        checks.append(smoke_check("docker", "pass", f"docker {out.strip()}"))
-
-        ok, out = run("nvidia-smi --query-gpu=name --format=csv,noheader")
-        if not ok:
-            checks.append(smoke_check("gpus", "fail", f"nvidia-smi failed: {out}"))
-            return smoke_result(checks)
-        names = [line.strip() for line in out.splitlines() if line.strip()]
+        parts = _marked(out)
+        docker_ok, docker_out = parts.get("docker", (False, "no answer"))
+        if docker_ok:
+            steps.add(smoke_check("docker", "pass", f"docker {docker_out.strip()}"), ms)
+        else:
+            steps.add(smoke_check(
+                "docker", "fail", f"docker daemon not usable: {docker_out.strip()[:400]}"
+            ), ms)
+        gpus_ok, gpus_out = parts.get("gpus", (False, "no answer"))
+        if not gpus_ok:
+            steps.add(
+                smoke_check("gpus", "fail", f"nvidia-smi failed: {gpus_out.strip()[:400]}"), ms
+            )
+            return steps.result()
+        names = [line.strip() for line in gpus_out.splitlines() if line.strip()]
         kinds = sorted({normalize_gpu_type(name) or name for name in names})
         seen = f"{len(names)} × {', '.join(kinds) or 'GPU'}"
         if len(names) != machine.gpu_count:
-            checks.append(smoke_check(
-                "gpus", "warn",
-                f"{seen} visible, but the platform records {machine.gpu_count}",
-            ))
+            steps.add(smoke_check(
+                "gpus", "warn", f"{seen} visible, but the platform records {machine.gpu_count}",
+            ), ms)
         else:
-            checks.append(smoke_check("gpus", "pass", f"{seen} visible"))
-        return smoke_result(checks)
+            steps.add(smoke_check("gpus", "pass", f"{seen} visible"), ms)
+        return steps.result()
 
     def probe_capacity(self, machine) -> dict:
         """The cards `nvidia-smi` sees, so nobody has to type them."""
@@ -942,3 +950,19 @@ __all__ = [
     "render_docker_command",
     "render_engine_command",
 ]
+
+
+def _marked(out: str) -> dict[str, tuple[bool, str]]:
+    """Split the smoke test's one-session output — `__<part>`, its output,
+    `__rc <code>` — into {part: (exit 0, output)}."""
+    parts: dict[str, tuple[bool, str]] = {}
+    name, lines = None, []
+    for line in out.splitlines():
+        if line.startswith("__rc ") and name:
+            parts[name] = (line[5:].strip() == "0", "\n".join(lines))
+            name, lines = None, []
+        elif line.startswith("__") and " " not in line:
+            name, lines = line[2:], []
+        elif name:
+            lines.append(line)
+    return parts

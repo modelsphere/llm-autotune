@@ -43,6 +43,8 @@ import secrets
 import shlex
 import socket
 import time
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 from app.control.engines import MODEL_MOUNT, get_adapter
@@ -52,11 +54,11 @@ from app.control.launch.base import (
     DeploymentState,
     LaunchSpec,
     MachineInfo,
+    SmokeSteps,
     WorkloadSpec,
     WorkloadState,
     merge_volumes,
     smoke_check,
-    smoke_result,
 )
 from app.control.launch.clusters import K8sClusterSettings, as_cluster, resolve_cluster
 from app.control.launch.failures import TRANSIENT_PLACEMENT_FAILURES
@@ -1531,48 +1533,80 @@ class K8sDriver(DeploymentDriver):
 
     # -- smoke test ----------------------------------------------------------
 
-    def smoke_test(self, machine: MachineInfo, probe_pod: bool = False) -> dict[str, Any]:
+    def smoke_test(
+        self, machine: MachineInfo, probe_pod: bool = False,
+        progress: Callable[[dict], None] | None = None,
+    ) -> dict[str, Any]:
         """Walk what a launch on this machine needs from the cluster: a
         transport, a credential the API server accepts, the RBAC to create the
         workload, the node(s) the selector names, an address to reach a
-        NodePort on — and, with `probe_pod`, a pod actually placed there."""
+        NodePort on — and, with `probe_pod`, a pod actually placed there.
+
+        The transport and the credential come first, since nothing else can be
+        asked without them; the rest only need the credential, so they run side
+        by side and the test takes as long as its slowest step."""
         s = self.settings
-        checks: list[dict] = []
+        steps = SmokeSteps(
+            ["cluster", "credential", "permissions", "node", "endpoint"]
+            + (["probe pod"] if probe_pod else []),
+            progress,
+        )
         where = f"cluster {s.cluster_name}, namespace {s.k8s_namespace}"
+        transport: dict[str, K8sApi] = {}
 
-        if not s.k8s_api_mode or s.k8s_api_mode == "unavailable":
-            checks.append(smoke_check(
-                "cluster", "fail",
-                f"{where}: api_mode is 'unavailable' — the platform has no way to "
-                "talk to it; set api_mode and a kubeconfig on the cluster",
-            ))
-            return smoke_result(checks)
-        try:
-            api = self.api
-        except Exception as exc:  # noqa: BLE001 — a smoke test reports, never raises
-            checks.append(smoke_check("cluster", "fail", f"{where}: transport unavailable: {exc}"))
-            return smoke_result(checks)
-        checks.append(smoke_check(
-            "cluster", "pass", f"{where} ({s.k8s_api_mode}, {s.k8s_workload_kind} workloads)"
-        ))
+        def cluster() -> dict:
+            if not s.k8s_api_mode or s.k8s_api_mode == "unavailable":
+                return smoke_check(
+                    "cluster", "fail",
+                    f"{where}: api_mode is 'unavailable' — the platform has no way to "
+                    "talk to it; set api_mode and a kubeconfig on the cluster",
+                )
+            try:
+                transport["api"] = self.api
+            except Exception as exc:  # noqa: BLE001 — a smoke test reports, never raises
+                return smoke_check("cluster", "fail", f"{where}: transport unavailable: {exc}")
+            return smoke_check(
+                "cluster", "pass", f"{where} ({s.k8s_api_mode}, {s.k8s_workload_kind} workloads)"
+            )
 
-        try:
-            pods = api.list("pods")
-        except Exception as exc:  # noqa: BLE001
-            checks.append(smoke_check("credential", "fail", _credential_problem(exc)))
-            return smoke_result(checks)
-        checks.append(smoke_check(
-            "credential", "pass",
-            f"accepted; {len(pods)} pod(s) visible in {s.k8s_namespace}",
-        ))
+        def credential() -> dict:
+            try:
+                pods = transport["api"].list("pods")
+            except Exception as exc:  # noqa: BLE001
+                return smoke_check("credential", "fail", _credential_problem(exc))
+            return smoke_check(
+                "credential", "pass", f"accepted; {len(pods)} pod(s) visible in {s.k8s_namespace}"
+            )
 
-        checks.append(self._smoke_permissions(api, probe_pod))
-        nodes, node_check = self._smoke_nodes(api, machine)
-        checks.append(node_check)
-        checks.append(self._smoke_endpoint_host(nodes))
+        if steps.run("cluster", cluster)["status"] == "fail":
+            return steps.result()
+        if steps.run("credential", credential)["status"] == "fail":
+            return steps.result()
+        api = transport["api"]
+
+        def node_then_endpoint() -> None:
+            seen: list[dict] = []
+
+            def node() -> dict:
+                nodes, check = self._smoke_nodes(api, machine)
+                seen.extend(nodes)
+                return check
+
+            steps.run("node", node)
+            steps.run("endpoint", lambda: self._smoke_endpoint_host(seen))
+
+        lanes = [
+            lambda: steps.run("permissions", lambda: self._smoke_permissions(api, probe_pod)),
+            node_then_endpoint,
+        ]
         if probe_pod:
-            checks.append(self._smoke_probe_pod(api, machine))
-        return smoke_result(checks)
+            lanes.append(
+                lambda: steps.run("probe pod", lambda: self._smoke_probe_pod(api, machine))
+            )
+        with ThreadPoolExecutor(max_workers=len(lanes)) as pool:
+            for future in [pool.submit(lane) for lane in lanes]:
+                future.result()
+        return steps.result()
 
     def _smoke_permissions(self, api: K8sApi, probe_pod: bool) -> dict:
         s = self.settings
@@ -1592,9 +1626,13 @@ class K8sDriver(DeploymentDriver):
         if probe_pod:
             needs += [("create", "pods", ""), ("delete", "pods", "")]
         missing, unknown = [], 0
-        for verb, resource, group in needs:
+        # One round trip each, so asked together rather than one after another.
+        with ThreadPoolExecutor(max_workers=len(needs)) as pool:
+            futures = [pool.submit(api.can_i, verb, resource, group)
+                       for verb, resource, group in needs]
+        for (verb, resource, group), future in zip(needs, futures, strict=True):
             try:
-                allowed = api.can_i(verb, resource, group)
+                allowed = future.result()
             except Exception as exc:  # noqa: BLE001
                 return smoke_check("permissions", "warn", f"could not ask the API server: {exc}")
             if allowed is None:
@@ -1742,13 +1780,15 @@ class K8sDriver(DeploymentDriver):
                 for cond in (pod.get("status") or {}).get("conditions") or []:
                     if cond.get("type") == "PodScheduled" and cond.get("status") == "False":
                         unschedulable = cond.get("message") or cond.get("reason") or ""
-                if time.monotonic() >= deadline:
+                # It asks for nothing, so the scheduler's no is a selector,
+                # taint or cordon — waiting out the clock will not change it.
+                if unschedulable or time.monotonic() >= deadline:
                     break
-                time.sleep(2)
+                time.sleep(1)
+            if unschedulable:
+                return smoke_check("probe pod", "fail", f"not schedulable: {unschedulable[:400]}")
             return smoke_check(
-                "probe pod", "fail",
-                f"not scheduled within {_SMOKE_POD_WAIT_SECONDS}s"
-                + (f": {unschedulable[:400]}" if unschedulable else ""),
+                "probe pod", "fail", f"not scheduled within {_SMOKE_POD_WAIT_SECONDS}s"
             )
         finally:
             try:

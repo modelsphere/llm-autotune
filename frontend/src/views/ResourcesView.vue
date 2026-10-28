@@ -8,6 +8,7 @@ import InfoHint from '../components/InfoHint.vue'
 import ClusterEndpointFields from '../components/ClusterEndpointFields.vue'
 import ClusterHealth from '../components/ClusterHealth.vue'
 import LiveWorkDialog, { type LiveRun } from '../components/LiveWorkDialog.vue'
+import SmokeTestDialog from '../components/SmokeTestDialog.vue'
 import { Lock, Warning } from '@element-plus/icons-vue'
 import { readKubeconfig } from '../utils/kubeconfig'
 import PageLoading from '../components/PageLoading.vue'
@@ -783,42 +784,12 @@ function menu(machine: Machine, command: string) {
   if (command === 'remove') return removeMachine(machine)
 }
 
-/** "Can the platform reach this machine at all?" The backend walks the path a
- *  launch takes (ssh → docker → GPUs, or credential → RBAC → node → endpoint)
- *  and stops at the first step a launch could not get past. A k8s machine may
- *  also place a throwaway pod on its node — the only way a guest credential,
- *  which cannot read nodes, can confirm the node is there. */
-type SmokeCheck = { name: string; status: string; detail: string }
-const smoke = ref<{
-  machine: Machine | null
-  pod: boolean
-  running: boolean
-  result: { ok: boolean; checks: SmokeCheck[] } | null
-  error: string
-}>({ machine: null, pod: false, running: false, result: null, error: '' })
+/** The machine smoke test (SmokeTestDialog runs it and shows its steps). */
+const smokeMachine = ref<Machine | null>(null)
 const showSmoke = ref(false)
 function openSmoke(machine: Machine) {
-  smoke.value = { machine, pod: false, running: false, result: null, error: '' }
+  smokeMachine.value = machine
   showSmoke.value = true
-  void runSmoke()
-}
-async function runSmoke() {
-  const machine = smoke.value.machine
-  if (!machine) return
-  smoke.value.running = true
-  smoke.value.result = null
-  smoke.value.error = ''
-  try {
-    const { data } = await api.post(`/machines/${machine.id}/smoke-test`, null, {
-      params: { pod: smoke.value.pod },
-      timeout: 120_000,
-    })
-    smoke.value.result = data
-  } catch (error: any) {
-    smoke.value.error = apiErrorText(error, t('resources.err.smoke'))
-  } finally {
-    smoke.value.running = false
-  }
 }
 
 /** Re-read a machine's GPU count and card type from the machine itself
@@ -1334,36 +1305,7 @@ onMounted(() => {
       </template>
     </el-dialog>
 
-    <el-dialog v-model="showSmoke" :title="`${t('resources.smokeTest')} · ${smoke.machine?.name ?? ''}`" width="640px">
-      <div v-if="smoke.running" class="muted">
-        {{ smoke.pod ? t('resources.checking40') : t('resources.checking') }}
-      </div>
-      <el-alert v-else-if="smoke.error" type="error" :closable="false" :title="smoke.error" />
-      <template v-else-if="smoke.result">
-        <el-alert v-if="smoke.result.ok" type="success" :closable="false" show-icon
-          :title="t('resources.smokeOk')"
-          style="margin-bottom: 12px" />
-        <el-alert v-else type="error" :closable="false" show-icon
-          :title="t('resources.smokeBad')"
-          style="margin-bottom: 12px" />
-        <div v-for="c in smoke.result.checks" :key="c.name" class="pf-check">
-          <el-tag size="small" :type="(checkTag[c.status] as any)" effect="plain">
-            {{ c.status }}
-          </el-tag>
-          <span class="pf-label">{{ c.name }}</span>
-          <span class="muted tiny">{{ c.detail }}</span>
-        </div>
-      </template>
-      <template #footer>
-        <el-checkbox v-if="smoke.machine?.driver === 'k8s'" v-model="smoke.pod"
-          :disabled="smoke.running" style="margin-right: 12px">
-          {{ t('resources.probePod') }}
-          <InfoHint>{{ t('resources.probePodHint') }}</InfoHint>
-        </el-checkbox>
-        <el-button :loading="smoke.running" @click="runSmoke">{{ t('resources.runAgain') }}</el-button>
-        <el-button @click="showSmoke = false">{{ t('common.close') }}</el-button>
-      </template>
-    </el-dialog>
+    <SmokeTestDialog v-model="showSmoke" :machine="smokeMachine" />
 
     <el-dialog v-model="showAddCluster" width="680px"
       :title="addStep === 'connect' ? t('resources.addCluster') : `${t('resources.gpuNodes')} · ${nodesCluster?.name ?? ''}`">
