@@ -18,6 +18,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Resources has a Machines tab and a Clusters tab.** Clusters were a dialog
+  opened from a button; they are now a tab whose cards look and work like the
+  machine cards (main action, Probe, More ▸ Edit / Remove). Cluster editing
+  opens its own dialog. Machine cards keep their buttons on the top row: name,
+  launch kind and lease state above, the rest on a smaller line below, notes
+  on their own line.
 - **Machines say how their runs launch.** Each machine card, and the machine
   dialog, shows LLMService, Deployment, TuningRun or SSH + Docker (the last
   three marked deprecated); the machine API returns it as `launch_kind`.

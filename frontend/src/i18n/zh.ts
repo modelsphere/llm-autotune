@@ -787,6 +787,7 @@ const zh: typeof en = {
     title: '机器资源',
     hint: '租用就是把机器交给平台使用：租用期间调优任务在上面运行，结束租用只会停止平台自己的 run。<br /><br />外部的机群管理系统也可以通过 API 开始和结束同样的租用，这些按钮调用的正是那些接口。',
     clusters: '集群',
+    machinesTab: '机器',
     groupMachines: '机器分组',
     addMachine: '添加机器',
     addCluster: '添加 GPU 集群',

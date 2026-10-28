@@ -2,6 +2,7 @@
 import { apiErrorText } from '../utils/apiError'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { computed, onMounted, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { api, type Cluster, type Machine, type MachineGroup, type MachineGroupPreflight, type MachineLifecycle } from '../api/client'
 import InfoHint from '../components/InfoHint.vue'
 import ClusterEndpointFields from '../components/ClusterEndpointFields.vue'
@@ -18,6 +19,15 @@ import { relativeTime } from '../utils/time'
 const { t } = useI18n()
 const auth = useAuthStore()
 const isAdmin = computed(() => auth.user?.role === 'admin')
+
+/** Machines and the clusters they land in, one tab each; the tab rides in the
+ *  URL so a link or a reload keeps it. */
+const route = useRoute()
+const router = useRouter()
+const tab = ref<'machines' | 'clusters'>(route.query.tab === 'clusters' ? 'clusters' : 'machines')
+watch(tab, (value) => {
+  router.replace({ query: { ...route.query, tab: value === 'machines' ? undefined : value } })
+})
 
 /** Reaching `window` from a template needs it bound explicitly under
  *  `<script setup>`; the component instance is not the global object. */
@@ -459,11 +469,6 @@ async function removeGroup(group: MachineGroup) {
   }
 }
 
-function openClusters() {
-  editingClusterId.value = null
-  clusterForm.value = emptyClusterForm()
-  showClusters.value = true
-}
 
 function openEditCluster(c: Cluster) {
   editingClusterId.value = c.id
@@ -506,6 +511,7 @@ async function saveCluster() {
     if (editingClusterId.value === null) await api.post('/clusters', payload)
     else await api.put(`/clusters/${editingClusterId.value}`, payload)
     ElMessage.success(t('resources.msg.saved', { name: payload.name }))
+    showClusters.value = false
     editingClusterId.value = null
     clusterForm.value = emptyClusterForm()
     await load()
@@ -794,14 +800,23 @@ onMounted(() => {
           </InfoHint>
         </h1>
       </div>
-      <div>
-        <el-button @click="openDocs">API</el-button>
-        <el-button @click="openClusters">{{ t('resources.clusters') }}</el-button>
+      <div v-if="tab === 'machines'">
+        <el-button text @click="openDocs">API</el-button>
         <el-button @click="openAddGroup">{{ t('resources.groupMachines') }}</el-button>
-        <el-button @click="openAdd">{{ t('resources.addMachine') }}</el-button>
+        <el-button type="primary" @click="openAdd">{{ t('resources.addMachine') }}</el-button>
+      </div>
+      <div v-else>
+        <el-button text @click="openDocs">API</el-button>
         <el-button v-if="isAdmin" type="primary" @click="openAddCluster">{{ t('resources.addCluster') }}</el-button>
       </div>
     </div>
+
+    <el-tabs v-model="tab" class="resource-tabs">
+      <el-tab-pane name="machines" :label="`${t('resources.machinesTab')} (${machines.length})`" />
+      <el-tab-pane name="clusters" :label="`${t('resources.clusters')} (${clusters.length})`" />
+    </el-tabs>
+
+    <template v-if="tab === 'machines'">
 
     <div v-if="groups.length" class="groups">
       <h2 class="section-title">
@@ -869,25 +884,6 @@ onMounted(() => {
             :title="`${t('resources.launchedAs')}: ${t('resources.launchKindTip')}`">
             {{ launchLook(m.launch_kind).text }}
           </el-tag>
-          <el-tag v-if="m.driver === 'k8s' && m.cluster_name" size="small" effect="plain"
-            :title="t('resources.podsLand', { name: m.cluster_name })">
-            {{ m.cluster_name }}
-          </el-tag>
-          <el-tag v-else-if="m.driver === 'k8s'" size="small" effect="plain"
-            :title="t('resources.defaultClusterTip')">
-            {{ t('resources.defaultCluster') }}
-          </el-tag>
-          <el-tag v-if="m.group" size="small" effect="plain" type="primary"
-            :title="m.group_rank === 0
-              ? t('resources.masterOf', { group: m.group })
-              : t('resources.rankOf', { group: m.group, rank: m.group_rank })">
-            {{ m.group }} · {{ m.group_rank === 0 ? 'master' : `rank ${m.group_rank}` }}
-          </el-tag>
-          <el-tag v-if="m.pool" size="small" effect="plain"
-            :title="t('resources.poolTip', { n: m.node_count, selector: m.node_selector || t('resources.anyNode'), max: m.node_gpu_max })">
-            {{ t('resources.pool', { n: m.node_count }) }}
-          </el-tag>
-          <span class="mono muted">{{ m.host }}</span>
           <el-tag :type="(leaseLook(m).type as any)" size="small">{{ leaseLook(m).text }}</el-tag>
           <el-tag v-if="stageOf(m) && (m.lease_state === 'active' || m.lease_state === 'draining')"
             size="small" effect="plain"
@@ -895,18 +891,7 @@ onMounted(() => {
             :title="t('resources.readinessTip')">
             {{ readinessLook[stageOf(m)!.readiness]?.text ?? stageOf(m)!.readiness }}
           </el-tag>
-          <span class="muted tiny">
-            {{ t('resources.cardsInUse', { busy: m.gpus_busy, n: m.gpu_count }) }}
-            <template v-if="m.gpu_type"> · {{ m.gpu_type }}</template>
-            <template v-if="m.driver === 'k8s' && m.gpu_free != null">
-              · <span :title="t('resources.freeTip')
-                + (m.capacity_checked_at ? ` (${relativeTime(m.capacity_checked_at)})` : '')">
-                {{ t('resources.freeOnCluster', { n: m.gpu_free }) }}</span>
-            </template>
-          </span>
-          <span v-if="m.notes" class="muted tiny">· {{ m.notes }}</span>
         </div>
-
         <div class="acts">
           <el-button v-if="m.lease_state !== 'active' && m.lease_state !== 'draining'"
             size="small" type="primary" @click="lease(m)">
@@ -936,6 +921,26 @@ onMounted(() => {
           </el-dropdown>
         </div>
       </div>
+
+      <div class="meta muted tiny">
+        <span>{{ t('resources.cardsInUse', { busy: m.gpus_busy, n: m.gpu_count }) }}<template
+          v-if="m.gpu_type"> · {{ m.gpu_type }}</template></span>
+        <span v-if="m.driver === 'k8s' && m.gpu_free != null" :title="t('resources.freeTip')
+          + (m.capacity_checked_at ? ` (${relativeTime(m.capacity_checked_at)})` : '')">
+          {{ t('resources.freeOnCluster', { n: m.gpu_free }) }}</span>
+        <span v-if="m.pool"
+          :title="t('resources.poolTip', { n: m.node_count, selector: m.node_selector || t('resources.anyNode'), max: m.node_gpu_max })">
+          {{ t('resources.pool', { n: m.node_count }) }}</span>
+        <span v-if="m.driver === 'k8s'" :title="m.cluster_name
+          ? t('resources.podsLand', { name: m.cluster_name }) : t('resources.defaultClusterTip')">
+          {{ m.cluster_name || t('resources.defaultCluster') }}</span>
+        <span v-if="m.host && m.host !== m.name" class="mono">{{ m.host }}</span>
+        <span v-if="m.group" :title="m.group_rank === 0
+          ? t('resources.masterOf', { group: m.group })
+          : t('resources.rankOf', { group: m.group, rank: m.group_rank })">
+          {{ m.group }} · {{ m.group_rank === 0 ? 'master' : `rank ${m.group_rank}` }}</span>
+      </div>
+      <div v-if="m.notes" class="notes muted tiny">{{ m.notes }}</div>
 
       <div v-if="m.lease_state === 'active' || m.lease_state === 'draining'" class="lease">
         <span class="muted tiny">
@@ -975,6 +980,59 @@ onMounted(() => {
       </div>
 
     </div>
+
+    </template>
+
+    <template v-else>
+    <div v-for="c in clusters" :key="c.id" class="card">
+      <div class="top">
+        <div class="who">
+          <span class="name">{{ c.name }}</span>
+          <el-tag size="small" effect="plain" :type="launchLook(c.workload_kind).type"
+            :title="t('resources.workloadKind')">
+            {{ launchLook(c.workload_kind).text }}
+          </el-tag>
+          <el-tag v-if="!c.has_kubeconfig" size="small" type="danger">
+            {{ t('resources.noCredential') }}
+          </el-tag>
+        </div>
+        <div v-if="isAdmin" class="acts">
+          <el-button size="small" type="primary" @click="openNodes(c)">{{ t('resources.nodes') }}</el-button>
+          <el-button size="small" text :loading="probingCluster === c.id"
+            @click="probeCluster(c)">{{ t('resources.probe') }}</el-button>
+          <el-dropdown trigger="click" @command="(a: any) => a === 'edit' ? openEditCluster(c) : removeCluster(c)">
+            <el-button size="small" text>{{ t('resources.more') }} ▾</el-button>
+            <template #dropdown>
+              <el-dropdown-menu>
+                <el-dropdown-item command="edit">{{ t('resources.edit') }}</el-dropdown-item>
+                <el-dropdown-item command="remove" class="risky">{{ t('resources.remove') }}</el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
+        </div>
+      </div>
+
+      <div class="meta muted tiny">
+        <span>{{ t('resources.nMachines', { n: c.machine_count ?? 0 }) }}</span>
+        <span class="mono">{{ c.namespace }}</span>
+        <span class="mono">{{ c.gpu_resource }}</span>
+        <span>{{ c.api_mode }}</span>
+        <span v-if="c.node_host" class="mono">endpoint {{ c.node_host }}</span>
+        <span v-if="c.runtime_class" class="mono">runtimeClass {{ c.runtime_class }}</span>
+        <span v-if="c.last_probe_at">{{ t('resources.probedAgo', { ago: relativeTime(c.last_probe_at) }) }}</span>
+      </div>
+      <div v-if="c.notes" class="notes muted tiny">{{ c.notes }}</div>
+      <div v-if="c.last_probe?.warnings?.length" class="warnings">
+        <span v-for="w in c.last_probe.warnings" :key="w" class="muted tiny">· {{ w }}</span>
+      </div>
+    </div>
+    <div v-if="!clusters.length" class="empty muted">
+      {{ t('resources.noClusters') }}
+      <el-button v-if="isAdmin" link type="primary"
+        @click="openAddCluster">{{ t('resources.addACluster') }}</el-button>
+    </div>
+
+    </template>
 
     <el-dialog v-model="showAdd" :title="editingId === null ? t('resources.addMachine') : t('resources.editMachine')"
       width="480px">
@@ -1361,56 +1419,8 @@ onMounted(() => {
       </template>
     </el-dialog>
 
-    <el-dialog v-model="showClusters" :title="t('resources.k8sClusters')" width="680px">
-      <div v-for="c in clusters" :key="c.id" class="card" style="margin-bottom: 8px">
-        <div class="top">
-          <div class="who">
-            <span class="name">{{ c.name }}</span>
-            <el-tag size="small" effect="plain">{{ c.namespace }}</el-tag>
-            <el-tag size="small" effect="plain"
-              :type="c.workload_kind === 'custom' ? 'warning' : 'info'">
-              {{ c.workload_kind }}
-            </el-tag>
-            <el-tag size="small" effect="plain" type="info">{{ c.api_mode }}</el-tag>
-            <el-tag v-if="c.machine_count" size="small" effect="plain" type="success">
-              {{ t('resources.nMachines', { n: c.machine_count }) }}
-            </el-tag>
-            <el-tag v-if="!c.has_kubeconfig" size="small" effect="plain" type="danger">
-              {{ t('resources.noCredential') }}
-            </el-tag>
-          </div>
-          <div v-if="isAdmin" class="acts">
-            <el-button size="small" type="primary" plain @click="openNodes(c)">{{ t('resources.nodes') }}</el-button>
-            <el-button size="small" :loading="probingCluster === c.id"
-              @click="probeCluster(c)">{{ t('resources.probe') }}</el-button>
-            <el-button size="small" @click="openEditCluster(c)">{{ t('resources.edit') }}</el-button>
-            <el-button size="small" text class="risky" @click="removeCluster(c)">
-              {{ t('resources.remove') }}
-            </el-button>
-          </div>
-        </div>
-        <div class="muted tiny mono">
-          {{ c.gpu_resource
-          }}<template v-if="c.node_host"> · endpoint {{ c.node_host }}</template
-          ><template v-if="c.runtime_class"> · runtimeClass {{ c.runtime_class }}</template>
-          · shm {{ c.shm_size_mb }}Mi
-        </div>
-        <div v-if="c.last_probe?.warnings?.length" class="warnings">
-          <span v-for="w in c.last_probe.warnings" :key="w" class="muted tiny">· {{ w }}</span>
-        </div>
-        <div v-else-if="c.last_probe_at" class="muted tiny">
-          {{ t('resources.probedAgo', { ago: relativeTime(c.last_probe_at) }) }}
-        </div>
-      </div>
-      <div v-if="!clusters.length" class="empty muted">
-        {{ t('resources.noClusters') }}
-        <el-button v-if="isAdmin" link type="primary"
-          @click="showClusters = false; openAddCluster()">{{ t('resources.addACluster') }}</el-button>
-      </div>
-
+    <el-dialog v-model="showClusters" :title="t('resources.editName', { name: clusterForm.name })" width="680px">
       <template v-if="editingClusterId !== null">
-      <el-divider />
-      <h3 class="muted">{{ t('resources.editName', { name: clusterForm.name }) }}</h3>
       <el-form label-position="top">
         <div class="grid-2">
           <el-form-item :label="t('common.name')">
@@ -1641,13 +1651,13 @@ onMounted(() => {
   justify-content: space-between;
   align-items: center;
   gap: 16px;
-  flex-wrap: wrap;
 }
 .who {
   display: flex;
   align-items: center;
   gap: 10px;
   flex-wrap: wrap;
+  min-width: 0;
 }
 .name {
   font-weight: 600;
@@ -1657,9 +1667,24 @@ onMounted(() => {
   display: flex;
   align-items: center;
   gap: 8px;
+  flex-shrink: 0;
 }
 .tiny {
   font-size: 11.5px;
+}
+/* Everything past the name and state, on one quiet line under the top row;
+   notes get a line of their own so they never push the buttons down. */
+.meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  margin-top: 6px;
+}
+.notes {
+  margin-top: 2px;
+}
+.resource-tabs {
+  margin-bottom: 4px;
 }
 
 /* The sequence as a position rather than a paragraph. */

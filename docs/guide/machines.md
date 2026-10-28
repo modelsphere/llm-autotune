@@ -53,17 +53,18 @@ the new machines are leased immediately.
 
 ![Registering a cluster's GPU nodes](images/add-cluster-nodes.png)
 
-### The Clusters dialog
+### The Clusters tab
 
-**Clusters** lists the added clusters.
-
-![The Clusters dialog](images/clusters-dialog.png)
+The **Clusters** tab, next to **Machines**, lists the added clusters. Each card
+shows the cluster's name and how it launches runs (**LLMService**, or a
+deprecated kind), with its machines, namespace, GPU resource and last probe on
+the line below.
 
 - **Nodes** registers nodes added to the cluster since, and lists registered
   machines whose node no longer exists.
 - **Probe** checks that the credential still works and refreshes the cluster's
   details.
-- **Edit** changes its settings, including some available only here:
+- **More ▸ Edit** changes its settings, including some available only here:
   - **Endpoint host**, the address runs are reached on (by default the node's
     own address);
   - the size of `/dev/shm` in engine pods;
@@ -72,7 +73,7 @@ the new machines are leased immediately.
 
   Leave **Kubeconfig** empty to keep the stored one, or paste a new one to
   replace it.
-- **Remove** deletes the cluster and its stored kubeconfig from the platform.
+- **More ▸ Remove** deletes the cluster and its stored kubeconfig from the platform.
   Its machines must be removed (or moved to another cluster) first. Nothing on
   the cluster changes; `deploy/gpu-cluster.sh remove` revokes the account
   there.
@@ -82,16 +83,19 @@ the new machines are leased immediately.
 ![A leased machine](images/machine-leased.png)
 
 - **Name.** For a cluster node, the node's name.
-- **Tags:** `k8s` and the cluster name for a cluster node, and the lease
-  state: *not leased*, *leased*, *running* (runs in progress) or *handing
+- **Tags:** how its runs launch (**LLMService**; **Deployment**, **TuningRun**
+  and **SSH + Docker** are deprecated), and the lease state: *not leased*, *leased*, *running* (runs in progress) or *handing
   back*. While leased, also the readiness reported to the lease API: *idle*,
   *busy* or *returnable*.
-- **Cards in use**, out of the machine's total, and the GPU type when known.
+- **The line below** holds the rest, in small type. **Cards in use**, out of
+  the machine's total, and the GPU type when known.
   On a cluster, also the cards **free on the cluster**: those no pod holds, on
   nodes that take new pods. It needs the platform to read pods in every
   namespace, which is off by default (`gpuCluster.countFreeCards` in the chart,
   `gpu-cluster.sh --count-free-cards`); without it the count is not shown.
-- **pool · N nodes** for a node pool.
+  Then **pool · N nodes** for a node pool, the cluster's name, the host and
+  the node group, when they apply.
+- **Notes**, on a line of their own.
 
 The track below shows the lease stage: **Leased**, **Running campaigns**,
 **Handed back**. The sentence under it describes the current state; its **?**

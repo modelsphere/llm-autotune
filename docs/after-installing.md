@@ -156,7 +156,7 @@ GPU cluster; set **Endpoint: nodeport** when they run elsewhere. The
 flags and env only, not pd or chart values, and are no longer extended.
 
 For engines reached over the public network with the deprecated
-**deployment** kind, in **Add GPU cluster** or **Clusters ▸ Edit**, set **Service
+**deployment** kind, in **Add GPU cluster** or **Clusters ▸ More ▸ Edit**, set **Service
 public IP / hostname** to a node address reachable by both the AutoTune worker
 and LLMBench. Enter only the host, without `http://`, a port or a path; the API
 server address in the kubeconfig is not necessarily a service entry point.
@@ -185,7 +185,7 @@ A run mounts the model weights from its node as a hostPath at the campaign's
 model path, so a campaign uses the machines (nodes) that hold the weights.
 Engine images that need credentials use the cluster's **Image pull secrets**;
 nodes with additional taints need **Extra tolerations** (both under
-**Advanced** when adding the cluster, or **Clusters ▸ Edit**).
+**Advanced** when adding the cluster, or **Clusters ▸ More ▸ Edit**).
 
 The UI shows each run's engine log and each policy's log: live from the
 cluster while the container runs, and the end of the log, stored in the

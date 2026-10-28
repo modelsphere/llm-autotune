@@ -799,6 +799,7 @@ export default {
     title: 'Resources',
     hint: 'Leasing hands a machine to the platform, free: campaigns run on it until the lease ends, and ending it stops only the platform\'s own runs.<br /><br />The same lease can be started and ended by an external fleet manager over the API — these buttons call exactly those endpoints.',
     clusters: 'Clusters',
+    machinesTab: 'Machines',
     groupMachines: 'Group machines',
     addMachine: 'Add machine',
     addCluster: 'Add GPU cluster',
