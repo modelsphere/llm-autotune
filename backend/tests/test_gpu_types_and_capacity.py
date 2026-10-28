@@ -19,7 +19,8 @@ def _node(name: str, product: str | None, gpus: int) -> dict:
     return {
         "metadata": {"name": name, "labels": labels},
         # Real k8s reports allocatable as a string ("8"); the reader coerces.
-        "status": {"allocatable": {"nvidia.com/gpu": str(gpus)}},
+        "status": {"allocatable": {"nvidia.com/gpu": str(gpus)},
+                   "conditions": [{"type": "Ready", "status": "True"}]},
     }
 
 
