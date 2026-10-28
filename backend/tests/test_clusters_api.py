@@ -127,6 +127,21 @@ async def test_machine_carries_its_cluster(client):
     assert listed[0]["cluster_name"] == "gpu-cluster-a"
 
 
+async def test_a_k8s_machine_says_how_its_runs_launch(client):
+    """The machine list shows how a machine is backed: its cluster's workload
+    kind, or the platform default's for a k8s machine with no cluster."""
+    created = await _add(client)
+    async with client.factory() as session:
+        session.add(Machine(name="on-cluster", host="k8s", driver="k8s",
+                            cluster_id=created["id"], gpu_count=8))
+        session.add(Machine(name="on-default", host="k8s", driver="k8s", gpu_count=8))
+        session.add(Machine(name="by-ssh", host="10.0.0.1", gpu_count=8))
+        await session.commit()
+    listed = {m["name"]: m["launch_kind"] for m in (await client.get("/api/machines")).json()}
+    assert listed == {"on-cluster": "deployment", "on-default": "llmservice",
+                      "by-ssh": "ssh_docker"}
+
+
 async def test_delete_refused_while_a_machine_names_the_cluster(client):
     created = await _add(client)
     await client.post(
@@ -217,6 +232,7 @@ async def test_a_machine_row_defaults_to_the_default_cluster(client):
     ).json()
     assert machine["cluster_id"] is None
     assert machine["cluster_name"] == ""
+    assert machine["launch_kind"] == "ssh_docker"
 
     async with client.factory() as session:
         assert (await session.get(Machine, 1)).cluster_id is None

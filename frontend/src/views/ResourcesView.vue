@@ -56,6 +56,30 @@ const form = ref(emptyForm())
 /** null = the dialog is adding; a number = editing that machine. */
 const editingId = ref<number | null>(null)
 
+/** A launch kind as a tag: LLMService is current, the rest are deprecated. */
+function launchLook(kind: string): { text: string; type: 'success' | 'warning' } {
+  const text = ({
+    llmservice: 'LLMService',
+    deployment: 'Deployment',
+    custom: 'TuningRun',
+    ssh_docker: 'SSH + Docker',
+  } as Record<string, string>)[kind] ?? kind
+  return kind === 'llmservice'
+    ? { text, type: 'success' }
+    : { text: `${text} ${t('resources.wkDeprecated')}`, type: 'warning' }
+}
+
+/** What the machine dialog would launch with, as it is filled in now. null =
+ *  the platform-default cluster, whose kind only the API knows. */
+const formLaunchKind = computed<string | null>(() => {
+  if (form.value.driver !== 'k8s') return 'ssh_docker'
+  if (form.value.cluster_id !== null) {
+    return clusters.value.find((c) => c.id === form.value.cluster_id)?.workload_kind ?? null
+  }
+  const editing = machines.value.find((m) => m.id === editingId.value)
+  return editing && editing.driver === 'k8s' && editing.cluster_id === null ? editing.launch_kind : null
+})
+
 /** -- node groups ----------------------------------------------------------
  *
  * A group is a named topology over leased machines, not a reservation: forming
@@ -841,7 +865,10 @@ onMounted(() => {
       <div class="top">
         <div class="who">
           <span class="name">{{ m.name }}</span>
-          <el-tag v-if="m.driver === 'k8s'" size="small" effect="plain" type="warning">k8s</el-tag>
+          <el-tag v-if="m.launch_kind" size="small" effect="plain" :type="launchLook(m.launch_kind).type"
+            :title="`${t('resources.launchedAs')}: ${t('resources.launchKindTip')}`">
+            {{ launchLook(m.launch_kind).text }}
+          </el-tag>
           <el-tag v-if="m.driver === 'k8s' && m.cluster_name" size="small" effect="plain"
             :title="t('resources.podsLand', { name: m.cluster_name })">
             {{ m.cluster_name }}
@@ -979,6 +1006,16 @@ onMounted(() => {
             <el-option v-for="c in clusters" :key="c.id"
               :label="`${c.name} · ${c.namespace} · ${c.workload_kind}`" :value="c.id" />
           </el-select>
+        </el-form-item>
+        <el-form-item>
+          <template #label>
+            {{ t('resources.launchedAs') }}
+            <InfoHint><span>{{ t('resources.launchKindTip') }}</span></InfoHint>
+          </template>
+          <el-tag v-if="formLaunchKind" size="small" effect="plain" :type="launchLook(formLaunchKind).type">
+            {{ launchLook(formLaunchKind).text }}
+          </el-tag>
+          <span v-else class="muted tiny">{{ t('resources.launchDefaultCluster') }}</span>
         </el-form-item>
         <el-form-item v-if="form.driver !== 'k8s'" :label="t('resources.host')">
           <el-input v-model="form.host" class="mono" placeholder="10.0.0.24" />

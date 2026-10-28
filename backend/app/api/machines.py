@@ -71,31 +71,42 @@ def _machine_out(
     machine: Machine,
     membership: tuple[str, int] | None = None,
     busy: int = 0,
-    cluster_name: str = "",
+    clusters: dict[int, tuple[str, str]] | None = None,
 ) -> MachineOut:
     name, rank = membership or ("", None)
+    cluster_name, kind = (clusters or {}).get(machine.cluster_id or 0, ("", ""))
+    if machine.driver == "k8s":
+        launch_kind = kind or get_settings().k8s_workload_kind
+    else:
+        launch_kind = "ssh_docker"
     return MachineOut.model_validate(machine).model_copy(
         update={"gpus_busy": busy, "group": name, "group_rank": rank,
-                "cluster_name": cluster_name, "pool": is_node_pool(machine)}
+                "cluster_name": cluster_name, "launch_kind": launch_kind,
+                "pool": is_node_pool(machine)}
     )
 
 
-async def _cluster_names(session: AsyncSession, cluster_ids: list[int | None]) -> dict[int, str]:
-    """`cluster_id -> name`, for the machine list. A machine whose cluster_id is
-    NULL is on the platform default cluster and gets an empty name."""
+async def _clusters(
+    session: AsyncSession, cluster_ids: list[int | None]
+) -> dict[int, tuple[str, str]]:
+    """`cluster_id -> (name, workload kind)`, for the machine list. A machine
+    whose cluster_id is NULL is on the platform default cluster and gets an
+    empty name."""
     ids = sorted({cid for cid in cluster_ids if cid})
     if not ids:
         return {}
     rows = (
-        await session.execute(select(Cluster.id, Cluster.name).where(Cluster.id.in_(ids)))
+        await session.execute(
+            select(Cluster.id, Cluster.name, Cluster.workload_kind).where(Cluster.id.in_(ids))
+        )
     ).all()
-    return {cid: name for cid, name in rows}
+    return {cid: (name, kind or "") for cid, name, kind in rows}
 
 
 async def _one_out(session: AsyncSession, machine: Machine) -> MachineOut:
     membership = (await _group_fields(session, [machine.id])).get(machine.id)
-    names = await _cluster_names(session, [machine.cluster_id])
-    return _machine_out(machine, membership, cluster_name=names.get(machine.cluster_id or 0, ""))
+    clusters = await _clusters(session, [machine.cluster_id])
+    return _machine_out(machine, membership, clusters=clusters)
 
 
 @router.get("", response_model=list[MachineOut])
@@ -121,11 +132,9 @@ async def list_machines(
         if node.machine_id is not None:
             busy[node.machine_id] = busy.get(node.machine_id, 0) + len(node.gpu_indices or [])
     membership = await _group_fields(session, [m.id for m in machines])
-    cluster_names = await _cluster_names(session, [m.cluster_id for m in machines])
+    clusters = await _clusters(session, [m.cluster_id for m in machines])
     return [
-        _machine_out(
-            m, membership.get(m.id), busy.get(m.id, 0), cluster_names.get(m.cluster_id or 0, "")
-        )
+        _machine_out(m, membership.get(m.id), busy.get(m.id, 0), clusters)
         for m in machines
     ]
 

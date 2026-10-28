@@ -141,6 +141,9 @@ class MachineOut(BaseModel):
     cluster_id: int | None = None
     # Resolved from the clusters table for display; empty = the default cluster.
     cluster_name: str = ""
+    # How runs on this machine are launched: the cluster's workload kind
+    # (llmservice, deployment, custom) for a k8s machine, else ssh_docker.
+    launch_kind: str = ""
     node_selector: str
     data_host: str = ""
     nccl_ifname: str = ""

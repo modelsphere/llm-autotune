@@ -160,17 +160,21 @@ def _production_configs(campaign, rows: list[tuple[Any, Any, Any]]) -> list[dict
     """Production's config, as the campaign's candidates spell it: whatever its
     flagged baseline candidates carry. A policy campaign that has not validated
     yet has none, and its production is the campaign's base (prune_inactive
-    gives it the canonical form a policy's configs take)."""
+    gives it the canonical form a policy's configs take).
+
+    A recipe campaign's production is the recipe as written: no changes, the
+    base alone, which is often the empty config."""
+    recipe = bool(getattr(campaign, "recipe", None))
     configs = [
         dict(candidate.config or {})
         for _run, candidate, _result in rows
-        if is_baseline_candidate(candidate) and candidate.config
+        if is_baseline_candidate(candidate) and (candidate.config or recipe)
         and not is_baseline_config(candidate.config)
     ]
     if not configs and getattr(campaign, "policy_id", None) is not None:
         space = campaign.search_space or {}
-        if space.get("base"):
-            configs.append(prune_inactive(dict(space["base"]), space))
+        if space.get("base") or recipe:
+            configs.append(prune_inactive(dict(space.get("base") or {}), space))
     return configs
 
 

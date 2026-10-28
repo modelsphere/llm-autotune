@@ -1048,11 +1048,17 @@ const configRows = computed(() => {
       value: learnedRunLength(c),
       hint: `learned from this campaign's runs; capped at ${c.max_run_minutes} min`,
     },
-    {
-      label: 'Production reference',
-      value: c.run_baseline_canary ? 'measured' : 'not measured',
-      hint: "the recorded baseline config, launched and benchmarked like a candidate",
-    },
+    Object.keys(c.recipe ?? {}).length
+      ? {
+          label: 'Production reference',
+          value: 'the recipe as written',
+          hint: 'runs of the unchanged recipe are the baseline every change is compared to',
+        }
+      : {
+          label: 'Production reference',
+          value: c.run_baseline_canary ? 'measured' : 'not measured',
+          hint: "the recorded baseline config, launched and benchmarked like a candidate",
+        },
     {
       label: 'Machine sharing',
       value: c.share_machine ? 'yes' : 'no — one run owns the machine',
@@ -1770,7 +1776,8 @@ onMounted(() => {
           <InfoHint>Flags production's recorded baseline sets that this campaign never
             sets.</InfoHint>
         </div>
-        <pre class="mono block">{{ parity?.missing?.length
+        <pre v-if="hasRecipe" class="mono block">none: the recipe is production's config</pre>
+        <pre v-else class="mono block">{{ parity?.missing?.length
           ? parity.missing.map((m) => `${m.flag}: ${m.production}`).join('\n')
           : (parity?.baseline_id ? 'none' : 'no baseline recorded for this model') }}</pre>
 

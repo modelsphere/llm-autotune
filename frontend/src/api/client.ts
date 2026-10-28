@@ -72,6 +72,9 @@ export interface Machine {
   cluster_id: number | null
   /** The cluster's name for display; '' = the default cluster. */
   cluster_name: string
+  /** How runs here are launched: llmservice, deployment or custom (the
+   *  cluster's workload kind) for k8s, ssh_docker otherwise. */
+  launch_kind: string
 }
 
 /** A Kubernetes GPU cluster the platform may launch onto. The kubeconfig is

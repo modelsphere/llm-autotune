@@ -18,6 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Machines say how their runs launch.** Each machine card, and the machine
+  dialog, shows LLMService, Deployment, TuningRun or SSH + Docker (the last
+  three marked deprecated); the machine API returns it as `launch_kind`.
+
 - **Runs as LLMServices.** A cluster set to `workload_kind: llmservice`
   launches every run as an LLMService ([llm-operator](https://github.com/modelsphere/llm-operator)):
   the sglang or vllm chart installed with the run's configuration, the object
@@ -202,6 +206,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `reports.sections` (above the list), so a plugin can write reports from there.
 
 ### Fixed
+
+- **A recipe campaign's baseline.** Runs of the unchanged recipe (a policy's
+  anchor sends the empty config) now count as the production baseline, so the
+  board marks them and every other run gets its ratio to them. The campaign
+  overview says the recipe is the production reference.
 
 - **Publish to catalog** refused a model the catalog already has when the
   export made a new variant its default: the dry run checks the metadata
