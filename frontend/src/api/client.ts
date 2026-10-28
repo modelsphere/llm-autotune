@@ -19,6 +19,43 @@ api.interceptors.response.use(
   },
 )
 
+/** POST and read the answer as it arrives, one JSON object per line
+ *  (application/x-ndjson): for long checks that report as they go. Rejects
+ *  with the server's message on an error status. */
+export async function postLines(
+  url: string, onEvent: (event: any) => void, signal?: AbortSignal,
+): Promise<void> {
+  const token = localStorage.getItem('autotune_token')
+  const response = await fetch(`/api${url}`, {
+    method: 'POST',
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    signal,
+  })
+  if (!response.ok || !response.body) {
+    if (response.status === 401 && location.pathname !== '/login') {
+      localStorage.removeItem('autotune_token')
+      location.href = '/login'
+    }
+    let detail = `${response.status} ${response.statusText}`
+    try {
+      const body = await response.json()
+      detail = typeof body.detail === 'string' ? body.detail : JSON.stringify(body.detail)
+    } catch { /* not JSON: keep the status line */ }
+    throw new Error(detail)
+  }
+  const reader = response.body.pipeThrough(new TextDecoderStream()).getReader()
+  let pending = ''
+  for (;;) {
+    const { value, done } = await reader.read()
+    if (done) break
+    pending += value
+    const lines = pending.split('\n')
+    pending = lines.pop() ?? ''
+    for (const line of lines) if (line.trim()) onEvent(JSON.parse(line))
+  }
+  if (pending.trim()) onEvent(JSON.parse(pending))
+}
+
 // -- typed helpers -----------------------------------------------------------
 
 export interface Machine {

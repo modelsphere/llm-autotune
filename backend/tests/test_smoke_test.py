@@ -106,8 +106,11 @@ def test_a_rejected_credential_stops_the_test_and_says_what_to_fix():
     api.pods_error = K8sError("client list pods failed: Unauthorized")
     result = _driver(api, k8s_node_host="10.0.0.84").smoke_test(_machine())
     assert result["ok"] is False
-    assert [c["name"] for c in result["checks"]] == ["cluster", "credential"]
-    assert "fresh kubeconfig" in result["checks"][-1]["detail"]
+    checks = _by_name(result)
+    assert "fresh kubeconfig" in checks["credential"]["detail"]
+    # The rest need the credential: listed as not reached, never asked.
+    assert {checks[n]["status"] for n in ("permissions", "node", "endpoint")} == {"skip"}
+    assert "not reached" in checks["node"]["detail"]
 
 
 def test_an_unconfigured_cluster_fails_first():
@@ -230,15 +233,23 @@ def test_an_unschedulable_probe_pod_fails_with_the_schedulers_reason():
 # -- ssh_docker -----------------------------------------------------------------
 
 
-def _ssh_driver(monkeypatch, answers: dict[str, tuple[int, str, str]]):
+def _ssh_driver(monkeypatch, rc: int, out: str, err: str = ""):
+    """A box whose ONE ssh session answers (rc, stdout, stderr)."""
+    sessions = []
+
     def fake(self, machine, cmd, timeout=60):
-        for prefix, (rc, out, err) in answers.items():
-            if cmd.startswith(prefix):
-                return subprocess.CompletedProcess(cmd, rc, out, err)
-        raise AssertionError(f"unexpected ssh {cmd!r}")
+        sessions.append(cmd)
+        return subprocess.CompletedProcess(cmd, rc, out, err)
 
     monkeypatch.setattr(SshDockerDriver, "_ssh", fake)
-    return SshDockerDriver()
+    driver = SshDockerDriver()
+    driver.sessions = sessions
+    return driver
+
+
+def _answers(docker=(0, "27.1.1"), gpus=(0, "NVIDIA H100 80GB HBM3\n" * 8)) -> str:
+    return (f"__docker\n{docker[1]}\n__rc {docker[0]}\n"
+            f"__gpus\n{gpus[1]}\n__rc {gpus[0]}\n")
 
 
 def _box(**over) -> MachineInfo:
@@ -246,30 +257,73 @@ def _box(**over) -> MachineInfo:
 
 
 def test_ssh_failure_stops_the_test(monkeypatch):
-    driver = _ssh_driver(monkeypatch, {"true": (255, "", "Permission denied (publickey)")})
+    driver = _ssh_driver(monkeypatch, 255, "", "Permission denied (publickey)")
     result = driver.smoke_test(_box())
     assert result["ok"] is False
-    assert [c["name"] for c in result["checks"]] == ["ssh"]
-    assert "Permission denied" in result["checks"][0]["detail"]
+    checks = _by_name(result)
+    assert "Permission denied" in checks["ssh"]["detail"]
+    assert [checks[n]["status"] for n in ("docker", "gpus")] == ["skip", "skip"]
 
 
-def test_a_healthy_box_passes_every_step(monkeypatch):
-    driver = _ssh_driver(monkeypatch, {
-        "true": (0, "", ""),
-        "docker info": (0, "27.1.1\n", ""),
-        "nvidia-smi": (0, "NVIDIA H100 80GB HBM3\n" * 8, ""),
-    })
+def test_a_healthy_box_passes_every_step_in_one_session(monkeypatch):
+    driver = _ssh_driver(monkeypatch, 0, _answers())
     result = driver.smoke_test(_box())
     assert result["ok"] is True
+    assert _by_name(result)["docker"]["detail"] == "docker 27.1.1"
     assert _by_name(result)["gpus"]["detail"] == "8 × H100 visible"
+    assert len(driver.sessions) == 1
+
+
+def test_docker_and_gpus_are_reported_each_on_its_own(monkeypatch):
+    driver = _ssh_driver(monkeypatch, 0, _answers(docker=(1, "permission denied on the socket")))
+    checks = _by_name(driver.smoke_test(_box()))
+    assert checks["docker"]["status"] == "fail"
+    assert "permission denied" in checks["docker"]["detail"]
+    assert checks["gpus"]["status"] == "pass"
 
 
 def test_fewer_gpus_than_recorded_warns(monkeypatch):
-    driver = _ssh_driver(monkeypatch, {
-        "true": (0, "", ""),
-        "docker info": (0, "27.1.1\n", ""),
-        "nvidia-smi": (0, "NVIDIA H100 80GB HBM3\n" * 7, ""),
-    })
+    driver = _ssh_driver(monkeypatch, 0, _answers(gpus=(0, "NVIDIA H100 80GB HBM3\n" * 7)))
     check = _by_name(driver.smoke_test(_box()))["gpus"]
     assert check["status"] == "warn"
     assert "records 8" in check["detail"]
+
+
+def test_progress_hears_the_plan_then_each_step(monkeypatch):
+    events = []
+    driver = _ssh_driver(monkeypatch, 0, _answers())
+    driver.smoke_test(_box(), progress=events.append)
+    assert events[0] == {"event": "plan", "steps": ["ssh", "docker", "gpus"]}
+    assert [e["name"] for e in events if e["event"] == "step"] == ["ssh", "docker", "gpus"]
+    assert all("ms" in e for e in events if e["event"] == "step")
+
+
+def test_k8s_steps_after_the_credential_run_side_by_side():
+    """permissions, node→endpoint and the probe pod only need the credential:
+    one slow step no longer makes the others wait."""
+    import threading
+
+    api = SmokeApi()
+    api.nodes = [_node()]
+    gate = threading.Barrier(2, timeout=5)
+    real_can_i = api.can_i
+
+    def can_i(verb, resource, group=""):
+        if verb == "get" and resource == "pods/log":
+            gate.wait()  # held until the node lane has started too
+        return real_can_i(verb, resource, group)
+
+    def nodes(resource, label_selector=""):
+        if resource == "nodes":
+            gate.wait()
+            return list(api.nodes)
+        return [{}, {}]
+
+    api.can_i = can_i
+    api.list = nodes
+    events = []
+    result = _driver(api, k8s_node_host="10.0.0.81").smoke_test(_machine(), progress=events.append)
+    assert result["ok"] is True
+    assert [c["name"] for c in result["checks"]] == [
+        "cluster", "credential", "permissions", "node", "endpoint"]
+    assert events[0]["event"] == "plan"

@@ -27,6 +27,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The smoke test shows its progress and is faster.** The dialog lists every
+  check as soon as the test starts, and each one fills in as it finishes, with
+  its time. After the credential, the cluster checks run at the same time (and
+  the permission questions all at once), so the test takes as long as its
+  slowest check. An ssh machine answers all three checks over one ssh session.
+  A probe pod the scheduler refuses fails at once instead of after 40 s.
+  `POST /machines/{id}/smoke-test?stream=true` sends the steps as NDJSON; the
+  plain answer is unchanged.
+
 - **A cluster knows whether it is AutoTune's own.** Told apart by its
   certificate authority (the kubeconfig's against the one mounted into
   AutoTune's pod), shown on the cluster card and in its form. A run on another

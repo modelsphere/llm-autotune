@@ -222,7 +222,7 @@ async def test_smoke_test_reports_the_drivers_checks_and_an_unset_card_type(clie
 
     calls = []
 
-    def fake(self, machine, probe_pod=False):
+    def fake(self, machine, probe_pod=False, progress=None):
         calls.append((machine.name, probe_pod))
         return {"supported": True, "ok": True,
                 "checks": [{"name": "ssh", "status": "pass", "detail": "logged in"}]}
@@ -243,7 +243,7 @@ async def test_smoke_test_reports_the_drivers_checks_and_an_unset_card_type(clie
 async def test_a_crashing_smoke_test_is_a_failed_report_not_a_500(client, monkeypatch):
     from app.control.launch.ssh_docker import SshDockerDriver
 
-    def boom(self, machine, probe_pod=False):
+    def boom(self, machine, probe_pod=False, progress=None):
         raise RuntimeError("kaboom")
 
     monkeypatch.setattr(SshDockerDriver, "smoke_test", boom)
@@ -252,3 +252,31 @@ async def test_a_crashing_smoke_test_is_a_failed_report_not_a_500(client, monkey
     assert resp.status_code == 200
     assert resp.json()["ok"] is False
     assert "kaboom" in resp.json()["checks"][0]["detail"]
+
+
+async def test_a_streamed_smoke_test_sends_each_step_then_the_report(client, monkeypatch):
+    import json
+
+    from app.control.launch.base import SmokeSteps, smoke_check
+    from app.control.launch.ssh_docker import SshDockerDriver
+
+    def fake(self, machine, probe_pod=False, progress=None):
+        steps = SmokeSteps(["ssh", "docker"], progress)
+        steps.run("ssh", lambda: smoke_check("ssh", "pass", "logged in"))
+        steps.run("docker", lambda: smoke_check("docker", "fail", "no daemon"))
+        return steps.result()
+
+    monkeypatch.setattr(SshDockerDriver, "smoke_test", fake)
+    m = await _machine(client, gpu_type="")
+    resp = await client.post(f"/api/machines/{m['id']}/smoke-test?stream=true")
+    assert resp.headers["content-type"].startswith("application/x-ndjson")
+    assert resp.headers["x-accel-buffering"] == "no"
+    events = [json.loads(line) for line in resp.text.splitlines()]
+    assert events[0] == {"event": "plan", "steps": ["ssh", "docker"]}
+    assert [(e["event"], e.get("name")) for e in events[1:-1]] == [
+        ("start", "ssh"), ("step", "ssh"), ("start", "docker"), ("step", "docker"),
+        ("step", "card type"),
+    ]
+    done = events[-1]
+    assert done["event"] == "done" and done["ok"] is False and done["machine"] == "node-1"
+    assert [c["name"] for c in done["checks"]] == ["ssh", "docker", "card type"]
