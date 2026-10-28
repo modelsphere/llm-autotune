@@ -74,6 +74,19 @@ class ClusterIn(BaseModel):
         return v.strip()
 
 
+class LocalityIn(BaseModel):
+    """A kubeconfig not saved yet, to tell where its cluster is."""
+
+    kubeconfig: str = ""
+    context: str = ""
+    in_cluster: bool = False
+
+
+class LocalityOut(BaseModel):
+    # True: the cluster AutoTune runs in; False: another one; None: unknown.
+    same_cluster: bool | None
+
+
 class RegisterNodes(BaseModel):
     """GPU nodes of a cluster to register as machines, by hostname label."""
 

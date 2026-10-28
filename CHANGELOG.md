@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Cluster forms say less and show where the cluster is.** A tag next to
+  **Reach runs by** reads *AutoTune's cluster*, *External cluster* or
+  *Location unknown*, as soon as a kubeconfig is pasted (`POST
+  /clusters/locality`). On an external cluster, **Service name** is shown
+  locked and NodePort is picked. Hints moved from lines under the fields into
+  hover tips. The edit dialog keeps name, namespace, kubeconfig, how runs are
+  reached and notes; everything else is under **Advanced**. The cluster card
+  carries the same tag.
+
 - **The model load limit is a campaign setting, 2 hours by default.** How
   long a started engine may take to answer before its run fails as
   `ready_timeout` is now `ready_timeout_minutes` on the campaign (the form's

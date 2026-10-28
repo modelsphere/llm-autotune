@@ -148,26 +148,31 @@ Runs are launched as **llmservice** by default: each run is an LLMService that
 [llm-operator](https://github.com/modelsphere/llm-operator) installs, the
 engine chart with the run's recipe, exactly as a production deploy is. The
 cluster needs llm-operator (the modelsphere stack installs it; **Connect** says
-when it is missing). The benchmark reaches a run by its Service's in-cluster
-name (**Endpoint: dns**), which is right when AutoTune and LLMBench run on the
-GPU cluster; set **Endpoint: nodeport** when they run elsewhere. The platform
-tells the two apart by the cluster's certificate authority: the one in the
-kubeconfig against the one mounted into AutoTune's own pod. A cluster with a
-different CA is shown as **another cluster** and is refused with
-**Endpoint: dns**, because none of its runs could be reached. Give it
-**Endpoint: nodeport** and a node address that AutoTune and LLMBench can both
-reach. A campaign's checks and the machine smoke test fail on such a cluster
-until that is done. The
+when it is missing). **Reach runs by** says how AutoTune and LLMBench reach a
+run: by its **Service name**, which works only when they run in the same
+cluster, or by **NodePort** on a **Public host**, a node address both can
+reach. A tag next to it shows where the cluster is, told apart by its
+certificate authority (the one in the kubeconfig against the one mounted into
+AutoTune's own pod):
+
+- **AutoTune's cluster**: either option works.
+- **External cluster**: **Service name** is locked, and NodePort is picked
+  for you. Saving it with Service name is refused, and a campaign's checks and
+  the machine smoke test fail, because no run on it could be reached.
+- **Location unknown**: the kubeconfig has no CA to compare.
+
+The tag appears as soon as a kubeconfig is pasted, before anything is saved.
+The
 **deployment** (a Deployment and a NodePort Service, no operator) and
 **custom** (TuningRun) kinds still work and are deprecated: they take engine
 flags and env only, not pd or chart values, and are no longer extended.
 
 For engines reached over the public network with the deprecated
-**deployment** kind, in **Add GPU cluster** or **Clusters ▸ More ▸ Edit**, set **Service
-public IP / hostname** to a node address reachable by both the AutoTune worker
+**deployment** kind, in **Add GPU cluster** or **Clusters ▸ More ▸ Edit**, set **Public
+host** to a node address reachable by both the AutoTune worker
 and LLMBench. Enter only the host, without `http://`, a port or a path; the API
 server address in the kubeconfig is not necessarily a service entry point.
-Set **Service NodePort** to the exposed port, for example `31080`, to produce
+Set **NodePort** to the exposed port, for example `31080`, to produce
 `http://<public-host>:31080`. The platform creates the NodePort Service for
 each run. A public NAT entry must forward that port to the same node port.
 

@@ -105,3 +105,12 @@ async def test_the_platforms_own_cluster_keeps_service_names(client, own_ca):  #
     created = await _add(client, "local", kubeconfig=_kubeconfig(OWN),
                          workload_kind="llmservice", endpoint="dns")
     assert created["endpoint"] == "dns" and created["same_cluster"] is True
+
+
+async def test_the_form_can_ask_before_saving(client, own_ca):  # noqa: F811
+    ask = lambda ca: client.post("/api/clusters/locality", json={"kubeconfig": _kubeconfig(ca)})  # noqa: E731
+    assert (await ask(OWN)).json() == {"same_cluster": True}
+    assert (await ask(OTHER)).json() == {"same_cluster": False}
+    assert (await ask(None)).json() == {"same_cluster": None}
+    assert (await client.post("/api/clusters/locality", json={"in_cluster": True})).json() == {
+        "same_cluster": True}
