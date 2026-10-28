@@ -21,9 +21,11 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.control.launch.base import WorkloadState
+from app.control.orchestrator import timing
 from app.control.orchestrator.supervisor import Supervisor
 from app.control.search.space import deviations
 from app.core import apikeys
+from app.core.auth import create_token
 from app.db.base import Base, get_async_session
 from app.db.models import (
     ApiKey,
@@ -1215,3 +1217,44 @@ async def test_a_night_files_its_digest_for_others(night):
     assert row.digest["open_questions"] == ["does lpm compose?"] and row.digest_at
     too_long = {**digest, "summary": "x" * 20001}
     assert (await policy.put("/session/digest", too_long)).status_code == 422
+
+
+async def _force_start(http, hours):
+    async with http.db() as session:
+        token = create_token(await session.get(User, 1))
+    return await http.post("/api/campaigns/1/force-start", json={"hours": hours},
+                           headers={"Authorization": f"Bearer {token}"})
+
+
+async def test_force_start_refuses_a_window_validation_would_fill(night):
+    """Before any run has come up, each validation launch is budgeted the whole
+    model load limit (2 h), so a 4 h start held back more than it had: the
+    policy was finalized as it started and the campaign ended done, with
+    nothing run. Refused now, with what the hold-back is made of."""
+    _, _, http = night
+    async with http.db() as session:
+        campaign = await session.get(Campaign, 1)
+        campaign.status = CampaignStatus.DRAFT.value
+        campaign.policy_settings = {"max_contenders": 1}
+        timing.set_priors(campaign, {"screen": 30})
+        await session.commit()
+
+    refused = await _force_start(http, 4)
+    assert refused.status_code == 409, refused.text
+    detail = refused.json()["detail"]
+    assert "a 4 h window leaves no time to search" in detail
+    assert "the model load limit" in detail and "at least 7 h" in detail
+    async with http.db() as session:
+        assert (await session.get(Campaign, 1)).status == CampaignStatus.DRAFT.value
+
+    assert (await _force_start(http, 7)).status_code == 200
+
+
+async def test_force_start_takes_a_startup_the_campaign_states(night):
+    _, _, http = night
+    async with http.db() as session:
+        campaign = await session.get(Campaign, 1)
+        campaign.policy_settings = {"max_contenders": 1, "model_startup_minutes": 45}
+        timing.set_priors(campaign, {"screen": 30})
+        await session.commit()
+    assert (await _force_start(http, 4)).status_code == 200

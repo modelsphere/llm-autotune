@@ -20,7 +20,7 @@ from app.control import managed
 from app.control.baseline import resolve_baseline
 from app.control.launch import MachineInfo, get_driver
 from app.control.launch import preflight as pf
-from app.control.orchestrator import lifecycle, timing
+from app.control.orchestrator import lifecycle, policy_lifecycle, timing
 from app.control.orchestrator import schedule as sched
 from app.control.recipe.campaign import config_cards
 from app.control.search.parity import missing_flags
@@ -1043,6 +1043,40 @@ class ForceStartRequest(BaseModel):
     )
 
 
+def _require_search_time(campaign: Campaign, hours: int) -> None:
+    """409 when a policy night of `hours` would have no time to search.
+
+    The end of the window is held back to validate the contenders; a window
+    no longer than that, plus one launch, finalizes the policy the moment it
+    starts, and the campaign ends "done" with nothing run. Before any run has
+    come up, each launch is budgeted the whole model load limit, which is
+    what makes the hold-back long.
+    """
+    reserve = policy_lifecycle.reserve_minutes(campaign, None)
+    per_launch = policy_lifecycle.contender_minutes(campaign)
+    if hours * 60 >= reserve + per_launch:
+        return
+    _, startup = policy_lifecycle.contender_parts(campaign)
+    knobs = policy_lifecycle.settings_of(campaign)
+    if knobs.validation_reserve_minutes is not None:
+        made_of = "policy_settings.validation_reserve_minutes"
+    else:
+        made_of = (
+            f"{policy_lifecycle.validation_rounds(campaign, None)} validation launch(es) "
+            f"of about {per_launch} min, {startup} min of each loading the model"
+        )
+        if knobs.model_startup_minutes is None and timing.startup_minutes(campaign) is None:
+            made_of += " (the model load limit, until a run of this campaign has come up)"
+    need = -(-(reserve + per_launch) // 60)
+    raise HTTPException(
+        status.HTTP_409_CONFLICT,
+        f"a {hours} h window leaves no time to search: its last {reserve} min are held "
+        f"back for validation ({made_of}). Start it for at least {need} h, or set "
+        "policy_settings.model_startup_minutes or validation_reserve_minutes to what "
+        "this model needs.",
+    )
+
+
 @router.post(
     "/{campaign_id}/force-start",
     response_model=CampaignOut,
@@ -1064,6 +1098,8 @@ async def force_start(
 
     now = datetime.now(UTC)
     until = now + timedelta(hours=body.hours or _FORCE_START_MAX_HOURS)
+    if campaign.policy_id:
+        _require_search_time(campaign, body.hours or _FORCE_START_MAX_HOURS)
     campaign.status = CampaignStatus.ACTIVE.value
     campaign.override_until = until
     # The window the rest of the loop reads. Writing it here is what makes the
