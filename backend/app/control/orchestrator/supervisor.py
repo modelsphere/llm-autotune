@@ -43,7 +43,14 @@ from app.control.launch.failures import (
 )
 from app.control.orchestrator import schedule as sched
 from app.control.orchestrator import timing
-from app.control.orchestrator.container_logs import Snapshots, clip, read_text, with_head
+from app.control.orchestrator.container_logs import (
+    Snapshots,
+    clip,
+    collapse_progress,
+    read_text,
+    tail_by_section,
+    with_head,
+)
 from app.control.orchestrator.groups import members_by_rank
 from app.control.orchestrator.lifecycle import (
     USER_STOP_ERROR,
@@ -2499,12 +2506,15 @@ class Supervisor:
             return
         log_path = os.path.join(self.settings.run_log_dir, f"run-{run.id}.log")
         log_text = clip(
-            with_head(read_text(run.log_path or log_path) or (run.log_tail or ""), log_text),
+            with_head(
+                read_text(run.log_path or log_path) or (run.log_tail or ""),
+                collapse_progress(log_text),
+            ),
             self.settings.log_file_max_bytes,
         )
         # In the row first: the file below is on this worker's disk, which the
         # API can read only when the two share a volume.
-        run.log_tail = log_text[-LOG_TAIL_CHARS:]
+        run.log_tail = tail_by_section(log_text, LOG_TAIL_CHARS)
         try:
             os.makedirs(self.settings.run_log_dir, exist_ok=True)
             with open(log_path, "w", encoding="utf-8") as f:

@@ -254,6 +254,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   flag in its `extraArgs`). Such a launch was refused and the campaign ended
   done with nothing run. The platform now takes the cards from the session's
   allocation.
+- **A multi-pod run's saved log keeps every pod's end.** The log the run page
+  shows kept only the end of all pods' logs joined, so under an lws group the
+  leader's error, which comes first, was cut away and only the worker's "the
+  peer went away" was left. Each pod's section now keeps its own end, and
+  progress bars that redraw in place keep only their last frame.
 - **Force start refuses a window too short to search.** Before a campaign has
   measured a start, validation holds back a whole model load limit per launch
   at the end of the window, so a short force start could leave no search time:
