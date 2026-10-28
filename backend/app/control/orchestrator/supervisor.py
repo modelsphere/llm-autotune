@@ -37,6 +37,7 @@ from app.control.launch.failures import (
     RELEASED,
     classify_exit,
     classify_failure,
+    first_exception,
     is_infrastructure,
     is_transient_placement,
     restart_kind,
@@ -180,6 +181,7 @@ MAX_ATTEMPTS_PER_CANDIDATE = 3
 # How much of a captured log is kept in the database: the end, where a crash
 # explains itself. Enough for a Python traceback and the lines before it.
 LOG_TAIL_CHARS = 64_000
+CRASHED = "container crashed; see log"
 
 # Where a multi-node run's rendezvous port is searched from, on the master. Above
 # the usual service ports and outside the k8s NodePort range; the allocator walks
@@ -2394,7 +2396,7 @@ class Supervisor:
         run: Run,
         handle,
         failure_class: str | None = None,
-        error: str = "container crashed; see log",
+        error: str = CRASHED,
     ) -> None:
         driver = self._driver_for(handle.machine) if handle is not None else self.driver
         log_text = ""
@@ -2405,6 +2407,12 @@ class Supervisor:
         self._save_run_log(run, log_text)
         self._final_logs.add(run.id)
         resolved_class = failure_class or classify_failure(log_text)
+        if error == CRASHED:
+            # Say what the engine raised, so the run reads as its reason rather
+            # than as a pointer to a log of several pods.
+            raised = first_exception(log_text)
+            if raised:
+                error = f"container crashed: {raised}"
         # A container that never started leaves no log to classify (a bad model
         # mount, an unpullable image, an unschedulable pod). The substrate still
         # knows why, so ask it and surface that real reason instead of the

@@ -10,6 +10,8 @@ whether to retry, whether a search should learn from it — turns on one
 question: did the CONFIGURATION fail, or did the infrastructure?
 """
 
+import re
+
 # The machine, the network or the registry misbehaved. A config is only ever
 # condemned by its own behaviour, never by flaky infrastructure, so these are
 # retried on a fresh placement and kept out of a search's model.
@@ -149,6 +151,37 @@ def classify_failure(log_text: str) -> str:
         if any(needle in lowered for needle in needles):
             return failure_class
     return "unknown"
+
+
+# The last line of a Python traceback: `SomeError: message`.
+_EXCEPTION_LINE = re.compile(r"^\s*((?:[A-Za-z_][\w.]*\.)?[A-Z]\w*(?:Error|Exception)): (\S.*)$")
+# What a process reports when ANOTHER one died: a pipeline or tensor-parallel
+# peer losing the rank that failed. Never the cause when the cause is there.
+_ECHOES = (
+    "connection closed by peer",
+    "connection reset by peer",
+    "broken pipe",
+    "store unavailable",
+    "remote worker crash",
+)
+
+
+def first_exception(log_text: str) -> str:
+    """The exception that explains a crash, as `SomeError: message`: the
+    first one the log raises that is not another process reporting a peer
+    gone. Under a multi-pod group the pod that failed first logs the cause and
+    the rest only lose it. "" when the log raises nothing."""
+    echo = ""
+    for line in log_text.splitlines():
+        found = _EXCEPTION_LINE.match(line)
+        if not found:
+            continue
+        text = f"{found.group(1)}: {found.group(2)}".strip()
+        if any(e in text.lower() for e in _ECHOES):
+            echo = echo or text
+            continue
+        return text[:300]
+    return echo[:300]
 
 
 def restart_kind(before: str, now: str) -> str:

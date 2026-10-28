@@ -24,3 +24,20 @@ def test_one_section_is_a_plain_tail():
     text = "line\n" * 100
     assert tail_by_section(text, 50) == text[-50:]
     assert tail_by_section("short", 50) == "short"
+
+
+def test_a_crash_names_the_exception_of_the_pod_that_failed_first():
+    from app.control.launch.failures import first_exception
+
+    log = "\n".join([
+        "[autotune-run-1-0/sglang]",
+        "Traceback (most recent call last):",
+        '  File "scheduler.py", line 1, in run',
+        "AttributeError: 'OwedOutput' object has no attribute 'shape'",
+        "[autotune-run-1-0-1]",
+        "RuntimeError: [pair.cc:561] Connection closed by peer [10.0.0.1]:45990.",
+    ])
+    assert first_exception(log) == "AttributeError: 'OwedOutput' object has no attribute 'shape'"
+    # A worker's log alone still says something.
+    assert first_exception(log.split("[autotune-run-1-0-1]")[1]).startswith("RuntimeError:")
+    assert first_exception("all fine\n") == ""
