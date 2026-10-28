@@ -22,8 +22,11 @@ creates a namespace for runs (`llm-autotune-runs`) and a ServiceAccount that
 can manage only the platform's own workloads there and read nodes, and writes
 `llm-autotune-runs.kubeconfig` holding only that account's token.
 
-Press **Add GPU cluster**, upload the file, name the cluster and press
-**Connect**.
+Press **Add GPU cluster** and upload the file. The name and namespace are
+filled in from it; the namespace field asks for one only when the kubeconfig
+names none. Press **Connect**: the platform tries the cluster first and keeps
+it only if it can reach it. If it cannot, nothing is saved and the dialog shows
+which check failed.
 
 ![Add GPU cluster](images/add-cluster-connect.png)
 
@@ -32,38 +35,53 @@ settings most clusters do not need:
 
 | setting | when to change it |
 |---|---|
-| **Namespace** | The namespace runs go into. Read from the kubeconfig. |
-| **Workload kind** | `deployment` (default) creates each run as a Deployment; `custom` hands runs to the optional TuningRun operator ([operator/INSTALL.md](../../operator/INSTALL.md)). |
+| **Workload kind** | `llmservice` (default) creates each run as an LLMService; `deployment` and `custom` are deprecated. |
 | **RuntimeClass** | The runtime class engine pods request, `nvidia` by default. |
 | **GPU resource** | The resource name GPUs are requested by, `nvidia.com/gpu` by default. |
 | **Extra tolerations** | For GPU nodes with taints other than the standard GPU taint, which is tolerated automatically. Comma-separated `key[=value][:effect]`. |
 | **Image pull secrets** | For engine images in a registry that requires credentials: names of secrets in the runs' namespace. |
+| **Default node selector**, **Policy node selector** | Where engine pods, and the pods of policies the platform runs for you, may go. |
+| **Chart repository**, **Image mirror** | LLMService only: where the operator pulls charts and images from. |
 
-After **Connect**, the platform lists the cluster's GPU nodes and their GPUs,
-and offers two ways to register them:
+After **Connect**, a row of checks shows what the platform can do there: reach
+the API, read nodes, find llm-operator. Then it lists the cluster's GPU nodes
+and their GPUs, and offers two ways to register them:
 
 - **One pool per GPU type** (the default): one machine per GPU type, spanning
   every node of that type ([Node pools](#node-pools)).
 - **One machine per node:** each machine is pinned to its node, and its runs
   wait for that node's cards even when another node is free.
 
-Select what to register (everything new is selected by default) and press
-**Register**. With **Lease them to the platform now** selected (the default),
-the new machines are leased immediately.
+Select what to register and press **Register**. What can take work now is
+selected by default. A pool's nodes show as small squares, lit for each node
+that takes pods; only those nodes' cards count, and never more than the
+namespace's GPU quota. A node can be in a pool or registered on its own, not
+both, so its cards are never counted twice. With **Lease them to the platform
+now** selected (the default), the new machines are leased immediately.
+
+Nodes an admin cordoned for the platform show a lock. **Use cordoned nodes**
+lets the cluster's pods land on them (it adds the cordon's toleration).
+
+When the credential cannot read nodes, the namespace's GPU quota is offered as
+one pool instead: **Register as one pool**.
 
 ![Registering a cluster's GPU nodes](images/add-cluster-nodes.png)
 
-### The Clusters dialog
+### The Clusters tab
 
-**Clusters** lists the added clusters.
-
-![The Clusters dialog](images/clusters-dialog.png)
+The **Clusters** tab, next to **Machines**, lists the added clusters. Each card
+shows the cluster's name and how it launches runs (**LLMService**, or a
+deprecated kind). The line below starts with the last probe's checks (hover a
+warning for why), then its machines, namespace and GPU resource.
 
 - **Nodes** registers nodes added to the cluster since, and lists registered
   machines whose node no longer exists.
 - **Probe** checks that the credential still works and refreshes the cluster's
   details.
-- **Edit** changes its settings, including some available only here:
+- **More ▸ Edit** changes its settings, including some available only here.
+  The workload kind and namespace cannot change while the cluster has live
+  runs: the platform finds its pods by them. The refusal lists those runs, and
+  marks any still tearing down, which may be stuck.
   - **Endpoint host**, the address runs are reached on (by default the node's
     own address);
   - the size of `/dev/shm` in engine pods;
@@ -72,7 +90,7 @@ the new machines are leased immediately.
 
   Leave **Kubeconfig** empty to keep the stored one, or paste a new one to
   replace it.
-- **Remove** deletes the cluster and its stored kubeconfig from the platform.
+- **More ▸ Remove** deletes the cluster and its stored kubeconfig from the platform.
   Its machines must be removed (or moved to another cluster) first. Nothing on
   the cluster changes; `deploy/gpu-cluster.sh remove` revokes the account
   there.
@@ -82,16 +100,19 @@ the new machines are leased immediately.
 ![A leased machine](images/machine-leased.png)
 
 - **Name.** For a cluster node, the node's name.
-- **Tags:** `k8s` and the cluster name for a cluster node, and the lease
-  state: *not leased*, *leased*, *running* (runs in progress) or *handing
+- **Tags:** how its runs launch (**LLMService**; **Deployment**, **TuningRun**
+  and **SSH + Docker** are deprecated), and the lease state: *not leased*, *leased*, *running* (runs in progress) or *handing
   back*. While leased, also the readiness reported to the lease API: *idle*,
   *busy* or *returnable*.
-- **Cards in use**, out of the machine's total, and the GPU type when known.
+- **The line below** holds the rest, in small type. **Cards in use**, out of
+  the machine's total, and the GPU type when known.
   On a cluster, also the cards **free on the cluster**: those no pod holds, on
   nodes that take new pods. It needs the platform to read pods in every
   namespace, which is off by default (`gpuCluster.countFreeCards` in the chart,
   `gpu-cluster.sh --count-free-cards`); without it the count is not shown.
-- **pool · N nodes** for a node pool.
+  Then **pool · N nodes** for a node pool, the cluster's name, the host and
+  the node group, when they apply.
+- **Notes**, on a line of their own.
 
 The track below shows the lease stage: **Leased**, **Running campaigns**,
 **Handed back**. The sentence under it describes the current state; its **?**
@@ -133,6 +154,8 @@ small pod on the node, requesting no GPUs.
 A *warn* line does not block runs. A *fail* line names what to fix.
 
 ## More ▸
+
+Adding, editing and removing machines is for admins.
 
 - **Edit** changes the machine's name, GPU count, GPU type and notes.
 - **Remove** deletes it from the platform; its finished runs are kept. On a

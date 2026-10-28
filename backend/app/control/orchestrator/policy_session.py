@@ -43,6 +43,7 @@ from app.control.orchestrator.policy_lifecycle import (
     settings_of,
 )
 from app.control.orchestrator.schedule import from_campaign as schedule_of
+from app.control.orchestrator.timing import ready_timeout_minutes
 from app.control.recipe.campaign import config_cards
 from app.control.recipe.campaign import widest_cards as campaign_widest_cards
 from app.control.search.base import CandidateConfig
@@ -661,10 +662,10 @@ class PolicySessionEngine:
             self._fail_toward_validation(
                 db, session, failure[0], f"policy container cannot start: {failure[1]}"
             )
-        elif waited > self.sup.settings.ready_timeout_minutes * 60:
+        elif waited > self.sup.settings.policy_start_timeout_minutes * 60:
             self._fail_toward_validation(
                 db, session, "ready_timeout",
-                f"no heartbeat after {self.sup.settings.ready_timeout_minutes} min — "
+                f"no heartbeat after {self.sup.settings.policy_start_timeout_minutes} min — "
                 "is AUTOTUNE_API_URL reachable from the machine?",
             )
 
@@ -836,7 +837,7 @@ class PolicySessionEngine:
                     commanded = as_utc(contender.serve_commanded_at) or now()
                     budget = (
                         self.sup.settings.policy_finalize_grace_seconds
-                        + self.sup.settings.ready_timeout_minutes * 60
+                        + ready_timeout_minutes(campaign) * 60
                     )
                     if (now() - commanded).total_seconds() > budget:
                         contender.status = ContenderStatus.SKIPPED.value

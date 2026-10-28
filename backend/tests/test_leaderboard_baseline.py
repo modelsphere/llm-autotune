@@ -219,3 +219,32 @@ async def test_a_policys_search_runs_on_productions_config_are_baseline_measurem
     assert by_run[1]["is_baseline"] and by_run[3]["is_baseline"] and not by_run[2]["is_baseline"]
     # fp8 against the anchors' mean (101k), so the bar gets its colour.
     assert round(by_run[2]["vs_baseline"], 4) == round(103_000 / 101_000, 4)
+
+
+async def test_a_recipe_campaigns_unchanged_recipe_is_the_baseline(client):
+    # A recipe campaign has no base: production is the recipe as written, which
+    # a policy's anchor sends as the empty config.
+    async with client.factory() as session:
+        session.add(Campaign(
+            id=1, owner_id=1, name="c", engine="sglang", image="img", model_path="/m",
+            served_model_name="glm-5", search_space={}, objective=OBJECTIVE,
+            status=CampaignStatus.ACTIVE.value, policy_id=7,
+            recipe={"engine": "sglang", "values": {"model": {"tp": 2}}},
+        ))
+        await session.flush()
+        configs = [{}, {"mem_fraction_static": 0.85}, {}]
+        scores = (100_000.0, 103_000.0, 102_000.0)
+        for i, (config, score) in enumerate(zip(configs, scores, strict=True), start=1):
+            session.add(Candidate(id=i, campaign_id=1, config=config, config_hash=f"h{i}",
+                                  kind=CandidateKind.SEARCH.value,
+                                  status=CandidateStatus.EXHAUSTED.value))
+            session.add(Run(id=i, campaign_id=1, candidate_id=i, machine_id=None,
+                            kind=RunKind.EXTERNAL.value, status=RunStatus.SUCCEEDED.value))
+            session.add(Result(run_id=i, source="llmbench", passed=True, score=score,
+                               metrics={TARGET: score}, objective_value=score, feasible=True,
+                               breaches=[]))
+        await session.commit()
+    board = (await client.get("/api/campaigns/1/leaderboard")).json()
+    by_run = {e["run_id"]: e for e in board}
+    assert by_run[1]["is_baseline"] and by_run[3]["is_baseline"] and not by_run[2]["is_baseline"]
+    assert round(by_run[2]["vs_baseline"], 4) == round(103_000 / 101_000, 4)

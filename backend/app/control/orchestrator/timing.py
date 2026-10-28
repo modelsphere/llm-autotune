@@ -30,6 +30,9 @@ KEEP = 20
 MARGIN = 1.2
 
 STARTUP = "startup"
+# A campaign's ready timeout when it has none of its own (a row not yet
+# flushed). The column's default.
+DEFAULT_READY_TIMEOUT_MINUTES = 120
 _LAUNCHED = {RunKind.EXPERIMENT.value, RunKind.POLICY_LAUNCH.value}
 _READY = {RunStatus.BENCHING.value, RunStatus.SERVING.value}
 
@@ -138,6 +141,13 @@ def _typical(samples: list[float]) -> float | None:
     return ordered[max(0, ceil(0.9 * len(ordered)) - 1)]
 
 
+def ready_timeout_minutes(campaign: Campaign | None) -> int:
+    """How long one of this campaign's engines may take to answer once its
+    container is running, before the run fails as ready_timeout."""
+    minutes = campaign.ready_timeout_minutes if campaign is not None else None
+    return minutes or DEFAULT_READY_TIMEOUT_MINUTES
+
+
 def startup_minutes(campaign: Campaign) -> float | None:
     return _typical((campaign.run_timing or {}).get(STARTUP, []))
 
@@ -206,7 +216,7 @@ def _startup_or_bound(campaign: Campaign) -> float:
     """Measured startup, or — before any engine has come up — the readiness
     timeout: the longest the platform would wait for one anyway."""
     learned = startup_minutes(campaign)
-    return learned if learned is not None else float(get_settings().ready_timeout_minutes)
+    return learned if learned is not None else float(ready_timeout_minutes(campaign))
 
 
 def run_minutes(campaign: Campaign, stage: str = SCREEN) -> int | None:

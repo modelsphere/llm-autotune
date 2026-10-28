@@ -5,7 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.control.launch import MachineInfo, get_driver
 from app.control.orchestrator.lifecycle import STEPS, describe_all
-from app.core.auth import get_current_user
+from app.core.auth import get_current_user, require_admin
 from app.core.config import get_settings
 from app.db.base import get_async_session, sync_session_factory
 from app.db.models import (
@@ -71,31 +71,42 @@ def _machine_out(
     machine: Machine,
     membership: tuple[str, int] | None = None,
     busy: int = 0,
-    cluster_name: str = "",
+    clusters: dict[int, tuple[str, str]] | None = None,
 ) -> MachineOut:
     name, rank = membership or ("", None)
+    cluster_name, kind = (clusters or {}).get(machine.cluster_id or 0, ("", ""))
+    if machine.driver == "k8s":
+        launch_kind = kind or get_settings().k8s_workload_kind
+    else:
+        launch_kind = "ssh_docker"
     return MachineOut.model_validate(machine).model_copy(
         update={"gpus_busy": busy, "group": name, "group_rank": rank,
-                "cluster_name": cluster_name, "pool": is_node_pool(machine)}
+                "cluster_name": cluster_name, "launch_kind": launch_kind,
+                "pool": is_node_pool(machine)}
     )
 
 
-async def _cluster_names(session: AsyncSession, cluster_ids: list[int | None]) -> dict[int, str]:
-    """`cluster_id -> name`, for the machine list. A machine whose cluster_id is
-    NULL is on the platform default cluster and gets an empty name."""
+async def _clusters(
+    session: AsyncSession, cluster_ids: list[int | None]
+) -> dict[int, tuple[str, str]]:
+    """`cluster_id -> (name, workload kind)`, for the machine list. A machine
+    whose cluster_id is NULL is on the platform default cluster and gets an
+    empty name."""
     ids = sorted({cid for cid in cluster_ids if cid})
     if not ids:
         return {}
     rows = (
-        await session.execute(select(Cluster.id, Cluster.name).where(Cluster.id.in_(ids)))
+        await session.execute(
+            select(Cluster.id, Cluster.name, Cluster.workload_kind).where(Cluster.id.in_(ids))
+        )
     ).all()
-    return {cid: name for cid, name in rows}
+    return {cid: (name, kind or "") for cid, name, kind in rows}
 
 
 async def _one_out(session: AsyncSession, machine: Machine) -> MachineOut:
     membership = (await _group_fields(session, [machine.id])).get(machine.id)
-    names = await _cluster_names(session, [machine.cluster_id])
-    return _machine_out(machine, membership, cluster_name=names.get(machine.cluster_id or 0, ""))
+    clusters = await _clusters(session, [machine.cluster_id])
+    return _machine_out(machine, membership, clusters=clusters)
 
 
 @router.get("", response_model=list[MachineOut])
@@ -121,11 +132,9 @@ async def list_machines(
         if node.machine_id is not None:
             busy[node.machine_id] = busy.get(node.machine_id, 0) + len(node.gpu_indices or [])
     membership = await _group_fields(session, [m.id for m in machines])
-    cluster_names = await _cluster_names(session, [m.cluster_id for m in machines])
+    clusters = await _clusters(session, [m.cluster_id for m in machines])
     return [
-        _machine_out(
-            m, membership.get(m.id), busy.get(m.id, 0), cluster_names.get(m.cluster_id or 0, "")
-        )
+        _machine_out(m, membership.get(m.id), busy.get(m.id, 0), clusters)
         for m in machines
     ]
 
@@ -163,6 +172,12 @@ def _apply_probe(machine: Machine, probe: dict) -> None:
     capacity the operator typed. A machine left with no count at all is
     refused: a guessed one would be scheduled against."""
     record_capacity(machine, probe)
+    if not machine.gpu_count and machine.driver == "k8s" and not machine.node_selector:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            f"{machine.name} names no nodes and its namespace has no GPU quota to go by: "
+            "set a node selector (a hostname or GPU product label)",
+        )
     if not machine.gpu_count:
         reason = "; ".join(probe.get("warnings") or []) or "the machine did not answer"
         raise HTTPException(
@@ -184,7 +199,7 @@ async def gpu_types(_: User = Depends(get_current_user)):
 @router.post("", response_model=MachineOut)
 async def create_machine(
     body: MachineCreate,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_admin),
     session: AsyncSession = Depends(get_async_session),
 ):
     exists = (
@@ -286,7 +301,7 @@ def _guard_in_use(machine: Machine, blocking: list[str], verb: str) -> None:
 async def update_machine(
     machine_id: int,
     body: MachineCreate,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_admin),
     session: AsyncSession = Depends(get_async_session),
 ):
     """Edit a machine's fields. Blocked while a not-yet-finished campaign is
@@ -370,7 +385,7 @@ async def smoke_test(
 @router.delete("/{machine_id}")
 async def delete_machine(
     machine_id: int,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_admin),
     session: AsyncSession = Depends(get_async_session),
 ):
     """Remove a machine. Blocked while a not-yet-finished campaign is pinned to
@@ -415,7 +430,7 @@ async def delete_machine(
 async def set_machine_state(
     machine_id: int,
     body: MachineStateUpdate,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_admin),
     session: AsyncSession = Depends(get_async_session),
 ):
     """The manual borrow/return ritual: a human marks

@@ -87,6 +87,8 @@ const form = ref({
   // LLMService, or a command line read into one); the space addresses it.
   config_mode: 'image' as 'image' | 'recipe',
   recipe_text: '',
+  // The catalog variant the recipe was read from ("<model>/<variant>@<version>").
+  recipe_source: '',
   engine: 'sglang',
   image: '',
   model_path: '',
@@ -101,6 +103,8 @@ const form = ref({
   share_machine: true,
   // A safety bound only: the window plans from what runs have actually taken.
   max_run_minutes: 720,
+  // How long a started engine may take to load the model and answer.
+  ready_timeout_minutes: 120,
   benchmark_slug: '',
   // '' = no policy: the campaign tries every configuration in the space, in
   // order. `policy:<id>` = an external policy container searches it instead.
@@ -161,6 +165,57 @@ const recipeRead = ref<RecipeRead | null>(null)
 const recipeError = ref('')
 const readingRecipe = ref(false)
 const recipeMode = computed(() => form.value.config_mode === 'recipe')
+
+/** The platform's model catalog, for starting from a published variant. */
+interface CatalogModel {
+  name: string
+  display_name: string
+  default_variant: string
+  variants: { id: string; version: string }[]
+}
+const catalogModels = ref<CatalogModel[] | null>(null)
+const catalogError = ref('')
+const catalogPick = ref<{ model: string; variant: string }>({ model: '', variant: '' })
+const catalogVariants = computed(
+  () => catalogModels.value?.find((m) => m.name === catalogPick.value.model)?.variants ?? [],
+)
+const loadingVariant = ref(false)
+
+async function loadCatalog() {
+  if (catalogModels.value !== null) return
+  catalogError.value = ''
+  try {
+    const { data } = await api.get<{ models: CatalogModel[] }>('/catalog/models')
+    catalogModels.value = data.models
+  } catch (error: any) {
+    catalogModels.value = []
+    catalogError.value = apiErrorText(error, t('campaignNew.recipe.catalogUnreadable'))
+  }
+}
+
+function pickCatalogModel(name: string) {
+  const model = catalogModels.value?.find((m) => m.name === name)
+  catalogPick.value = { model: name, variant: model?.default_variant || model?.variants[0]?.id || '' }
+  if (catalogPick.value.variant) void useCatalogVariant()
+}
+
+/** The variant's file, as the catalog serves it, becomes the recipe text. */
+async function useCatalogVariant() {
+  const { model, variant } = catalogPick.value
+  if (!model || !variant) return
+  loadingVariant.value = true
+  try {
+    const { data } = await api.get<{ text: string; ref: string }>(
+      `/catalog/models/${encodeURIComponent(model)}/variants/${encodeURIComponent(variant)}`)
+    form.value.recipe_text = data.text
+    form.value.recipe_source = data.ref
+    await readRecipe()
+  } catch (error: any) {
+    recipeError.value = apiErrorText(error, t('campaignNew.recipe.catalogUnreadable'))
+  } finally {
+    loadingVariant.value = false
+  }
+}
 
 async function readRecipe() {
   recipeError.value = ''
@@ -728,7 +783,8 @@ function applyImport(opts: { review?: boolean } = {}) {
   form.value.verify_enabled = Boolean(verifySlug)
   advancedNames.value = form.value.verify_enabled ? ['split'] : []
   if (form.value.served_model_name || Object.keys(parsed.fields.extra_env ?? {}).length ||
-    Object.keys(parsed.fields.extra_volumes ?? {}).length) modelAdvanced.value = ['model']
+    Object.keys(parsed.fields.extra_volumes ?? {}).length ||
+    form.value.ready_timeout_minutes !== 120) modelAdvanced.value = ['model']
 
   importOpen.value = false
   importText.value = ''
@@ -920,11 +976,13 @@ async function create() {
       extra_env: recipeMode.value ? {} : (extras.env ?? {}),
       extra_volumes: recipeMode.value ? {} : (extras.volumes ?? {}),
       recipe_text: recipeMode.value ? form.value.recipe_text : null,
+      recipe_source: recipeMode.value ? form.value.recipe_source : '',
       machine_names: form.value.machine_names,
       node_group: form.value.node_group,
       service_port: form.value.service_port,
       share_machine: form.value.share_machine,
       max_run_minutes: form.value.max_run_minutes,
+      ready_timeout_minutes: form.value.ready_timeout_minutes,
       ...benchmarkFields(),
       policy_id: selectedPolicy.value?.id ?? null,
       extensions: form.value.extensions,
@@ -1052,9 +1110,31 @@ onMounted(async () => {
                 placeholder="lmsysorg/sglang:v0.5.13.post1" />
             </el-form-item>
             <template v-else>
+              <el-form-item :label="t('campaignNew.recipe.fromCatalog')">
+                <div class="recipe-actions">
+                  <el-select :model-value="catalogPick.model" filterable style="width: 260px"
+                    :placeholder="t('campaignNew.recipe.catalogModel')" :loading="catalogModels === null"
+                    @visible-change="(open: boolean) => open && loadCatalog()"
+                    @update:model-value="pickCatalogModel">
+                    <el-option v-for="m in catalogModels ?? []" :key="m.name" :label="m.display_name"
+                      :value="m.name" />
+                  </el-select>
+                  <el-select v-model="catalogPick.variant" :disabled="!catalogVariants.length"
+                    style="width: 280px" :placeholder="t('campaignNew.recipe.catalogVariant')"
+                    @change="useCatalogVariant">
+                    <el-option v-for="v in catalogVariants" :key="v.id" :label="`${v.id} @ ${v.version}`"
+                      :value="v.id" />
+                  </el-select>
+                  <span v-if="loadingVariant" class="muted small">…</span>
+                  <span v-if="catalogError" class="danger small">{{ catalogError }}</span>
+                </div>
+                <div v-if="form.recipe_source" class="muted small">
+                  {{ t('campaignNew.recipe.fromSource', { source: form.recipe_source }) }}</div>
+              </el-form-item>
               <el-form-item :label="t('campaignNew.recipe.text')">
                 <el-input v-model="form.recipe_text" type="textarea" :rows="10" class="mono"
-                  :placeholder="t('campaignNew.recipe.placeholder')" @change="readRecipe" />
+                  :placeholder="t('campaignNew.recipe.placeholder')"
+                  @input="form.recipe_source = ''" @change="readRecipe" />
                 <div class="recipe-actions">
                   <el-button size="small" :loading="readingRecipe" @click="readRecipe">
                     {{ t('campaignNew.recipe.read') }}</el-button>
@@ -1102,6 +1182,14 @@ onMounted(async () => {
                     <InfoHint>{{ t('campaignNew.extrasHint') }}</InfoHint>
                   </template>
                   <el-input v-model="form.extras_text" type="textarea" :rows="4" class="mono" />
+                </el-form-item>
+                <el-form-item>
+                  <template #label>
+                    <span>{{ t('campaignNew.readyTimeout') }}</span>
+                    <InfoHint>{{ t('campaignNew.readyTimeoutHint') }}</InfoHint>
+                  </template>
+                  <el-input-number v-model="form.ready_timeout_minutes" :min="5" :max="1440"
+                    :step="30" />
                 </el-form-item>
               </el-collapse-item>
             </el-collapse>

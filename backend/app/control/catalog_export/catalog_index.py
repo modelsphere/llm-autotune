@@ -10,6 +10,9 @@ change to it.
 Read once per export, never stored: the catalog changes when pull requests
 merge, and an export reflects it as it is now. An index that cannot be read is
 not an error; the export says so and treats the model as new.
+
+A campaign can also start from a published variant (`models`, `variant`): its
+file, exactly as the catalog serves it, becomes the campaign's recipe.
 """
 
 from __future__ import annotations
@@ -104,3 +107,55 @@ def _load(text: str) -> dict[str, Any] | None:
     except yaml.YAMLError:
         return None
     return doc if isinstance(doc, dict) else None
+
+
+async def models(
+    url: str, transport: httpx.AsyncBaseTransport | None = None
+) -> list[dict[str, Any]]:
+    """Every model the catalog publishes, with its variants' ids and versions."""
+    async with httpx.AsyncClient(timeout=TIMEOUT, transport=transport) as client:
+        index = (await _get(client, url)).json()
+    out = []
+    for m in index.get("models") or []:
+        out.append({
+            "name": m.get("name"),
+            "display_name": m.get("displayName") or m.get("name"),
+            "description": m.get("description") or "",
+            "default_variant": m.get("defaultVariant") or "",
+            "variants": [
+                {"id": str(v.get("id")), "version": str(v.get("version") or "")}
+                for v in m.get("variants") or []
+            ],
+        })
+    return out
+
+
+async def variant(
+    url: str, name: str, variant_id: str, transport: httpx.AsyncBaseTransport | None = None
+) -> dict[str, Any] | None:
+    """One published variant file, as text, with where it was read from; None
+    when the catalog has no such model or variant."""
+    async with httpx.AsyncClient(timeout=TIMEOUT, transport=transport) as client:
+        index = (await _get(client, url)).json()
+        model = next((m for m in index.get("models") or [] if m.get("name") == name), None)
+        entry = next(
+            (v for v in (model or {}).get("variants") or [] if str(v.get("id")) == variant_id),
+            None,
+        )
+        if entry is None:
+            return None
+        raw = str(index.get("raw") or "").rstrip("/")
+        commit = str(entry.get("commit") or index.get("commit") or "master")
+        path = entry.get("path") or f"models/{name}/{variant_id}.yaml"
+        source = f"{raw}/{commit}/{path}"
+        text = (await _get(client, source)).text
+    return {
+        "model": name,
+        "variant": variant_id,
+        "version": str(entry.get("version") or ""),
+        "digest": str(entry.get("digest") or ""),
+        "source": source,
+        # How a campaign records where its recipe came from.
+        "ref": f"{name}/{variant_id}@{entry.get('version') or ''}",
+        "text": text,
+    }

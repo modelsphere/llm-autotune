@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The model load limit is a campaign setting, 2 hours by default.** How
+  long a started engine may take to answer before its run fails as
+  `ready_timeout` is now `ready_timeout_minutes` on the campaign (the form's
+  **1 Model → Advanced → Model load limit**), not a platform-wide setting.
+  The default goes from 30 to 120 minutes, existing campaigns included, so
+  very large models can load. Before a campaign has measured a start, the
+  window plans its first run with this limit. `AUTOTUNE_READY_TIMEOUT_MINUTES`
+  is gone; a policy container's first heartbeat has its own
+  `AUTOTUNE_POLICY_START_TIMEOUT_MINUTES` (30).
 - **llmservice is the default workload kind** (`gpuCluster.workloadKind`, a
   new cluster's setting, `AUTOTUNE_K8S_WORKLOAD_KIND`). The cluster needs
   llm-operator, which the modelsphere stack installs. Upgrading an install
@@ -17,6 +26,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `deployment` and `custom` are deprecated.
 
 ### Added
+
+- **Adding a cluster checks it first.** Connect probes the cluster and keeps
+  it only if it can reach it, showing which check failed otherwise; a row of
+  checks (API, nodes, llm-operator) follows the cluster on its card. A
+  credential that cannot read nodes registers the namespace's GPU quota as one
+  pool. Cordoned nodes set aside for the platform can be used from the
+  register step. The name comes from the kubeconfig's cluster (or its address),
+  and the namespace field asks only when the kubeconfig names none. Adding a
+  machine by hand defaults to a cluster and can lease it at once.
+- **Resources has a Machines tab and a Clusters tab.** Clusters were a dialog
+  opened from a button; they are now a tab whose cards look and work like the
+  machine cards (main action, Probe, More ▸ Edit / Remove). Cluster editing
+  opens its own dialog. Machine cards keep their buttons on the top row: name,
+  launch kind and lease state above, the rest on a smaller line below, notes
+  on their own line.
+- **Machines say how their runs launch.** Each machine card, and the machine
+  dialog, shows LLMService, Deployment, TuningRun or SSH + Docker (the last
+  three marked deprecated); the machine API returns it as `launch_kind`.
 
 - **Runs as LLMServices.** A cluster set to `workload_kind: llmservice`
   launches every run as an LLMService ([llm-operator](https://github.com/modelsphere/llm-operator)):
@@ -39,7 +66,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   between a flat config and a recipe is lossless, checked on every variant the
   catalog publishes. Cards are counted from what the pods ask for. The create
   form takes a recipe in place of an image (`POST /api/campaigns/recipe` reads
-  one and says what it would launch), and the campaign page shows it.
+  one and says what it would launch), and the campaign page shows it. It can
+  also start from a published catalog variant: pick the model and variant, and
+  the variant's file, read from the platform's catalog at its own commit,
+  becomes the recipe (`GET /api/catalog/models`, `recipe_source`, migration
+  `026_campaign_recipe_source`).
 - **Pinned chart version.** A campaign renders one chart version for its
   whole life (`chart_version`, migration `025_campaign_chart_version`): the
   one given, the recipe's own when it names an exact version, or else the one
@@ -198,6 +229,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `reports.sections` (above the list), so a plugin can write reports from there.
 
 ### Fixed
+
+- **Leasing read the wrong cluster's capacity.** A lease probed the platform's
+  default cluster with the machine's node selector, not the machine's own
+  cluster.
+- **Capacity counted cards that cannot be used.** A pool now counts only nodes
+  that take pods, capped at the namespace's GPU quota, and a node can no
+  longer be registered both alone and inside a pool.
+- **Only admins add, edit or remove machines and machine groups**, as with
+  clusters; registering a machine through the lease API is admin-only too.
+- **A cluster's workload kind or namespace cannot change under live runs**,
+  which would have left their pods holding GPUs out of the platform's reach.
+  The refusal lists the runs and policy sessions in the way
+  (`GET /api/clusters/{id}/live`).
+
+- **A recipe campaign's baseline.** Runs of the unchanged recipe (a policy's
+  anchor sends the empty config) now count as the production baseline, so the
+  board marks them and every other run gets its ratio to them. The campaign
+  overview says the recipe is the production reference.
 
 - **Publish to catalog** refused a model the catalog already has when the
   export made a new variant its default: the dry run checks the metadata

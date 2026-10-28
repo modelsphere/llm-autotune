@@ -535,6 +535,9 @@ class Campaign(Base):
     # when the recipe names an exact version, else from the version the
     # operator installed for the first run. Empty = not pinned yet.
     chart_version: Mapped[str] = mapped_column(String(64), default="")
+    # Where the recipe came from, when it is a catalog variant:
+    # "<model>/<variant>@<version>". Empty = pasted or built from the fields.
+    recipe_source: Mapped[str] = mapped_column(String(255), default="")
     # {"target_metric": "...", "redlines": [{"metric": "...", "op": "<=", "value": x}]}
     objective: Mapped[dict] = mapped_column(JsonCol, default=dict)
     status: Mapped[str] = mapped_column(String(16), default=CampaignStatus.DRAFT.value, index=True)
@@ -604,6 +607,10 @@ class Campaign(Base):
     )
 
     max_run_minutes: Mapped[int] = mapped_column(Integer, default=150)
+    # How long an engine whose container is running may take to answer
+    # /v1/models before its run fails as ready_timeout. The model decides this
+    # (a very large one loads for over an hour), so it is the campaign's.
+    ready_timeout_minutes: Mapped[int] = mapped_column(Integer, default=120)
     # Set = this campaign's search runs in an external policy container: the
     # supervisor launches the image for the window and the container proposes
     # every config through the policy session API. Null = the platform simply

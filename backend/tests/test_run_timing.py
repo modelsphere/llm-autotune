@@ -81,8 +81,12 @@ def test_a_replay_is_estimated_only_from_a_real_time_cap():
 def test_the_estimate_plans_the_first_run_with_the_startup_bound():
     campaign = _campaign()
     timing.set_priors(campaign, {SCREEN: 20.0})
-    # (20 benchmark + 30 readiness bound) × 1.2
+    # (20 benchmark + the campaign's 30 min readiness bound) × 1.2
+    campaign.ready_timeout_minutes = 30
     assert window_minutes(campaign, SCREEN, 720, 240) == 60
+    # A campaign that gives its engines 2 h reserves for that.
+    campaign.ready_timeout_minutes = 120
+    assert window_minutes(campaign, SCREEN, 720, 240) == 168
 
 
 def test_a_measurement_replaces_the_estimate():

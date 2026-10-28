@@ -79,6 +79,7 @@ def spec_of(
     # at insert); a spec always says "no recipe" the same way.
     spec["recipe"] = spec.get("recipe") or {}
     spec["chart_version"] = spec.get("chart_version") or ""
+    spec["recipe_source"] = spec.get("recipe_source") or ""
     if spec.get("schedule_until") is not None:
         spec["schedule_until"] = spec["schedule_until"].isoformat()
     return spec

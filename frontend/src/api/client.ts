@@ -72,6 +72,9 @@ export interface Machine {
   cluster_id: number | null
   /** The cluster's name for display; '' = the default cluster. */
   cluster_name: string
+  /** How runs here are launched: llmservice, deployment or custom (the
+   *  cluster's workload kind) for k8s, ssh_docker otherwise. */
+  launch_kind: string
 }
 
 /** A Kubernetes GPU cluster the platform may launch onto. The kubeconfig is
@@ -345,6 +348,8 @@ export interface Campaign {
   recipe?: { engine?: string; chart?: { name?: string; version?: string }; values?: Record<string, unknown> }
   /** The exact chart version every run renders; empty until it is pinned. */
   chart_version?: string
+  /** The catalog variant the recipe was read from ("<model>/<variant>@<version>"). */
+  recipe_source?: string
   objective: Record<string, unknown>
   status: string
   /** The benchmark every candidate runs. Single-stage replay is the default:
@@ -376,6 +381,9 @@ export interface Campaign {
   /** Set by Force start: run regardless of the clock until this instant. */
   override_until: string | null
   max_run_minutes: number
+  /** How long a started engine may take to answer before its run fails as
+   *  ready_timeout. */
+  ready_timeout_minutes: number
   /** An external policy container (policy-as-code) that decides what to try.
    *  Null: the campaign tries every configuration in the space, in order. The
    *  platform launches, benchmarks and judges either way. */

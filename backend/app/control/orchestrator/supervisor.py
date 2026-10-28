@@ -1929,7 +1929,7 @@ class Supervisor:
                 self._fail(
                     session, run, "endpoint_unreachable",
                     f"nothing answering at {run.endpoint_url} after "
-                    f"{self.settings.ready_timeout_minutes} min: {outcome.error}",
+                    f"{self._ready_minutes(run)} min: {outcome.error}",
                 )
                 return
             self._record_result(session, run, "health", outcome)
@@ -2550,11 +2550,16 @@ class Supervisor:
             campaign.chart_version = resolved
             logger.info("campaign %d pinned chart version %s", campaign.id, resolved)
 
+    def _ready_minutes(self, run: Run) -> int:
+        """How long this run's engine may take to answer once it is up: its
+        campaign's ready timeout."""
+        return timing.ready_timeout_minutes(run.campaign)
+
     def _ready_timed_out(self, run: Run) -> bool:
         if run.started_at is None:
             return False
         started = _as_utc(run.started_at)
-        return _now() - started > timedelta(minutes=self.settings.ready_timeout_minutes)
+        return _now() - started > timedelta(minutes=self._ready_minutes(run))
 
     def _startup_timed_out(self, run: Run, driver, handle) -> tuple[bool, str, str]:
         """Has a coming-up run overrun its budget — and if so, which one.
@@ -2576,13 +2581,14 @@ class Supervisor:
             status = driver.startup_status(handle)
         except Exception:
             status = {"phase": "unknown", "running_since": None}
-        ready_limit = timedelta(minutes=self.settings.ready_timeout_minutes)
+        ready_minutes = self._ready_minutes(run)
+        ready_limit = timedelta(minutes=ready_minutes)
         pull_limit = timedelta(minutes=self.settings.image_pull_timeout_minutes)
 
         running_since = _parse_rfc3339(status.get("running_since"))
         if status.get("phase") == "running" and running_since is not None:
             if now - running_since > ready_limit:
-                return (True, f"engine not ready {self.settings.ready_timeout_minutes} "
+                return (True, f"engine not ready {ready_minutes} "
                               "min after its container started", "")
             return (False, "", "")
         if status.get("phase") == "pulling":
@@ -2626,7 +2632,7 @@ class Supervisor:
             return (False, "", "")
         # Unknown substrate: the original single-timeout behaviour, unchanged.
         if now - started > ready_limit:
-            return (True, f"not ready after {self.settings.ready_timeout_minutes} min", "")
+            return (True, f"not ready after {ready_minutes} min", "")
         return (False, "", "")
 
     def _record_result(self, session: Session, run: Run, source: str, outcome) -> None:
