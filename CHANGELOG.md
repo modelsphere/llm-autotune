@@ -248,6 +248,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A policy campaign on a recipe launches with the cards its recipe needs.**
+  A policy counts a launch's cards from the config's own tp×dp×pp, which
+  cannot see parallelism set in the recipe (`lws.size`, the pd roles, a tp
+  flag in its `extraArgs`). Such a launch was refused and the campaign ended
+  done with nothing run. The platform now takes the cards from the session's
+  allocation.
+- **Force start refuses a window too short to search.** Before a campaign has
+  measured a start, validation holds back a whole model load limit per launch
+  at the end of the window, so a short force start could leave no search time:
+  the policy was finalized as it started. Force start now answers with what is
+  held back and the shortest window that works.
 - **Leasing read the wrong cluster's capacity.** A lease probed the platform's
   default cluster with the machine's node selector, not the machine's own
   cluster.
