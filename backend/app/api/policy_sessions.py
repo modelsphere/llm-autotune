@@ -49,6 +49,7 @@ from app.control.recipe import shape as recipe_shape
 from app.control.recipe.address import BadAddress
 from app.control.recipe.address import parse as parse_address
 from app.control.recipe.campaign import (
+    base_recipe,
     config_cards,
     config_pod_cards,
     recipe_for,
@@ -445,6 +446,27 @@ def _check_fits_a_node(machine: Machine | None, per_pod: int) -> None:
             f"a pod of this config uses {per_pod} card(s), but the largest node in "
             f"{machine.name} has {machine.node_gpu_max}: no node could ever hold it",
         )
+
+
+def _free_cards(session: PolicySession, live: list[Run], needed: int) -> list[int]:
+    """The first `needed` cards of the allocation no live run of the session
+    holds; 429 (wait, as for busy cards) when fewer are free, 422 when the
+    allocation could never hold them."""
+    allowed = list(session.gpu_indices or [])
+    if needed > len(allowed):
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            f"the recipe uses {needed} card(s) but this session holds {len(allowed)}",
+        )
+    busy = {i for r in live for i in (r.gpu_indices or [])}
+    free = [i for i in allowed if i not in busy]
+    if len(free) < needed:
+        raise HTTPException(
+            status.HTTP_429_TOO_MANY_REQUESTS,
+            f"the recipe uses {needed} card(s) and {len(free)} are free of your own runs "
+            "— release something or wait",
+        )
+    return free[:needed]
 
 
 def _check_cards_and_port(
@@ -990,19 +1012,26 @@ async def request_launch(
         db, caller, dict(body.engine_args or {}), campaign, machine
     )
     needed = config_cards(campaign, canonical)
+    live = await _live_session_runs(db, session)
+    gpu_indices = list(body.gpu_indices)
     # A machine with no cards (a CPU-only slice: kind, the demo's mock
     # engine) gives the session none, and its launches ask for none whatever
     # the config's parallelism, the way a plain campaign runs there. Asking
     # for a card it does not hold is still refused, as outside the allocation.
-    if session.gpu_indices and needed != len(body.gpu_indices):
-        raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY,
-            f"config uses {needed} card(s) (tp×dp×pp) but {len(body.gpu_indices)} were "
-            "requested — they must match",
-        )
+    if session.gpu_indices and needed != len(gpu_indices):
+        if base_recipe(campaign) is None:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                f"config uses {needed} card(s) (tp×dp×pp) but {len(gpu_indices)} were "
+                "requested — they must match",
+            )
+        # Under a recipe its shape decides the cards (lws.size, pd roles,
+        # parallelism set in the recipe rather than the config), which a
+        # policy counting the config's own tp×dp×pp cannot see: the platform
+        # takes them from the allocation instead.
+        gpu_indices = _free_cards(session, live, needed)
     _check_fits_a_node(machine, config_pod_cards(campaign, canonical))
-    live = await _live_session_runs(db, session)
-    port = _check_cards_and_port(session, live, body.gpu_indices, body.port)
+    port = _check_cards_and_port(session, live, gpu_indices, body.port)
 
     candidate = await _make_candidate(db, campaign, canonical, dev)
     run = Run(
@@ -1011,7 +1040,7 @@ async def request_launch(
         machine_id=session.machine_id,
         kind=RunKind.POLICY_LAUNCH.value,
         status=RunStatus.PENDING.value,
-        gpu_indices=list(body.gpu_indices),
+        gpu_indices=gpu_indices,
         service_port=port,
         policy_session_id=session.id,
         idempotency_key=idempotency_key,
@@ -1024,7 +1053,7 @@ async def request_launch(
     await db.flush()
     _audit(
         db, caller, "policy_launch_requested", run_id=run.id,
-        payload={"config": canonical, "gpus": body.gpu_indices, "port": port},
+        payload={"config": canonical, "gpus": gpu_indices, "port": port},
     )
     await db.commit()
     return _launch_out(run, candidate)
