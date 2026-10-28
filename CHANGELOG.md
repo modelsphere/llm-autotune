@@ -254,6 +254,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   flag in its `extraArgs`). Such a launch was refused and the campaign ended
   done with nothing run. The platform now takes the cards from the session's
   allocation.
+- **A multi-node run keeps the pod that crashed.** The engine chart recreates
+  a whole lws group when one pod restarts, which deleted the crashed pod and
+  its log: the run failed with only the survivors' "peer went away". A run's
+  group now restarts in place (`lws.restartPolicy: None` in AutoTune's run
+  layer), so the crash's log is read before the run is torn down.
 - **A crashed run says what the engine raised.** Its error was "container
   crashed; see log"; it is now `container crashed: <the exception>`, taken from
   the pod that failed first, not from a peer reporting it gone.
