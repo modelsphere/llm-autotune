@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Plugin API
+
+- **Recipes.** `Recipe`, `parse_recipe` (a catalog variant, an LLMService,
+  a recipe or a command line; raises `NotARecipe`), `recipe_problems`,
+  `recipe_warnings`, `recipe_shape` (pods and cards) and `recipe_for` (what a
+  campaign's config launches), so a plugin can take a recipe and hand it to a
+  managed campaign as `recipe`. Added names only: still version 2.
+
 ### Changed
 
 - **Cluster forms say less and show where the cluster is.** A tag next to
