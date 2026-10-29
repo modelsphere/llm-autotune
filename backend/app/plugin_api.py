@@ -62,6 +62,11 @@ from app.control.orchestrator.machine_queue import campaign_key, session_key
 from app.control.orchestrator.occupancy import Reservation, busy_reason, reservations_on
 from app.control.orchestrator.policy_lifecycle import settings_of as policy_settings_of
 from app.control.orchestrator.supervisor import Supervisor
+from app.control.recipe.check import recipe_problems
+from app.control.recipe.importer import NotARecipe
+from app.control.recipe.importer import parse as parse_recipe
+from app.control.recipe.model import Recipe
+from app.control.recipe.shape import shape as recipe_shape
 from app.control.run_nodes import run_ids_on_machine
 from app.control.search import CandidateConfig
 from app.control.search.space import (
@@ -242,6 +247,12 @@ __all__ = [
     "space_errors",
     "tied_groups",
     "widest_cards",
+    # Recipes: a configuration as the chart and the catalog read it
+    "NotARecipe",
+    "Recipe",
+    "parse_recipe",
+    "recipe_problems",
+    "recipe_shape",
     # Engines and configs
     "MODEL_MOUNT",
     "LaunchConfig",
