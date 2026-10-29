@@ -78,11 +78,13 @@ warning for why), then its machines, namespace and GPU resource.
   machines whose node no longer exists.
 - **Probe** checks that the credential still works and refreshes the cluster's
   details.
-- **More ▸ Edit** changes its settings, including some available only here.
+- **More ▸ Edit** changes its name, namespace, kubeconfig, how runs are
+  reached and its notes. Everything else is under **Advanced**, including some
+  settings available only here.
   The workload kind and namespace cannot change while the cluster has live
   runs: the platform finds its pods by them. The refusal lists those runs, and
   marks any still tearing down, which may be stuck.
-  - **Endpoint host**, the address runs are reached on (by default the node's
+  - **Public host**, the address runs are reached on (by default the node's
     own address);
   - the size of `/dev/shm` in engine pods;
   - a **Default node selector**;

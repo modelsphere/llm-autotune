@@ -7,6 +7,7 @@ import { api, type Cluster, type Machine, type MachineGroup, type MachineGroupPr
 import InfoHint from '../components/InfoHint.vue'
 import ClusterEndpointFields from '../components/ClusterEndpointFields.vue'
 import ClusterHealth from '../components/ClusterHealth.vue'
+import ClusterLocation from '../components/ClusterLocation.vue'
 import LiveWorkDialog, { type LiveRun } from '../components/LiveWorkDialog.vue'
 import SmokeTestDialog from '../components/SmokeTestDialog.vue'
 import { Lock, Warning } from '@element-plus/icons-vue'
@@ -244,10 +245,45 @@ watch(() => kubeFacts.value.name, (name, before) => {
 const namespaceMissing = computed(() =>
   !!newCluster.value.kubeconfig.trim() && !kubeFacts.value.namespace)
 
+/** Where a cluster is (ClusterLocation), asked of the server from a pasted
+ *  kubeconfig's CA a moment after typing stops; with none pasted, what is
+ *  stored. An external cluster cannot keep Service names: NodePort is picked. */
+function useLocality(
+  kubeconfig: () => string, stored: () => boolean | null, form: () => { endpoint: string },
+) {
+  const same = ref<boolean | null>(null)
+  const detecting = ref(false)
+  let timer: ReturnType<typeof setTimeout> | undefined
+  let asked = 0
+  function settle(value: boolean | null) {
+    same.value = value
+    detecting.value = false
+    if (value === false && form().endpoint === 'dns') form().endpoint = 'nodeport'
+  }
+  function check(text: string) {
+    clearTimeout(timer)
+    const mine = ++asked
+    if (!text.trim()) return settle(stored())
+    detecting.value = true
+    timer = setTimeout(async () => {
+      let value: boolean | null = null
+      try {
+        value = (await api.post('/clusters/locality', { kubeconfig: text })).data.same_cluster
+      } catch { /* unknown */ }
+      if (mine === asked) settle(value)
+    }, 400)
+  }
+  watch(kubeconfig, check)
+  return { same, detecting, reset: () => check(kubeconfig()) }
+}
+const addLocality = useLocality(
+  () => newCluster.value.kubeconfig, () => null, () => newCluster.value)
+
 function openAddCluster() {
   newCluster.value = emptyNewCluster()
   connectFailure.value = null
   clusterAdvanced.value = []
+  addLocality.reset()
   addStep.value = 'connect'
   nodesView.value = null
   nodesError.value = ''
@@ -564,9 +600,17 @@ async function removeGroup(group: MachineGroup) {
 }
 
 
+const editAdvanced = ref<string[]>([])
+const editLocality = useLocality(
+  () => clusterForm.value.kubeconfig,
+  () => clusters.value.find((c) => c.id === editingClusterId.value)?.same_cluster ?? null,
+  () => clusterForm.value)
+
 function openEditCluster(c: Cluster) {
   editingClusterId.value = c.id
   clusterForm.value = clusterFormOf(c)
+  editAdvanced.value = []
+  editLocality.reset()
   showClusters.value = true
 }
 
@@ -1074,6 +1118,7 @@ onMounted(() => {
             :title="t('resources.workloadKind')">
             {{ launchLook(c.workload_kind).text }}
           </el-tag>
+          <ClusterLocation :same="c.same_cluster" />
           <el-tag v-if="!c.has_kubeconfig" size="small" type="danger">
             {{ t('resources.noCredential') }}
           </el-tag>
@@ -1101,8 +1146,6 @@ onMounted(() => {
         <span class="mono">{{ c.namespace }}</span>
         <span class="mono">{{ c.gpu_resource }}</span>
         <span>{{ c.api_mode }}</span>
-        <span v-if="c.same_cluster === true">{{ t('resources.ownClusterShort') }}</span>
-        <span v-else-if="c.same_cluster === false">{{ t('resources.anotherClusterShort') }}</span>
         <span v-if="c.node_host" class="mono">endpoint {{ c.node_host }}</span>
         <span v-if="c.runtime_class" class="mono">runtimeClass {{ c.runtime_class }}</span>
       </div>
@@ -1341,7 +1384,8 @@ onMounted(() => {
         </div>
         <ClusterEndpointFields v-model:host="newCluster.node_host"
           v-model:port="newCluster.service_nodeport" v-model:endpoint="newCluster.endpoint"
-          :workload-kind="newCluster.workload_kind" />
+          :workload-kind="newCluster.workload_kind"
+          :same-cluster="addLocality.same.value" :detecting="addLocality.detecting.value" />
         <el-collapse v-model="clusterAdvanced" class="dialog-advanced">
           <el-collapse-item name="advanced" :title="t('resources.advanced')">
             <div class="grid-2">
@@ -1579,118 +1623,119 @@ onMounted(() => {
             <el-input v-model="clusterForm.namespace" class="mono" />
           </el-form-item>
         </div>
-        <div class="grid-2">
-          <el-form-item :label="t('resources.apiMode')">
-            <el-select v-model="clusterForm.api_mode" style="width: 100%">
-              <el-option label="client (Python client)" value="client" />
-              <el-option label="kubectl (shell out)" value="kubectl" />
-              <el-option label="unavailable" value="unavailable" />
-            </el-select>
-          </el-form-item>
-          <el-form-item :label="t('resources.workloadKind')">
-            <el-select v-model="clusterForm.workload_kind" style="width: 100%">
-              <el-option :label="t('resources.wkLlmservice')" value="llmservice" />
-              <el-option :label="`${t('resources.wkDeployment')} ${t('resources.wkDeprecated')}`" value="deployment" />
-              <el-option :label="`custom (TuningRun CRD) ${t('resources.wkDeprecated')}`" value="custom" />
-            </el-select>
-          </el-form-item>
-        </div>
         <el-form-item>
           <template #label>
             Kubeconfig
             <InfoHint>{{ t('resources.kubeconfigEditHint') }}</InfoHint>
           </template>
-          <el-input v-model="clusterForm.kubeconfig" type="textarea" :rows="5" class="mono"
-            :placeholder="editingClusterId === null
-              ? t('resources.pasteYaml')
-              : t('resources.keepCred')" />
+          <el-input v-model="clusterForm.kubeconfig" type="textarea" :rows="3" class="mono"
+            :placeholder="t('resources.keepCred')" />
         </el-form-item>
         <ClusterEndpointFields v-model:host="clusterForm.node_host"
           v-model:port="clusterForm.service_nodeport" v-model:endpoint="clusterForm.endpoint"
           :workload-kind="clusterForm.workload_kind"
-          :same-cluster="clusters.find((c) => c.id === editingClusterId)?.same_cluster ?? null" />
-        <template v-if="clusterForm.workload_kind === 'llmservice'">
-          <div class="grid-2">
-            <el-form-item :label="t('resources.chartRepo')">
-              <el-input v-model.trim="clusterForm.chart_repo" class="mono"
-                placeholder="https://modelsphere.github.io/helm-charts" />
-              <div class="muted small">{{ t('resources.chartRepoHint') }}</div>
-            </el-form-item>
-            <el-form-item :label="t('resources.chartCredentials')">
-              <el-input v-model.trim="clusterForm.chart_credentials_secret" class="mono"
-                :placeholder="t('resources.none')" />
-            </el-form-item>
-          </div>
-          <el-form-item :label="t('resources.imageMirror')">
-            <el-input v-model.trim="clusterForm.image_mirror" class="mono"
-              :placeholder="t('resources.none')" />
-            <div class="muted small">{{ t('resources.imageMirrorHint') }}</div>
-          </el-form-item>
-          <el-form-item :label="t('resources.siteValues')">
-            <el-input v-model="clusterForm.site_values" type="textarea" :rows="3" class="mono"
-              placeholder='{"securityContext": {"capabilities": {"add": ["IPC_LOCK"]}}}' />
-            <div class="muted small">{{ t('resources.siteValuesHint') }}</div>
-          </el-form-item>
-        </template>
-        <div class="grid-2">
-          <el-form-item label="RuntimeClass">
-            <el-input v-model="clusterForm.runtime_class" class="mono" />
-          </el-form-item>
-        </div>
-        <div class="grid-2">
-          <el-form-item :label="t('resources.gpuResource')">
-            <el-input v-model="clusterForm.gpu_resource" class="mono" />
-          </el-form-item>
-          <el-form-item :label="t('resources.gpuLabel')">
-            <el-input v-model="clusterForm.gpu_product_label" class="mono"
-              placeholder="node.kubernetes.io/npu.chip.name" />
-          </el-form-item>
-          <el-form-item label="/dev/shm (MiB)">
-            <el-input-number v-model="clusterForm.shm_size_mb" :min="0" :max="1048576" />
-          </el-form-item>
-        </div>
-        <el-form-item :label="t('resources.defaultSelector')">
-          <el-input v-model="clusterForm.node_selector" class="mono" :placeholder="t('resources.none')" />
-        </el-form-item>
-        <el-form-item>
-          <template #label>
-            {{ t('resources.policySelector') }}
-            <InfoHint :width="360"><span v-html="t('resources.policySelectorHint')" /></InfoHint>
-          </template>
-          <el-input v-model="clusterForm.policy_node_selector" class="mono"
-            :placeholder="t('resources.installSetting')" />
-        </el-form-item>
-        <el-form-item>
-          <template #label>
-            {{ t('resources.tolerations') }}
-            <InfoHint :width="360"><span v-html="t('resources.tolerationsHint')" /></InfoHint>
-          </template>
-          <el-input v-model="clusterForm.tolerations" class="mono"
-            placeholder="node.kubernetes.io/unschedulable" />
-        </el-form-item>
-        <el-form-item :label="t('resources.pullSecrets')">
-          <el-input v-model="clusterForm.image_pull_secrets" class="mono"
-            :placeholder="t('resources.noneCreds')" />
-        </el-form-item>
-        <div class="grid-2">
-          <el-form-item :label="t('resources.cpuReq')">
-            <el-input v-model="clusterForm.engine_cpu_request" class="mono" :placeholder="t('resources.omit')" />
-          </el-form-item>
-          <el-form-item :label="t('resources.memReq')">
-            <el-input v-model="clusterForm.engine_memory_request" class="mono" :placeholder="t('resources.omit')" />
-          </el-form-item>
-        </div>
-        <div class="grid-2">
-          <el-form-item :label="t('resources.cpuLim')">
-            <el-input v-model="clusterForm.engine_cpu_limit" class="mono" :placeholder="t('resources.omit')" />
-          </el-form-item>
-          <el-form-item :label="t('resources.memLim')">
-            <el-input v-model="clusterForm.engine_memory_limit" class="mono" :placeholder="t('resources.omit')" />
-          </el-form-item>
-        </div>
+          :same-cluster="editLocality.same.value" :detecting="editLocality.detecting.value" />
         <el-form-item :label="t('resources.notes')">
           <el-input v-model="clusterForm.notes" />
         </el-form-item>
+        <el-collapse v-model="editAdvanced" class="dialog-advanced">
+          <el-collapse-item name="advanced" :title="t('resources.advanced')">
+            <div class="grid-2">
+              <el-form-item :label="t('resources.workloadKind')">
+                <el-select v-model="clusterForm.workload_kind" style="width: 100%">
+                  <el-option :label="t('resources.wkLlmservice')" value="llmservice" />
+                  <el-option :label="`${t('resources.wkDeployment')} ${t('resources.wkDeprecated')}`" value="deployment" />
+                  <el-option :label="`custom (TuningRun CRD) ${t('resources.wkDeprecated')}`" value="custom" />
+                </el-select>
+              </el-form-item>
+              <el-form-item :label="t('resources.apiMode')">
+                <el-select v-model="clusterForm.api_mode" style="width: 100%">
+                  <el-option label="client (Python client)" value="client" />
+                  <el-option label="kubectl (shell out)" value="kubectl" />
+                  <el-option label="unavailable" value="unavailable" />
+                </el-select>
+              </el-form-item>
+              <template v-if="clusterForm.workload_kind === 'llmservice'">
+                <el-form-item>
+                  <template #label>
+                    {{ t('resources.chartRepo') }}
+                    <InfoHint>{{ t('resources.chartRepoHint') }}</InfoHint>
+                  </template>
+                  <el-input v-model.trim="clusterForm.chart_repo" class="mono"
+                    placeholder="https://modelsphere.github.io/helm-charts" />
+                </el-form-item>
+                <el-form-item :label="t('resources.chartCredentials')">
+                  <el-input v-model.trim="clusterForm.chart_credentials_secret" class="mono"
+                    :placeholder="t('resources.none')" />
+                </el-form-item>
+                <el-form-item>
+                  <template #label>
+                    {{ t('resources.imageMirror') }}
+                    <InfoHint>{{ t('resources.imageMirrorHint') }}</InfoHint>
+                  </template>
+                  <el-input v-model.trim="clusterForm.image_mirror" class="mono"
+                    :placeholder="t('resources.none')" />
+                </el-form-item>
+              </template>
+              <el-form-item label="RuntimeClass">
+                <el-input v-model="clusterForm.runtime_class" class="mono" />
+              </el-form-item>
+              <el-form-item :label="t('resources.gpuResource')">
+                <el-input v-model="clusterForm.gpu_resource" class="mono" />
+              </el-form-item>
+              <el-form-item :label="t('resources.gpuLabel')">
+                <el-input v-model="clusterForm.gpu_product_label" class="mono"
+                  placeholder="node.kubernetes.io/npu.chip.name" />
+              </el-form-item>
+              <el-form-item :label="t('resources.defaultSelector')">
+                <el-input v-model="clusterForm.node_selector" class="mono" :placeholder="t('resources.none')" />
+              </el-form-item>
+              <el-form-item>
+                <template #label>
+                  {{ t('resources.policySelector') }}
+                  <InfoHint :width="360"><span v-html="t('resources.policySelectorHint')" /></InfoHint>
+                </template>
+                <el-input v-model="clusterForm.policy_node_selector" class="mono"
+                  :placeholder="t('resources.installSetting')" />
+              </el-form-item>
+              <el-form-item>
+                <template #label>
+                  {{ t('resources.tolerations') }}
+                  <InfoHint :width="360"><span v-html="t('resources.tolerationsHint')" /></InfoHint>
+                </template>
+                <el-input v-model="clusterForm.tolerations" class="mono"
+                  placeholder="node.kubernetes.io/unschedulable" />
+              </el-form-item>
+              <el-form-item :label="t('resources.pullSecrets')">
+                <el-input v-model="clusterForm.image_pull_secrets" class="mono"
+                  :placeholder="t('resources.noneCreds')" />
+              </el-form-item>
+              <el-form-item label="/dev/shm (MiB)">
+                <el-input-number v-model="clusterForm.shm_size_mb" :min="0" :max="1048576" />
+              </el-form-item>
+              <el-form-item :label="t('resources.cpuReq')">
+                <el-input v-model="clusterForm.engine_cpu_request" class="mono" :placeholder="t('resources.omit')" />
+              </el-form-item>
+              <el-form-item :label="t('resources.memReq')">
+                <el-input v-model="clusterForm.engine_memory_request" class="mono" :placeholder="t('resources.omit')" />
+              </el-form-item>
+              <el-form-item :label="t('resources.cpuLim')">
+                <el-input v-model="clusterForm.engine_cpu_limit" class="mono" :placeholder="t('resources.omit')" />
+              </el-form-item>
+              <el-form-item :label="t('resources.memLim')">
+                <el-input v-model="clusterForm.engine_memory_limit" class="mono" :placeholder="t('resources.omit')" />
+              </el-form-item>
+            </div>
+            <el-form-item v-if="clusterForm.workload_kind === 'llmservice'">
+              <template #label>
+                {{ t('resources.siteValues') }}
+                <InfoHint>{{ t('resources.siteValuesHint') }}</InfoHint>
+              </template>
+              <el-input v-model="clusterForm.site_values" type="textarea" :rows="3" class="mono"
+                placeholder='{"securityContext": {"capabilities": {"add": ["IPC_LOCK"]}}}' />
+            </el-form-item>
+          </el-collapse-item>
+        </el-collapse>
       </el-form>
       </template>
       <template #footer>

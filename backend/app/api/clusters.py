@@ -45,7 +45,14 @@ from app.db.models import (
     User,
 )
 from app.hardware import normalize_gpu_type
-from app.schemas.clusters import ClusterIn, ClusterOut, RegisterNodes, RegisterPools
+from app.schemas.clusters import (
+    ClusterIn,
+    ClusterOut,
+    LocalityIn,
+    LocalityOut,
+    RegisterNodes,
+    RegisterPools,
+)
 
 router = APIRouter(prefix="/clusters", tags=["clusters"])
 
@@ -387,6 +394,20 @@ def _probe(cluster: K8sClusterSettings) -> dict:
                 f"'deployment' or install the operator ({str(exc)[:160]})"
             )
     return result
+
+
+@router.post("/locality", response_model=LocalityOut)
+async def cluster_locality(body: LocalityIn, _: User = Depends(require_admin)):
+    """Is this kubeconfig's cluster the one AutoTune runs in? For the form,
+    before saving: it decides whether runs can be reached by Service name.
+    Reads the CA in the kubeconfig only; contacts nothing."""
+    from types import SimpleNamespace
+
+    cluster = SimpleNamespace(
+        k8s_in_cluster=body.in_cluster, kubeconfig_content=body.kubeconfig,
+        k8s_kubeconfig="", k8s_context=body.context,
+    )
+    return LocalityOut(same_cluster=same_cluster(cluster))
 
 
 @router.post("/{cluster_id}/probe")
