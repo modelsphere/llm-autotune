@@ -41,6 +41,11 @@ data:
   AUTOTUNE_K8S_IN_CLUSTER: "true"
   AUTOTUNE_K8S_NAMESPACE: {{ .Values.gpuCluster.namespace | default .Release.Namespace | quote }}
   AUTOTUNE_K8S_WORKLOAD_KIND: {{ if .Values.operator.enabled }}"custom"{{ else }}{{ .Values.gpuCluster.workloadKind | quote }}{{ end }}
+  {{- with .Values.gpuCluster.engineCharts.repo }}
+  {{- if not (regexMatch "^(https|oci)://" .) }}
+  {{- fail (printf "gpuCluster.engineCharts.repo %q must start with https:// or oci:// -- llm-operator accepts no other" .) }}
+  {{- end }}
+  {{- end }}
   AUTOTUNE_K8S_CHART_REPO: {{ .Values.gpuCluster.engineCharts.repo | quote }}
   AUTOTUNE_K8S_CHART_CREDENTIALS_SECRET: {{ .Values.gpuCluster.engineCharts.credentialsSecret | quote }}
   AUTOTUNE_K8S_ENDPOINT: {{ .Values.gpuCluster.endpoint | quote }}

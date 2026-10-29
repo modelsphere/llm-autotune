@@ -94,3 +94,18 @@ def test_client_logs_read_every_container_of_a_sidecar_pod():
     text = api.logs("autotune.modelsphere.dev/run=1")
     assert "[run-1-abc/sglang]\nsglang says hi" in text
     assert "[run-1-abc/hang-watcher]" in text
+
+
+def test_an_api_error_says_what_the_server_refused():
+    """A rejected LLMService used to read only "Unprocessable Entity"."""
+    from types import SimpleNamespace
+
+    from app.control.launch.k8s_api import _why
+
+    body = ('{"kind":"Status","message":"LLMService.serving.modelsphere.dev \\"r\\" is invalid: '
+            "spec.chart.repo: Invalid value: \\\"http://c\\\": should match '^(https://|oci://).+'\"}")
+    refused = SimpleNamespace(reason="Unprocessable Entity", body=body)
+    assert _why(refused).startswith("Unprocessable Entity: LLMService")
+    assert "spec.chart.repo" in _why(refused)
+    assert _why(SimpleNamespace(reason="Forbidden", body="not json")) == "Forbidden"
+    assert _why(SimpleNamespace(reason="Not Found", body=None)) == "Not Found"

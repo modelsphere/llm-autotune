@@ -53,6 +53,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   form does not show (in_cluster, the GPU-taint toleration, the model PVC) was
   reset to its default on every save; on the platform's own cluster that cut
   it off from its API server.
+- **A chart repository llm-operator would refuse is refused when saved.** It
+  accepts only `https://` and `oci://`; an `http://` one saved (on a cluster,
+  or as `gpuCluster.engineCharts.repo`, which now fails the render) and every
+  run then failed at launch.
+- **A refused Kubernetes object says why.** A run's error carried the API
+  server's reason only ("Unprocessable Entity"); it now carries its message,
+  which names the field and the rule.
 
 - **Cluster forms say less and show where the cluster is.** A tag next to
   **Reach runs by** reads *AutoTune's cluster*, *External cluster* or

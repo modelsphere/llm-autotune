@@ -318,3 +318,15 @@ async def test_an_edit_keeps_what_the_form_does_not_send(client):
         row = await session.get(Cluster, 9)
         assert (row.in_cluster, row.tolerate_gpu_taint, row.model_pvc, row.notes) == (
             True, False, "weights", "edited")
+
+
+async def test_a_chart_repo_llm_operator_would_refuse_is_refused(client):
+    """llm-operator accepts only https:// and oci:// chart repositories; an
+    http:// one saved, and every run then failed at launch with a bare 422."""
+    body = {"name": "plain", "kubeconfig": KUBECONFIG, "chart_repo": "http://charts.local"}
+    resp = await client.post("/api/clusters", json=body)
+    assert resp.status_code == 422
+    assert "https:// or oci://" in resp.text
+    for repo in ("https://charts.example.com", "oci://registry.example/charts", ""):
+        assert (await client.post("/api/clusters", json={**body, "name": f"ok{len(repo)}",
+                                                         "chart_repo": repo})).status_code == 201
