@@ -46,6 +46,10 @@ const props = defineProps<{
   /** What the dialog opens with ticked: typically [baseline, optimized]. */
   initial: { run_id: number; role: string }[]
   modelName?: string
+  /** The model's Hugging Face id when the caller already knows it (a Hub
+   *  track is made for one): written as source.hf and used to find the model
+   *  in the catalog, and not editable here. */
+  hf?: string
 }>()
 const emit = defineEmits<{ (e: 'update:modelValue', open: boolean): void }>()
 
@@ -108,6 +112,7 @@ watch(
     for (const field of [name, hf, displayName, description, family, tags, license, homepage]) {
       field.value = ''
     }
+    hf.value = props.hf?.trim() ?? ''
     gpuProduct.value = ''
     reportId.value = null
     startupMinutes.value = null
@@ -358,8 +363,10 @@ async function download() {
         </el-form-item>
         <el-form-item v-if="isNew" :label="t('catalogExport.hf')" required>
           <div class="stack">
-            <el-input v-model="hf" class="mono field" placeholder="org/name" />
-            <el-button v-if="preview?.hf_suggestion && !hf" size="small" link type="primary"
+            <el-input v-model="hf" class="mono field" placeholder="org/name"
+              :disabled="!!props.hf?.trim()" />
+            <span v-if="props.hf?.trim()" class="muted tiny">{{ t('catalogExport.hfGiven') }}</span>
+            <el-button v-else-if="preview?.hf_suggestion && !hf" size="small" link type="primary"
               @click="useSuggestion">{{ t('catalogExport.useSuggestion', { hf: preview.hf_suggestion }) }}</el-button>
           </div>
         </el-form-item>

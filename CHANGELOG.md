@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Plugin API
 
+- **`CatalogExportDialog` takes `hf`.** A caller that already knows the
+  model's Hugging Face id passes it: the export writes it as `source.hf`,
+  finds the model in the catalog by it, and the field is shown locked instead
+  of asking for it.
+
 - **Recipes.** `Recipe`, `parse_recipe` (a catalog variant, an LLMService,
   a recipe or a command line; raises `NotARecipe`), `recipe_problems` and
   `recipe_shape` (pods and cards), so a plugin can take a recipe and hand it

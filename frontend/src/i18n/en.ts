@@ -479,6 +479,7 @@ export default {
     name: 'Name',
     hf: 'Hugging Face id',
     useSuggestion: 'Use {hf}',
+    hfGiven: 'Set where this model was registered',
     modelDetails: 'Model details',
     displayName: 'Display name',
     descriptionField: 'Description',
