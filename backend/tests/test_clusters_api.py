@@ -299,3 +299,22 @@ async def test_a_run_still_tearing_down_counts_as_live(client):
     resp = await client.put(f"/api/clusters/{created['id']}", json=body)
     assert resp.status_code == 409
     assert resp.json()["detail"]["runs"][0]["teardown_pending"] is True
+
+
+async def test_an_edit_keeps_what_the_form_does_not_send(client):
+    """The platform's own cluster is registered in-cluster; its edit form has no
+    such field, and saving it once reset in_cluster to the schema's False,
+    leaving the row with no way to reach its API server."""
+    async with client.factory() as session:
+        session.add(Cluster(id=9, name="local", in_cluster=True, namespace="runs",
+                            workload_kind="llmservice", endpoint="dns",
+                            tolerate_gpu_taint=False, model_pvc="weights"))
+        await session.commit()
+    form = {"name": "local", "kubeconfig": "", "namespace": "runs",
+            "workload_kind": "llmservice", "endpoint": "dns", "notes": "edited"}
+    resp = await client.put("/api/clusters/9", json=form)
+    assert resp.status_code == 200, resp.text
+    async with client.factory() as session:
+        row = await session.get(Cluster, 9)
+        assert (row.in_cluster, row.tolerate_gpu_taint, row.model_pvc, row.notes) == (
+            True, False, "weights", "edited")

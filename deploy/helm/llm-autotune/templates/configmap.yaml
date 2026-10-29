@@ -5,13 +5,10 @@ metadata:
   name: {{ $fullName }}-config
   labels: {{- include "llm-autotune.labels" . | nindent 4 }}
 data:
-  {{- if and (not .Values.publicApiUrl) .Values.gpuCluster.inCluster }}
-  # Runs, and so policy containers, land in this cluster: they can reach the
-  # API by its service name.
-  AUTOTUNE_PUBLIC_API_URL: {{ printf "http://%s-api.%s.svc.%s:8000" $fullName .Release.Namespace (.Values.clusterDomain | default "cluster.local") | quote }}
-  {{- else }}
+  # A policy on this cluster calls home by the API's Service name; one on any
+  # other cluster or machine needs publicApiUrl.
+  AUTOTUNE_INTERNAL_API_URL: {{ printf "http://%s-api.%s.svc.%s:8000" $fullName .Release.Namespace (.Values.clusterDomain | default "cluster.local") | quote }}
   AUTOTUNE_PUBLIC_API_URL: {{ .Values.publicApiUrl | quote }}
-  {{- end }}
   AUTOTUNE_PUBLIC_UI_URL: {{ .Values.publicUiUrl | quote }}
   AUTOTUNE_CORS_ORIGINS: {{ .Values.corsOrigins | quote }}
   AUTOTUNE_RUN_LOG_DIR: /app/runs
@@ -34,6 +31,9 @@ data:
   AUTOTUNE_LLMBENCH_VICTORIALOGS_URL: {{ .Values.llmbench.victoriaLogsUrl | quote }}
   {{- end }}
   AUTOTUNE_CATALOG_INDEX_URL: {{ .Values.catalogIndexUrl | quote }}
+  {{- with .Values.defaultPolicies }}
+  AUTOTUNE_DEFAULT_POLICIES: {{ toJson . | quote }}
+  {{- end }}
   {{- if .Values.gpuCluster.inCluster }}
   # The launch driver talks to the API server this release runs in, using the
   # chart's own ServiceAccount — no kubeconfig to mint or paste.
@@ -54,4 +54,6 @@ data:
   AUTOTUNE_K8S_MODEL_PVC_ROOT: {{ .Values.gpuCluster.modelPvcRoot | quote }}
   AUTOTUNE_K8S_SHM_SIZE_MB: {{ .Values.gpuCluster.shmSizeMb | quote }}
   AUTOTUNE_AUTO_REGISTER_CLUSTER: {{ .Values.gpuCluster.autoRegister | quote }}
+  AUTOTUNE_AUTO_REGISTER_MACHINE: {{ .Values.gpuCluster.autoRegisterMachine | quote }}
+  AUTOTUNE_LOCAL_CLUSTER_NAME: {{ .Values.gpuCluster.name | default "local" | quote }}
   {{- end }}

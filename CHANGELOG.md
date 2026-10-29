@@ -19,7 +19,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `recipe_shape` (pods and cards), so a plugin can take a recipe and hand it
   to a managed campaign as `recipe`. Added names only: still version 2.
 
+### Added
+
+- **The chart installs with no values.** `jwtSecret`, `adminPassword` and the
+  Postgres password are generated on install when not given and kept on
+  upgrade; the release's Secret is kept on uninstall, with the database
+  volume. The install notes print how to read the admin password.
+- **`llmbench.apiKeySecret`** reads LLMBench's service key from LLMBench's own
+  Secret in the same namespace, so the two releases share one copy.
+- **`defaultPolicies`** registers search policies on install, each only while
+  no policy has its name. random-search is the default; the quickstart passes
+  its `POLICY_IMAGE` this way instead of calling the API.
+
 ### Changed
+
+- **The platform's own cluster is a cluster row.** An empty in-cluster install
+  registers it on Resources ▸ Clusters (`gpuCluster.name`, `local`) with the
+  `gpuCluster` values, and its `local-cluster` machine on that row;
+  `gpuCluster.autoRegisterMachine=false` registers the cluster alone, for
+  pools per GPU type. Clusters added later keep their own settings.
+- **A policy calls home by the address its machine can reach.** On the
+  platform's own cluster that is the API's Service name
+  (`AUTOTUNE_INTERNAL_API_URL`, always set by the chart); anywhere else it is
+  `publicApiUrl`. With `gpuCluster.inCluster`, an empty `publicApiUrl` used to
+  become the Service name for every cluster, which a policy on an added
+  cluster cannot resolve; such a campaign now fails at start, saying so.
+- The chart carries 0.3.1's string rendering of `extraEnv` values and its
+  helm-unittest suite, from the copy in the helm-charts repository.
+
+### Fixed
+
+- **Saving a cluster changes only what the form sent.** A setting the edit
+  form does not show (in_cluster, the GPU-taint toleration, the model PVC) was
+  reset to its default on every save; on the platform's own cluster that cut
+  it off from its API server.
 
 - **Cluster forms say less and show where the cluster is.** A tag next to
   **Reach runs by** reads *AutoTune's cluster*, *External cluster* or

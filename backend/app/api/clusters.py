@@ -191,10 +191,14 @@ async def update_cluster(
     ).scalar_one_or_none()
     if clash is not None:
         raise HTTPException(status.HTTP_409_CONFLICT, "cluster name taken")
-    data = body.model_dump(exclude={"kubeconfig"})
+    # Only what the request names: a form that does not show a setting (in_cluster
+    # on the platform's own cluster, the deprecated kinds' fields) must not reset
+    # it to the schema's default by saving.
+    data = body.model_dump(exclude={"kubeconfig"}, exclude_unset=True)
     data["namespace"] = (body.namespace or _kubeconfig_namespace(body.kubeconfig, body.context)
                          or row.namespace)
-    moved = [f for f in ("workload_kind", "namespace") if data[f] != getattr(row, f)]
+    moved = [f for f in ("workload_kind", "namespace")
+             if data.get(f, getattr(row, f)) != getattr(row, f)]
     if moved:
         live = await _live_work(session, row.id)
         if live["runs"] or live["sessions"]:
