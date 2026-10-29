@@ -468,6 +468,7 @@ const zh: typeof en = {
     name: '名称',
     hf: 'Hugging Face id',
     useSuggestion: '使用 {hf}',
+    hfGiven: '在登记这个模型时已设定',
     modelDetails: '模型信息',
     displayName: '显示名称',
     descriptionField: '描述',
