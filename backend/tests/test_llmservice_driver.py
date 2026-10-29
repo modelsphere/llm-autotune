@@ -121,6 +121,12 @@ def test_a_crash_looping_engine_is_crashed():
             "execution error at (sglang/templates/lws.yaml): sglang: pd and lws",
             "bad_config",
         ),
+        (
+            "ApplyFailed",
+            "values don't meet the specifications of the schema(s) in the following "
+            "chart(s):\nsglang:\n- at '/lws/restartPolicy': value must be one of 'Default'",
+            "bad_config",
+        ),
         ("ChartResolveFailed", "no version of sglang matches >=9", "cluster_setup"),
         ("ChartRepoNotAllowed", "repo not allowed", "cluster_setup"),
     ],

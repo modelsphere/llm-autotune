@@ -261,7 +261,8 @@ class LLMServiceDriver(K8sDriver):
         """The operator's own verdict, when it is final.
 
         `Failed` covers three different things. The chart refusing these values
-        (a render guard: Helm's "execution error") is a verdict on the config.
+        (a render guard: Helm's "execution error", or its values schema) is a
+        verdict on the config.
         A repository it may not use or cannot resolve, a release it does not
         own, is the cluster's setup, and every config would meet it. Any other
         apply error the operator retries with backoff, so it is not final."""
@@ -273,7 +274,10 @@ class LLMServiceDriver(K8sDriver):
             if condition.get("type") == "Applied" and condition.get("status") == "False":
                 reason = condition.get("reason") or ""
         message = str(status.get("message") or reason or "the operator could not apply the chart")
-        if "execution error" in message or reason == "Failed":
+        # A render guard ("execution error") or the chart's values.schema.json
+        # refusing a value: either way these values, not the cluster.
+        refused = "execution error" in message or "meet the specifications of the schema" in message
+        if refused or reason == "Failed":
             return ("bad_config", f"the chart refuses this config: {message}"[:2000])
         if reason in ("ChartRepoNotAllowed", "ChartResolveFailed", "Drift", "PendingRelease"):
             return ("cluster_setup", f"cluster setup: {reason}: {message}"[:2000])

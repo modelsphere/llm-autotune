@@ -166,8 +166,9 @@ def run_layer(recipe: Recipe, site: Site, run: RunPlan) -> dict[str, Any]:
         # restarts, deleting the pod that crashed and its log with it: a run
         # then fails with only the survivors' "peer went away". A run is over
         # once its engine crashes, so restart in place and keep the log (the
-        # pd roles read the same setting).
-        out["lws"] = {**out.get("lws", {}), "restartPolicy": "None"}
+        # pd roles read the same setting). The chart's schema takes `Default`,
+        # LWS's older name for `None`.
+        out["lws"] = {**out.get("lws", {}), "restartPolicy": "Default"}
     if run.allowed_nodes:
         out["affinity"] = {
             "nodeAffinity": {

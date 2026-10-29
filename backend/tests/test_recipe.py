@@ -332,7 +332,8 @@ def test_a_multi_node_run_keeps_a_crashed_pod_and_its_log():
         engine="sglang", image="i:t", served_model_name="m", engine_args={"tp": 8, "pp": 2}, nodes=2
     )
     values = effective_values(layers(gang, site, RunPlan(run_id=1, release="r")))
-    assert values["lws"]["restartPolicy"] == "None"
+    # The chart's values schema allows Default or RecreateGroupOnPodRestart.
+    assert values["lws"]["restartPolicy"] == "Default"
     assert values["lws"]["enabled"] is True and values["lws"]["size"] == 2
     single = Recipe(values={"image": {"repository": "a", "tag": "b"}})
     plain = effective_values(layers(single, site, RunPlan(run_id=1, release="r")))
