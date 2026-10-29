@@ -161,6 +161,14 @@ def run_layer(recipe: Recipe, site: Site, run: RunPlan) -> dict[str, Any]:
         out[feature] = {"enabled": False}
     if recipe.topology == "lws":
         out["lws"] = {"replicas": 1, "workerTerminationGracePeriodSeconds": 30}
+    if recipe.topology in ("lws", "pd"):
+        # The chart recreates the whole group when one pod's container
+        # restarts, deleting the pod that crashed and its log with it: a run
+        # then fails with only the survivors' "peer went away". A run is over
+        # once its engine crashes, so restart in place and keep the log (the
+        # pd roles read the same setting). The chart's schema takes `Default`,
+        # LWS's older name for `None`.
+        out["lws"] = {**out.get("lws", {}), "restartPolicy": "Default"}
     if run.allowed_nodes:
         out["affinity"] = {
             "nodeAffinity": {

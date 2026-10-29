@@ -37,13 +37,21 @@ from app.control.launch.failures import (
     RELEASED,
     classify_exit,
     classify_failure,
+    first_exception,
     is_infrastructure,
     is_transient_placement,
     restart_kind,
 )
 from app.control.orchestrator import schedule as sched
 from app.control.orchestrator import timing
-from app.control.orchestrator.container_logs import Snapshots, clip, read_text, with_head
+from app.control.orchestrator.container_logs import (
+    Snapshots,
+    clip,
+    collapse_progress,
+    read_text,
+    tail_by_section,
+    with_head,
+)
 from app.control.orchestrator.groups import members_by_rank
 from app.control.orchestrator.lifecycle import (
     USER_STOP_ERROR,
@@ -173,6 +181,7 @@ MAX_ATTEMPTS_PER_CANDIDATE = 3
 # How much of a captured log is kept in the database: the end, where a crash
 # explains itself. Enough for a Python traceback and the lines before it.
 LOG_TAIL_CHARS = 64_000
+CRASHED = "container crashed; see log"
 
 # Where a multi-node run's rendezvous port is searched from, on the master. Above
 # the usual service ports and outside the k8s NodePort range; the allocator walks
@@ -2387,7 +2396,7 @@ class Supervisor:
         run: Run,
         handle,
         failure_class: str | None = None,
-        error: str = "container crashed; see log",
+        error: str = CRASHED,
     ) -> None:
         driver = self._driver_for(handle.machine) if handle is not None else self.driver
         log_text = ""
@@ -2398,6 +2407,12 @@ class Supervisor:
         self._save_run_log(run, log_text)
         self._final_logs.add(run.id)
         resolved_class = failure_class or classify_failure(log_text)
+        if error == CRASHED:
+            # Say what the engine raised, so the run reads as its reason rather
+            # than as a pointer to a log of several pods.
+            raised = first_exception(log_text)
+            if raised:
+                error = f"container crashed: {raised}"
         # A container that never started leaves no log to classify (a bad model
         # mount, an unpullable image, an unschedulable pod). The substrate still
         # knows why, so ask it and surface that real reason instead of the
@@ -2499,12 +2514,15 @@ class Supervisor:
             return
         log_path = os.path.join(self.settings.run_log_dir, f"run-{run.id}.log")
         log_text = clip(
-            with_head(read_text(run.log_path or log_path) or (run.log_tail or ""), log_text),
+            with_head(
+                read_text(run.log_path or log_path) or (run.log_tail or ""),
+                collapse_progress(log_text),
+            ),
             self.settings.log_file_max_bytes,
         )
         # In the row first: the file below is on this worker's disk, which the
         # API can read only when the two share a volume.
-        run.log_tail = log_text[-LOG_TAIL_CHARS:]
+        run.log_tail = tail_by_section(log_text, LOG_TAIL_CHARS)
         try:
             os.makedirs(self.settings.run_log_dir, exist_ok=True)
             with open(log_path, "w", encoding="utf-8") as f:

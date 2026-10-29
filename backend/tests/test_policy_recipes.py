@@ -6,7 +6,7 @@ keys may name a pd role's flags (`prefill.`/`decode.`) or any chart value
 check answers with the recipe the platform builds from one."""
 
 from app.control.recipe.legacy import from_fields
-from app.db.models import Campaign
+from app.db.models import Campaign, Run
 from tests.test_policy_sessions import _boot, night  # noqa: F401  (night is a fixture)
 
 
@@ -111,3 +111,37 @@ async def test_a_driver_that_takes_flags_only_refuses_chart_values(night):  # no
         )
     ).json()
     assert [p["kind"] for p in checked["problems"]] == ["substrate"]
+
+
+async def test_a_recipe_launch_takes_the_cards_its_shape_needs(night):  # noqa: F811
+    """A policy counts cards from the config's own tp×dp×pp; under a recipe
+    the parallelism can live in the recipe (here tp 4, or lws.size), so a
+    config that does not touch it asked for one card and was refused, and the
+    campaign ended with nothing run. The recipe's shape decides now."""
+    supervisor, driver, http = night
+    async with http.db() as session:
+        campaign = await session.get(Campaign, 1)
+        campaign.recipe = from_fields(
+            engine="sglang",
+            image="lmsysorg/sglang:v0.5.20",
+            served_model_name="m",
+            engine_args={"tp": 4},
+        ).model_dump()
+        await session.commit()
+    policy = await _boot(supervisor, driver, http)
+    launched = await policy.post(
+        "/launches", json={"engine_args": {"mem_fraction_static": 0.8}, "gpu_indices": [0]}
+    )
+    assert launched.status_code == 201, launched.text
+    async with http.db() as session:
+        run = await session.get(Run, launched.json()["id"])
+        assert run.gpu_indices == [0, 1, 2, 3]
+    # The next one gets the cards left, and then waits.
+    second = await policy.post(
+        "/launches", json={"engine_args": {"mem_fraction_static": 0.7}, "gpu_indices": [0]}
+    )
+    assert second.status_code == 201, second.text
+    third = await policy.post(
+        "/launches", json={"engine_args": {"mem_fraction_static": 0.6}, "gpu_indices": [0]}
+    )
+    assert third.status_code == 429, third.text

@@ -257,6 +257,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A policy campaign on a recipe launches with the cards its recipe needs.**
+  A policy counts a launch's cards from the config's own tp×dp×pp, which
+  cannot see parallelism set in the recipe (`lws.size`, the pd roles, a tp
+  flag in its `extraArgs`). Such a launch was refused and the campaign ended
+  done with nothing run. The platform now takes the cards from the session's
+  allocation.
+- **A chart that refuses a run's values fails the run at once.** The operator
+  reports a values-schema refusal as `Failed`, which was not read as final, so
+  the run waited out the 45-minute pull limit. It now fails as `bad_config`
+  with the chart's message.
+- **A multi-node run keeps the pod that crashed.** The engine chart recreates
+  a whole lws group when one pod restarts, which deleted the crashed pod and
+  its log: the run failed with only the survivors' "peer went away". A run's
+  group now restarts in place (`lws.restartPolicy: Default`, LWS's name for
+  `None` that the chart's schema accepts, in AutoTune's run
+  layer), so the crash's log is read before the run is torn down.
+- **A crashed run says what the engine raised.** Its error was "container
+  crashed; see log"; it is now `container crashed: <the exception>`, taken from
+  the pod that failed first, not from a peer reporting it gone.
+- **A multi-pod run's saved log keeps every pod's end.** The log the run page
+  shows kept only the end of all pods' logs joined, so under an lws group the
+  leader's error, which comes first, was cut away and only the worker's "the
+  peer went away" was left. Each pod's section now keeps its own end, and
+  progress bars that redraw in place keep only their last frame.
+- **Force start refuses a window too short to search.** Before a campaign has
+  measured a start, validation holds back a whole model load limit per launch
+  at the end of the window, so a short force start could leave no search time:
+  the policy was finalized as it started. Force start now answers with what is
+  held back and the shortest window that works.
 - **Leasing read the wrong cluster's capacity.** A lease probed the platform's
   default cluster with the machine's node selector, not the machine's own
   cluster.

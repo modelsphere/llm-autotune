@@ -323,6 +323,23 @@ def test_a_run_layer_wins_over_production_settings():
     )
 
 
+def test_a_multi_node_run_keeps_a_crashed_pod_and_its_log():
+    """The chart recreates an lws group when one pod restarts, deleting the
+    pod that crashed: a 2-node run failed with only the leader's "peer went
+    away". A run's group restarts in place instead."""
+    site = Site(namespace="ns", chart_repo="oci://r")
+    gang = from_fields(
+        engine="sglang", image="i:t", served_model_name="m", engine_args={"tp": 8, "pp": 2}, nodes=2
+    )
+    values = effective_values(layers(gang, site, RunPlan(run_id=1, release="r")))
+    # The chart's values schema allows Default or RecreateGroupOnPodRestart.
+    assert values["lws"]["restartPolicy"] == "Default"
+    assert values["lws"]["enabled"] is True and values["lws"]["size"] == 2
+    single = Recipe(values={"image": {"repository": "a", "tag": "b"}})
+    plain = effective_values(layers(single, site, RunPlan(run_id=1, release="r")))
+    assert "restartPolicy" not in (plain.get("lws") or {})
+
+
 def test_nodeport_is_opt_in():
     recipe = Recipe(values={"image": {"repository": "a", "tag": "b"}})
     site = Site(namespace="ns", chart_repo="oci://r", endpoint="nodeport")

@@ -94,10 +94,14 @@ def search_deadline(campaign: Campaign, machine: Machine | None) -> datetime | N
     hard = hard_deadline(campaign, machine)
     if hard is None:
         return None
-    reserve = settings_of(campaign).reserve_minutes(
+    return hard - timedelta(minutes=reserve_minutes(campaign, machine))
+
+
+def reserve_minutes(campaign: Campaign, machine: Machine | None) -> int:
+    """The end of the window held back for validation."""
+    return settings_of(campaign).reserve_minutes(
         contender_minutes(campaign), validation_rounds(campaign, machine)
     )
-    return hard - timedelta(minutes=reserve)
 
 
 def gpu_budget(campaign: Campaign, machine: Machine | None) -> int:

@@ -10,6 +10,7 @@ read at teardown replaces that, unless it comes back empty.
 
 from __future__ import annotations
 
+import re
 import time
 
 GAP_MARK = "[... later lines dropped; the end of the log follows ...]"
@@ -33,6 +34,57 @@ def clip(text: str, max_bytes: int) -> str:
     if 0 <= newline < len(end) - 1:
         end = end[newline + 1:]
     return f"{head}{GAP_MARK}\n{end}"
+
+
+# A pod's (or container's) section in a multi-pod read: `[name]` alone on a
+# line, the way the k8s transports label each pod's log.
+_SECTION = re.compile(r"^\[[^\]\n]+\]$", re.MULTILINE)
+
+
+def collapse_progress(text: str) -> str:
+    """Each line as a terminal would show it: a progress bar redraws itself
+    with carriage returns, so one line can carry thousands of frames (a
+    DeepGEMM warmup did), and only the last one says anything."""
+    if "\r" not in text:
+        return text
+    lines = []
+    for line in text.split("\n"):
+        frames = [f for f in line.split("\r") if f.strip()]
+        lines.append(frames[-1] if frames else "")
+    return "\n".join(lines)
+
+
+def tail_by_section(text: str, max_chars: int) -> str:
+    """The end of `text` in at most `max_chars`, each pod's section keeping
+    its own end. A multi-pod run (an lws group, pd roles) logs one section
+    per pod, one after the other; a plain tail keeps only the last pod, and
+    under lws the pod that failed first, and so explains the failure, is
+    usually an earlier one."""
+    if len(text) <= max_chars:
+        return text
+    starts = [m.start() for m in _SECTION.finditer(text)]
+    if len(starts) < 2:
+        return text[-max_chars:]
+    if starts[0] > 0:
+        starts.insert(0, 0)
+    bounds = [*starts, len(text)]
+    sections = [text[a:b] for a, b in zip(bounds, bounds[1:], strict=False)]
+    share = max(max_chars // len(sections) - len(GAP_MARK) - 2, 0)
+    kept = []
+    for section in sections:
+        if len(section) <= share:
+            kept.append(section)
+            continue
+        header, _, body = section.partition("\n")
+        if not _SECTION.fullmatch(header):
+            header, body = "", section
+        room = share - len(header) - 1
+        end = body[-room:] if room > 0 else ""
+        newline = end.find("\n")
+        if 0 <= newline < len(end) - 1:
+            end = end[newline + 1:]
+        kept.append(f"{header}\n{GAP_MARK}\n{end}" if header else f"{GAP_MARK}\n{end}")
+    return "".join(s if s.endswith("\n") else s + "\n" for s in kept).rstrip("\n")
 
 
 def read_text(path: str | None) -> str:
