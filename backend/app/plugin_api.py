@@ -63,9 +63,11 @@ from app.control.orchestrator.occupancy import Reservation, busy_reason, reserva
 from app.control.orchestrator.policy_lifecycle import settings_of as policy_settings_of
 from app.control.orchestrator.supervisor import Supervisor
 from app.control.recipe.check import recipe_problems
+from app.control.recipe.command import command_flags as recipe_command_flags
 from app.control.recipe.importer import NotARecipe
 from app.control.recipe.importer import parse as parse_recipe
 from app.control.recipe.model import Recipe
+from app.control.recipe.shape import pod_gpus as recipe_pod_gpus
 from app.control.recipe.shape import shape as recipe_shape
 from app.control.run_nodes import run_ids_on_machine
 from app.control.search import CandidateConfig
@@ -104,6 +106,7 @@ from app.db.models import (
     Candidate,
     CandidateKind,
     CandidateStatus,
+    Cluster,
     Event,
     Machine,
     MachineGroup,
@@ -180,6 +183,7 @@ __all__ = [
     "AgentReport",
     "Baseline",
     "Campaign",
+    "Cluster",
     "CampaignStatus",
     "Candidate",
     "CandidateKind",
@@ -251,6 +255,8 @@ __all__ = [
     "NotARecipe",
     "Recipe",
     "parse_recipe",
+    "recipe_command_flags",
+    "recipe_pod_gpus",
     "recipe_problems",
     "recipe_shape",
     # Engines and configs

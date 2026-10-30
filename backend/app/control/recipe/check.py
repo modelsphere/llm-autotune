@@ -193,7 +193,11 @@ def recipe_warnings(recipe: Recipe) -> list[str]:
         for key in argv.flags(recipe.engine, items):
             if key in CONTEXT_FLAGS:
                 out.append(f"{prefix}{key} repeats values.model.contextLength; the later flag wins")
-    port = int(((recipe.values.get("service") or {}).get("port")) or 30000)
+    from app.control.recipe.render import default_port
+
+    port = int(
+        ((recipe.values.get("service") or {}).get("port")) or default_port(recipe.chart.name)
+    )
     if recipe.values.get("hostNetwork") and port in NODEPORT_RANGE:
         out.append(
             f"service.port {port} is in the NodePort range and binds on the node itself"
