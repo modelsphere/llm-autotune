@@ -132,8 +132,18 @@ class Settings(BaseSettings):
     # the one thing the platform cannot infer about itself. Injected into every
     # policy container as AUTOTUNE_API_URL; the campaign preflight curls
     # <public_api_url>/api/health from the machine to prove the path exists
-    # before a night depends on it. Empty = policy campaigns refuse to start.
+    # before a night depends on it. Empty = policy campaigns refuse to start
+    # on any machine `internal_api_url` does not cover.
     public_api_url: str = ""
+    # The API's address inside its own cluster (its Service name), which the
+    # chart always sets. Handed to a policy on AutoTune's OWN cluster instead of
+    # `public_api_url`; a policy anywhere else (an external cluster, an ssh
+    # machine) cannot resolve it and gets `public_api_url`.
+    internal_api_url: str = ""
+    # Search policies registered on install when none has the name: a JSON list
+    # of {name, image, version?, description?, repoUrl?, gpusInContainer?,
+    # needsModel?}. The chart's `defaultPolicies` writes it.
+    default_policies: str = ""
     policy_heartbeat_interval_seconds: int = 30
     policy_heartbeat_timeout_seconds: int = 180
     # A wedged policy (silent but container alive) is failed at 2x the timeout;
@@ -243,10 +253,18 @@ class Settings(BaseSettings):
     # Never the admin kubeconfig.
     k8s_kubeconfig: str = ""
     # On an empty install with k8s_in_cluster set, register the cluster this
-    # process runs in as one machine pool, so a fresh deployment has somewhere
-    # to put its first run instead of an empty Resources page. Only ever when
-    # NO machine exists; it never touches a fleet someone has described.
+    # process runs in, so a fresh deployment has somewhere to put its first run
+    # instead of an empty Resources page: a cluster row carrying the k8s_*
+    # settings below (they describe THIS cluster, and no cluster added later),
+    # and, with auto_register_machine, one machine pool over all of its nodes.
+    # Only ever when NO cluster and NO machine exist; it never touches a fleet
+    # someone has described.
     auto_register_cluster: bool = True
+    # Off = the cluster row only: its GPU types or nodes are registered from
+    # Resources ▸ Clusters ▸ Nodes, which a cluster with several GPU types needs.
+    auto_register_machine: bool = True
+    # The registered cluster's name on Resources ▸ Clusters.
+    local_cluster_name: str = "local"
 
     # Set true ONLY when the backend runs as a pod INSIDE the GPU cluster, to
     # authenticate with that pod's own ServiceAccount (load_incluster_config)
