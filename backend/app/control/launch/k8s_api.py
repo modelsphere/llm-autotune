@@ -66,6 +66,18 @@ LLMSVC_PLURAL = "llmservices"
 LLMSVC_RESOURCE = f"{LLMSVC_PLURAL}.{LLMSVC_GROUP}"
 
 
+
+def _why(exc) -> str:
+    """An API error's reason and, when the server gave one, its message: a 422
+    says which field it refused and why ("spec.chart.repo ... should match
+    '^(https://|oci://).+'"), which the reason alone ("Unprocessable Entity")
+    does not."""
+    try:
+        message = json.loads(exc.body or "{}").get("message", "")
+    except (TypeError, ValueError, AttributeError):
+        message = ""
+    return f"{exc.reason}: {message[:1500]}" if message else str(exc.reason)
+
 class K8sError(RuntimeError):
     """A cluster call failed. Raised as RuntimeError so the supervisor
     classifies it as an infrastructure failure (retryable) rather than letting
@@ -438,7 +450,7 @@ class ClientApi(K8sApi):
             # Already there (idempotent relaunch): carry the live resourceVersion
             # and replace, so apply is create-or-update like `kubectl apply`.
             if exc.status != 409:
-                raise K8sError(f"client apply {kind}/{name} failed: {exc.reason}") from exc
+                raise K8sError(f"client apply {kind}/{name} failed: {_why(exc)}") from exc
             current = self.get(self._resource_for_kind(kind), name)
             if current is not None:
                 rv = (current.get("metadata") or {}).get("resourceVersion")

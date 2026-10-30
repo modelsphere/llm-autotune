@@ -9,19 +9,20 @@ LLMBench with these values set ([README](../README.md#install)). This page
 covers installing the chart directly.
 
 ```bash
-helm install autotune deploy/helm/llm-autotune \
-  --set jwtSecret=$(openssl rand -hex 32) \
-  --set adminPassword=...
+helm install autotune deploy/helm/llm-autotune
 ```
 
-`jwtSecret` is the only required value. It signs sign-in tokens and encrypts
+No value is required. `jwtSecret`, `adminPassword` and the Postgres password
+are generated on install when not given, and kept on every upgrade, in the
+release's Secret (`llm-autotune-secrets` for a release named `llm-autotune`). That Secret is kept on
+`helm uninstall`, like the database volume, so a reinstall opens the same
+data; delete both to start over. `jwtSecret` signs sign-in tokens and encrypts
 stored GPU cluster kubeconfigs, so rotating it signs everyone out and makes
-stored kubeconfigs unreadable. Generate it once and keep it.
+stored kubeconfigs unreadable.
 
-`adminPassword` creates the first account, only while the users table is
-empty; the chart never overwrites a changed password. Without it no account
-is created, and the first account registered on the sign-in page becomes the
-admin.
+`adminPassword` is the first account's, created only while the users table is
+empty; the chart never overwrites a changed password. The install notes print
+the command that reads a generated one.
 
 `allowSignup` (default `true`) lets anyone who can reach the UI create an
 ordinary account on the sign-in page. Set it to `false` to have admins add
@@ -65,11 +66,17 @@ gpuCluster:
 
 For GPUs in the cluster the platform runs in, without a kubeconfig: the chart
 grants its own ServiceAccount the same access and, on an empty install,
-registers the cluster as one machine called `local-cluster`: a pool of every
-node, the scheduler placing each pod. A pool holds one GPU type, so on a
-cluster with several, give it a selector such as
-`nvidia.com/gpu.product=NVIDIA-H100-80GB-HBM3`, or set
-`gpuCluster.autoRegister=false` and register a pool per type.
+registers the cluster on **Resources ▸ Clusters** (named `gpuCluster.name`,
+`local`), with one machine called `local-cluster`: a pool of every node, the
+scheduler placing each pod. A pool holds one GPU type, so on a cluster with
+several, set `gpuCluster.autoRegisterMachine=false` and register a pool per
+type from **Clusters ▸ Nodes**, or give the machine a selector such as
+`nvidia.com/gpu.product=NVIDIA-H100-80GB-HBM3`.
+
+The `gpuCluster` values describe this one cluster: they are copied onto its
+row once, and edited there afterwards. A GPU cluster added later from
+Resources carries its own settings; it is reached over a NodePort, not a
+Service name, and its policies need `publicApiUrl`.
 `gpuCluster.countFreeCards=true` lets it count the cards other workloads leave
 free (it reads pods in every namespace). `deploy/quickstart.sh` does not use this
 mode; the demo does.
@@ -118,10 +125,13 @@ helm upgrade --install llm-bench deploy/helm/llm-bench -n llm-bench --create-nam
 
 # 3. In this repository: AutoTune authenticates with the same value
 helm upgrade --install llm-autotune deploy/helm/llm-autotune -n llm-autotune --create-namespace \
-  --set jwtSecret=$(openssl rand -hex 32) --set adminPassword=... \
   --set llmbench.url=http://llm-bench-backend.llm-bench:8000 \
   --set llmbench.apiKey=llmb_...
 ```
+
+Installed in the same namespace, AutoTune can read the key from LLMBench's own
+Secret instead of a copy: `--set llmbench.apiKeySecret.name=llm-bench` (key
+`SERVICE_API_KEY`). The ModelSphere stack installs the two that way.
 
 ```yaml
 llmbench:
@@ -195,11 +205,11 @@ publicApiUrl: https://autotune.example.com   # how a POLICY CONTAINER calls home
 publicUiUrl:  https://autotune.example.com   # how a PERSON reaches the UI
 ```
 
-Both must be reachable from outside the platform's pods. `publicApiUrl` is
-required for policy campaigns: a policy container runs on a GPU cluster and
-calls the platform to request launches and read results. With
-`gpuCluster.inCluster`, it defaults to the API's in-cluster address, which a
-policy in the same cluster can reach; set it when policies run elsewhere.
+Both must be reachable from outside the platform's pods. A policy container
+runs on a GPU cluster and calls the platform to request launches and read
+results. On the platform's own cluster it uses the API's Service name, which
+the chart always sets; on any other cluster or ssh machine it uses
+`publicApiUrl`, and a policy campaign there fails at start without one.
 
 ## The operator
 

@@ -108,7 +108,8 @@ install never replaces a policy already registered under that name.
   ```
 
 A policy runs as a Job on a GPU cluster and calls the platform at
-`publicApiUrl`, which the install sets to the UI address. A policy that asks
+`publicApiUrl`, which the install sets to the UI address (on the platform's own
+cluster, at the API's Service name). A policy that asks
 for no cards may run on any node; when only some nodes reach what it calls
 (an agent policy's LLM endpoint, say), pin it with
 `{name: AUTOTUNE_K8S_POLICY_NODE_SELECTOR, value: "kubernetes.io/hostname=<node>"}`

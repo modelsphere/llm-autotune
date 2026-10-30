@@ -134,6 +134,20 @@ def policy_log_path(run_log_dir: str, session_id: int) -> str:
     return os.path.join(run_log_dir, f"policy-session-{session_id}.log")
 
 
+def api_url_for(settings, machine) -> str:
+    """How a policy on this machine calls home. The API's Service name resolves
+    only inside AutoTune's own cluster, so it goes to a policy there; anywhere
+    else (another cluster, an ssh machine) gets `public_api_url`. "" = none
+    that machine can use."""
+    if settings.internal_api_url and machine.driver == "k8s":
+        from app.control.launch.clusters import resolve_cluster
+        from app.control.launch.locality import same_cluster
+
+        if same_cluster(resolve_cluster(machine.cluster_id)) is True:
+            return settings.internal_api_url
+    return settings.public_api_url
+
+
 
 def _validation_cards(
     session: PolicySession, config: dict, blockers: list, campaign: Campaign | None = None
@@ -273,7 +287,8 @@ class PolicySessionEngine:
         """Pending sessions with no machine yet — waiters in the machine queue.
         One the pending step is about to fail (no API URL, no policy row) or a
         human is aborting is not waiting for hardware."""
-        if not self.sup.settings.public_api_url:
+        settings = self.sup.settings
+        if not (settings.public_api_url or settings.internal_api_url):
             return []
         out = []
         for row in db.scalars(
@@ -466,7 +481,7 @@ class PolicySessionEngine:
         self, db: Session, session: PolicySession, campaign: Campaign, machine
     ) -> None:
         settings = self.sup.settings
-        if not settings.public_api_url:
+        if not (settings.public_api_url or settings.internal_api_url):
             self._terminate(
                 db, session, PolicySessionStatus.FAILED,
                 "AUTOTUNE_PUBLIC_API_URL is not set — a policy container cannot call home",
@@ -493,6 +508,16 @@ class PolicySessionEngine:
             self._terminate(
                 db, session, PolicySessionStatus.FAILED,
                 "reserved machine vanished before launch", failure_class="launch",
+            )
+            return
+        api_url = api_url_for(settings, self.sup._machine_info(target))
+        if not api_url:
+            self._terminate(
+                db, session, PolicySessionStatus.FAILED,
+                f"machine {target.name} is not on AutoTune's own cluster, and "
+                "AUTOTUNE_PUBLIC_API_URL (publicApiUrl) is not set: a policy there "
+                "cannot call home. Set it to an address that machine reaches.",
+                failure_class="config",
             )
             return
 
@@ -547,7 +572,7 @@ class PolicySessionEngine:
                 **(policy.env or {}),
                 **llm_endpoint_env(db, policy, secret=False),
                 **secrets,
-                "AUTOTUNE_API_URL": settings.public_api_url,
+                "AUTOTUNE_API_URL": api_url,
                 "AUTOTUNE_API_KEY": token,
                 "AUTOTUNE_SESSION_ID": str(session.id),
             },
