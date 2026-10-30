@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The health gate warms the engine up before the benchmark.** After its
+  probe answers, it sends 8 short requests at once, so every data-parallel
+  rank behind the API has served before the benchmark starts. One probe warmed
+  one rank; the benchmark's first request then met a cold one, and on an
+  engine whose first forward takes half a minute the benchmark platform's
+  preflight timed out and the run failed. The probe and the burst retry
+  dropped connections, 502/503/504 and timeouts, three tries each, within
+  the gate's budget (`health_probe_timeout_seconds`, 600 s).
+
 ### Plugin API
 
 - **`Cluster`, `recipe_pod_gpus` and `recipe_command_flags`.** A plugin can
