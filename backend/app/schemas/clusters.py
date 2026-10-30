@@ -73,6 +73,16 @@ class ClusterIn(BaseModel):
     def _strip(cls, v: str) -> str:
         return v.strip()
 
+    @field_validator("chart_repo")
+    @classmethod
+    def _chart_repo(cls, v: str) -> str:
+        # llm-operator refuses an LLMService whose chart comes from anywhere
+        # else, so every run would fail at launch.
+        v = v.strip()
+        if v and not v.startswith(("https://", "oci://")):
+            raise ValueError("must start with https:// or oci:// (llm-operator accepts no other)")
+        return v
+
 
 class LocalityIn(BaseModel):
     """A kubeconfig not saved yet, to tell where its cluster is."""

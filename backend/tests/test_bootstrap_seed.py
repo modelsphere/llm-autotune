@@ -67,10 +67,11 @@ def test_every_seed_step_runs_when_users_already_exist(monkeypatch):
         session.add(User(username="ana", password_hash="x", role="admin"))
         session.commit()
     ran: list[str] = []
+    monkeypatch.setattr(bootstrap, "_seed_policies", lambda e: ran.append("policies"))
     monkeypatch.setattr(bootstrap, "_register_local_cluster", lambda e: ran.append("cluster"))
     monkeypatch.setattr(bootstrap, "_ensure_screen_benchmark", lambda: ran.append("benchmark"))
     bootstrap._seed(engine)
-    assert ran == ["cluster", "benchmark"]
+    assert ran == ["policies", "cluster", "benchmark"]
     with Session(engine) as session:
         assert session.query(User).count() == 1
         assert session.query(Objective).count() == len(bootstrap.BUILTIN_OBJECTIVES)
@@ -89,3 +90,111 @@ def test_schema_only_migrates_and_seeds_nothing(monkeypatch):
     steps.clear()
     bootstrap.main([])
     assert steps == ["wait", "schema", "seed"]
+
+
+def _settings(monkeypatch, **update):
+    from app.core.config import get_settings
+
+    settings = get_settings().model_copy(update=update)
+    monkeypatch.setattr(bootstrap, "get_settings", lambda: settings)
+    return settings
+
+
+IN_CLUSTER = dict(
+    k8s_in_cluster=True, auto_register_cluster=True, k8s_namespace="llm-autotune-runs",
+    k8s_workload_kind="llmservice", k8s_endpoint="dns",
+    k8s_chart_repo="oci://registry.example/charts", k8s_image_mirror="registry.example/team",
+)
+
+
+def test_an_empty_in_cluster_install_registers_its_cluster_and_one_machine(monkeypatch):
+    from app.control.launch.clusters import K8sClusterSettings
+    from app.core.config import get_settings
+    from app.db.models import Cluster, Machine
+
+    settings = _settings(monkeypatch, **IN_CLUSTER)
+    engine = _engine()
+    bootstrap._register_local_cluster(engine)
+    bootstrap._register_local_cluster(engine)  # every deploy: still one of each
+    with Session(engine) as session:
+        cluster = session.query(Cluster).one()
+        machine = session.query(Machine).one()
+        assert (cluster.name, cluster.in_cluster, cluster.namespace, cluster.endpoint) == (
+            "local", True, "llm-autotune-runs", "dns")
+        assert (cluster.chart_repo, cluster.image_mirror) == (
+            "oci://registry.example/charts", "registry.example/team")
+        assert (machine.name, machine.driver, machine.cluster_id) == (
+            "local-cluster", "k8s", cluster.id)
+        # The row describes this cluster on its own: a cluster added later starts
+        # from the install's defaults, and its own columns win over them.
+        resolved = K8sClusterSettings.from_row(cluster, get_settings())
+        assert resolved.k8s_in_cluster and resolved.k8s_image_mirror == settings.k8s_image_mirror
+
+
+def test_the_cluster_alone_when_its_machines_are_registered_by_hand(monkeypatch):
+    from app.db.models import Cluster, Machine
+
+    _settings(monkeypatch, **IN_CLUSTER, auto_register_machine=False, local_cluster_name="gpu-a")
+    engine = _engine()
+    bootstrap._register_local_cluster(engine)
+    with Session(engine) as session:
+        assert session.query(Cluster).one().name == "gpu-a"
+        assert session.query(Machine).count() == 0
+    # Its machines get registered later; deleting them never brings one back.
+    bootstrap._register_local_cluster(engine)
+    with Session(engine) as session:
+        assert session.query(Machine).count() == 0
+
+
+def test_a_described_fleet_is_left_alone(monkeypatch):
+    from app.db.models import Cluster
+
+    _settings(monkeypatch, **IN_CLUSTER)
+    engine = _engine()
+    with Session(engine) as session:
+        session.add(Cluster(name="theirs"))
+        session.commit()
+    bootstrap._register_local_cluster(engine)
+    with Session(engine) as session:
+        assert [c.name for c in session.query(Cluster)] == ["theirs"]
+
+
+def test_default_policies_are_added_once_and_never_overwritten(monkeypatch):
+    import json
+
+    from app.db.models import Policy
+
+    image = "docker.io/4pdosc/llm-autotune-policy-random-search:0.1.1"
+    _settings(monkeypatch, default_policies=json.dumps([
+        {"name": "random-search", "image": image, "description": "Samples at random."},
+        {"name": "broken"},
+    ]))
+    engine = _engine()
+    bootstrap._seed_policies(engine)  # no admin yet: waits
+    with Session(engine) as session:
+        assert session.query(Policy).count() == 0
+        session.add(User(username="ana", password_hash="x", role="admin"))
+        session.commit()
+    bootstrap._seed_policies(engine)
+    with Session(engine) as session:
+        policy = session.query(Policy).one()
+        assert (policy.name, policy.image, policy.version) == ("random-search", image, "0.1.1")
+        assert not policy.gpus_in_container and not policy.needs_model
+        policy.image = "registry.example/random-search:mine"
+        session.commit()
+    bootstrap._seed_policies(engine)
+    with Session(engine) as session:
+        assert session.query(Policy).one().image == "registry.example/random-search:mine"
+
+
+def test_default_policies_that_are_not_a_list_seed_nothing(monkeypatch):
+    from app.db.models import Policy
+
+    _settings(monkeypatch, default_policies='{"name": "x"}')
+    engine = _engine()
+    with Session(engine) as session:
+        session.add(User(username="ana", password_hash="x", role="admin"))
+        session.commit()
+    bootstrap._seed_policies(engine)
+    with Session(engine) as session:
+        assert session.query(Policy).count() == 0

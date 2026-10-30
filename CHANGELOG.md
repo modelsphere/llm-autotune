@@ -63,6 +63,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The chart installs with no values.** `jwtSecret`, `adminPassword` and the
+  Postgres password are generated on install when not given and kept on
+  upgrade; the release's Secret is kept on uninstall, with the database
+  volume. The install notes print how to read the admin password.
+- **`llmbench.apiKeySecret`** reads LLMBench's service key from LLMBench's own
+  Secret in the same namespace, so the two releases share one copy.
+- **`defaultPolicies`** registers search policies on install, each only while
+  no policy has its name. random-search is the default; the quickstart passes
+  its `POLICY_IMAGE` this way instead of calling the API.
+
 - **The smoke test shows its progress and is faster.** The dialog lists every
   check as soon as the test starts, and each one fills in as it finishes, with
   its time. After the credential, the cluster checks run at the same time (and
@@ -282,7 +292,141 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Plugin slots on the Reports page**: `reports.actions` (header buttons) and
   `reports.sections` (above the list), so a plugin can write reports from there.
 
+### Changed
+
+- **The platform's own cluster is a cluster row.** An empty in-cluster install
+  registers it on Resources ▸ Clusters (`gpuCluster.name`, `local`) with the
+  `gpuCluster` values, and its `local-cluster` machine on that row;
+  `gpuCluster.autoRegisterMachine=false` registers the cluster alone, for
+  pools per GPU type. Clusters added later keep their own settings.
+- **A policy calls home by the address its machine can reach.** On the
+  platform's own cluster that is the API's Service name
+  (`AUTOTUNE_INTERNAL_API_URL`, always set by the chart); anywhere else it is
+  `publicApiUrl`. With `gpuCluster.inCluster`, an empty `publicApiUrl` used to
+  become the Service name for every cluster, which a policy on an added
+  cluster cannot resolve; such a campaign now fails at start, saying so.
+- The chart carries 0.3.1's string rendering of `extraEnv` values and its
+  helm-unittest suite, from the copy in the helm-charts repository.
+
+- **Datasets is in the top menu**, next to Runs, instead of under Library.
+  The page explains collection first (gateway logs → filter → sample →
+  dataset → replay, and the rule that a fresh sample waits for campaigns
+  measuring on the current one), and shows each dataset as a card: its state,
+  the sample in use with its prefix-cache hit rate, a chart of prompt lengths,
+  when the next sample comes or what holds it back, the last few collections,
+  and the campaigns that replay it as chips instead of a cramped column.
+  Frozen datasets are cards too.
+
+- **Stop says which stop it is.** On a campaign whose policy is searching, the
+  run control reads **Request stop** (the policy wraps up: runs in progress
+  finish and its finalists are measured); otherwise, including after a
+  request, it reads **Force stop** (runs in progress end and their
+  measurements are lost). Both were labelled Stop.
+
+- **Navigation.** The top row is Campaigns, Runs and Resources; what a
+  campaign is built from (search spaces, objectives, datasets, policies,
+  baselines) is one **Library** menu, each entry with a line saying what it
+  is. A plugin's `nav` takes `group: 'library'` (`'tuning'` still lands
+  there) and an optional `hint`.
+- **List filters** are one bar: a search, the active filters as removable
+  chips, and one Filter button with every field and its values' counts.
+- **Look.** One system font stack and one slate palette for the app and
+  Element Plus, status colours that sit with the accent, lists drawn as
+  cards, times in the app's language (an English page no longer reads
+  "10月22日"), Runs a page of 50 at a time. A policy campaign's bars are
+  labelled by the parameters that differ between its configs, values only,
+  with the names once above.
+- **Save as search space** on a campaign whose space was written for it
+  alone, so the next campaign can pick it from the Search spaces page.
+
+- **Campaign page.** A bar's config card opens below the bar (above it near
+  the bottom of the window) and scrolls when long, instead of opening past the
+  page's right edge. Export to model catalog is a button in the header; Rerun
+  failed configs moved into the ⋯ menu. The bars and the winner say "vs
+  baseline", not "vs production", and the baseline's bar, the mean of its
+  measurements, ranks by that mean rather than where its best measurement did.
+- **Export to model catalog.** Publish checks every write, then shows them and
+  the catalog's address on a confirmation step; only Confirm commits. One
+  footer (Check again, Download, Publish), aligned form fields, and sections
+  named for what they hold.
+
+- **Catalog schemas** follow model-catalog `5b668ff`: a model's metadata no
+  longer needs `source` (a model with no weights, such as a mock server), and
+  a variant may run on no GPU (`requires.gpus: 0`) or as `engine: mock`.
+
+- **Export to model catalog writes the catalog's v2 layout**
+  (`catalog.swiss/v2`): one variant file per run, `models/<name>/<id>.yaml`,
+  each with its own version, and the model's `metadata.yaml` with a `tuning`
+  entry (the gain over the baseline, per workload, and the report). Model
+  catalog moved to it and no longer takes new v1 version files.
+  - The export reads the published catalog (`catalogIndexUrl`, the catalog's
+    `index-v2.json`): a model it already has keeps its name and metadata, a
+    variant it already has gets its next version (or no file when nothing
+    changed). Unreachable, the model is treated as new, with a warning.
+  - Checked against the catalog's current schemas and the rules its validator
+    adds; variants ask for the catalog's minimum chart (`sglang >=0.8.0`,
+    `vllm >=0.5.0`).
+  - **Download** gives one zip laid out as the catalog is
+    (`POST /api/catalog-export/archive`), once the export passes.
+  - `deploy/dev/check-catalog-export.sh` runs the catalog's own
+    `validate:schema` and `validate:helm` on an export.
+  - API: the preview returns `files` and `variants`; `version`, `base_entry`
+    and `with_metadata` are gone; a variant takes `image_tag`.
+- **Catalog export ships the saved report on the exported runs** with a tuned
+  variant (the newest one comparing exactly these runs, or the one picked under
+  Advanced), and writes its `tuning` entry. Without a report the export still
+  goes through, with no tuning entry and a warning (`report_source` says which
+  report shipped).
+- **Catalog export sorts env vars and mounts into the recipe and the site's
+  setup** instead of copying them as measured. Engine and runtime settings
+  are kept; network interfaces, store addresses, proxies, library paths, and
+  values that are addresses or paths no mount provides are left out. A draft
+  model a flag reads is published at `/data/models/<name>`; a mount an env var
+  reads is kept with it; cache mounts become empty directories; mounts nothing
+  reads are left out. The export lists every env var and mount with what it
+  did and why. A name no rule knows is kept and flagged, and can be settled for
+  one export (`env_categories`) or for all of them
+  (`PUT /api/catalog-export/env-categories/{name}`, migration
+  `012_catalog_env_categories`).
+
 ### Fixed
+
+- **Saving a cluster changes only what the form sent.** A setting the edit
+  form does not show (in_cluster, the GPU-taint toleration, the model PVC) was
+  reset to its default on every save; on the platform's own cluster that cut
+  it off from its API server.
+- **A chart repository llm-operator would refuse is refused when saved.** It
+  accepts only `https://` and `oci://`; an `http://` one saved (on a cluster,
+  or as `gpuCluster.engineCharts.repo`, which now fails the render) and every
+  run then failed at launch.
+- **A refused Kubernetes object says why.** A run's error carried the API
+  server's reason only ("Unprocessable Entity"); it now carries its message,
+  which names the field and the rule.
+
+- **Cluster forms say less and show where the cluster is.** A tag next to
+  **Reach runs by** reads *AutoTune's cluster*, *External cluster* or
+  *Location unknown*, as soon as a kubeconfig is pasted (`POST
+  /clusters/locality`). On an external cluster, **Service name** is shown
+  locked and NodePort is picked. Hints moved from lines under the fields into
+  hover tips. The edit dialog keeps name, namespace, kubeconfig, how runs are
+  reached and notes; everything else is under **Advanced**. The cluster card
+  carries the same tag.
+
+- **The model load limit is a campaign setting, 2 hours by default.** How
+  long a started engine may take to answer before its run fails as
+  `ready_timeout` is now `ready_timeout_minutes` on the campaign (the form's
+  **1 Model → Advanced → Model load limit**), not a platform-wide setting.
+  The default goes from 30 to 120 minutes, existing campaigns included, so
+  very large models can load. Before a campaign has measured a start, the
+  window plans its first run with this limit. `AUTOTUNE_READY_TIMEOUT_MINUTES`
+  is gone; a policy container's first heartbeat has its own
+  `AUTOTUNE_POLICY_START_TIMEOUT_MINUTES` (30).
+- **llmservice is the default workload kind** (`gpuCluster.workloadKind`, a
+  new cluster's setting, `AUTOTUNE_K8S_WORKLOAD_KIND`). The cluster needs
+  llm-operator, which the modelsphere stack installs. Upgrading an install
+  whose GPU cluster has no llm-operator: set `gpuCluster.workloadKind:
+  deployment` to keep the old kind. Clusters added before keep their own.
+  `deployment` and `custom` are deprecated.
 
 - **A policy campaign on a recipe launches with the cards its recipe needs.**
   A policy counts a launch's cards from the config's own tp×dp×pp, which
@@ -410,91 +554,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   browser console.
 - **The dev server's API proxy matches `/api/` only**, as nginx does: `/api`
   also caught the `/api-keys` page, which then loaded as an API 404.
-
-### Changed
-
-- **Datasets is in the top menu**, next to Runs, instead of under Library.
-  The page explains collection first (gateway logs → filter → sample →
-  dataset → replay, and the rule that a fresh sample waits for campaigns
-  measuring on the current one), and shows each dataset as a card: its state,
-  the sample in use with its prefix-cache hit rate, a chart of prompt lengths,
-  when the next sample comes or what holds it back, the last few collections,
-  and the campaigns that replay it as chips instead of a cramped column.
-  Frozen datasets are cards too.
-
-- **Stop says which stop it is.** On a campaign whose policy is searching, the
-  run control reads **Request stop** (the policy wraps up: runs in progress
-  finish and its finalists are measured); otherwise, including after a
-  request, it reads **Force stop** (runs in progress end and their
-  measurements are lost). Both were labelled Stop.
-
-- **Navigation.** The top row is Campaigns, Runs and Resources; what a
-  campaign is built from (search spaces, objectives, datasets, policies,
-  baselines) is one **Library** menu, each entry with a line saying what it
-  is. A plugin's `nav` takes `group: 'library'` (`'tuning'` still lands
-  there) and an optional `hint`.
-- **List filters** are one bar: a search, the active filters as removable
-  chips, and one Filter button with every field and its values' counts.
-- **Look.** One system font stack and one slate palette for the app and
-  Element Plus, status colours that sit with the accent, lists drawn as
-  cards, times in the app's language (an English page no longer reads
-  "10月22日"), Runs a page of 50 at a time. A policy campaign's bars are
-  labelled by the parameters that differ between its configs, values only,
-  with the names once above.
-- **Save as search space** on a campaign whose space was written for it
-  alone, so the next campaign can pick it from the Search spaces page.
-
-- **Campaign page.** A bar's config card opens below the bar (above it near
-  the bottom of the window) and scrolls when long, instead of opening past the
-  page's right edge. Export to model catalog is a button in the header; Rerun
-  failed configs moved into the ⋯ menu. The bars and the winner say "vs
-  baseline", not "vs production", and the baseline's bar, the mean of its
-  measurements, ranks by that mean rather than where its best measurement did.
-- **Export to model catalog.** Publish checks every write, then shows them and
-  the catalog's address on a confirmation step; only Confirm commits. One
-  footer (Check again, Download, Publish), aligned form fields, and sections
-  named for what they hold.
-
-- **Catalog schemas** follow model-catalog `5b668ff`: a model's metadata no
-  longer needs `source` (a model with no weights, such as a mock server), and
-  a variant may run on no GPU (`requires.gpus: 0`) or as `engine: mock`.
-
-- **Export to model catalog writes the catalog's v2 layout**
-  (`catalog.swiss/v2`): one variant file per run, `models/<name>/<id>.yaml`,
-  each with its own version, and the model's `metadata.yaml` with a `tuning`
-  entry (the gain over the baseline, per workload, and the report). Model
-  catalog moved to it and no longer takes new v1 version files.
-  - The export reads the published catalog (`catalogIndexUrl`, the catalog's
-    `index-v2.json`): a model it already has keeps its name and metadata, a
-    variant it already has gets its next version (or no file when nothing
-    changed). Unreachable, the model is treated as new, with a warning.
-  - Checked against the catalog's current schemas and the rules its validator
-    adds; variants ask for the catalog's minimum chart (`sglang >=0.8.0`,
-    `vllm >=0.5.0`).
-  - **Download** gives one zip laid out as the catalog is
-    (`POST /api/catalog-export/archive`), once the export passes.
-  - `deploy/dev/check-catalog-export.sh` runs the catalog's own
-    `validate:schema` and `validate:helm` on an export.
-  - API: the preview returns `files` and `variants`; `version`, `base_entry`
-    and `with_metadata` are gone; a variant takes `image_tag`.
-- **Catalog export ships the saved report on the exported runs** with a tuned
-  variant (the newest one comparing exactly these runs, or the one picked under
-  Advanced), and writes its `tuning` entry. Without a report the export still
-  goes through, with no tuning entry and a warning (`report_source` says which
-  report shipped).
-- **Catalog export sorts env vars and mounts into the recipe and the site's
-  setup** instead of copying them as measured. Engine and runtime settings
-  are kept; network interfaces, store addresses, proxies, library paths, and
-  values that are addresses or paths no mount provides are left out. A draft
-  model a flag reads is published at `/data/models/<name>`; a mount an env var
-  reads is kept with it; cache mounts become empty directories; mounts nothing
-  reads are left out. The export lists every env var and mount with what it
-  did and why. A name no rule knows is kept and flagged, and can be settled for
-  one export (`env_categories`) or for all of them
-  (`PUT /api/catalog-export/env-categories/{name}`, migration
-  `012_catalog_env_categories`).
-
-### Fixed
 
 - **A machine reached over ssh no longer fails a run on an image it has not
   pulled yet.** `docker run` pulled it inside the launch command's 180 s, and a
