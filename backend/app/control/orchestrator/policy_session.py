@@ -26,6 +26,7 @@ from datetime import timedelta
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.control.baseline import production_for
 from app.control.launch.base import (
     DeploymentHandle,
     LaunchDeferred,
@@ -47,7 +48,6 @@ from app.control.orchestrator.timing import ready_timeout_minutes
 from app.control.recipe.campaign import config_cards
 from app.control.recipe.campaign import widest_cards as campaign_widest_cards
 from app.control.search.base import CandidateConfig
-from app.control.search.space import prune_inactive
 from app.control.search.validation import cards_used
 from app.core import apikeys
 from app.db.models import (
@@ -984,13 +984,10 @@ class PolicySessionEngine:
         ).first()
 
     def _production_config(self, db: Session, campaign: Campaign, machine) -> dict:
-        """Production as the night's reference: the recorded baseline's engine
-        args for this model, engine and card type, over the campaign's base —
-        the same canonical form the policy's own anchor used."""
-        recorded = self.sup._campaign_baseline(db, campaign, machine)
-        space = campaign.search_space or {}
-        merged = {**(space.get("base") or {}), **dict(getattr(recorded, "engine_args", None) or {})}
-        return prune_inactive(merged, space)
+        """Production as the night's reference: the config the policy's
+        manifest names as production (app/control/baseline.production_for)."""
+        card = self.sup._campaign_card_type(db, campaign, machine)
+        return production_for(db, campaign, card).config
 
     def _platform_launchable(self, campaign: Campaign, contender) -> bool:
         """Whether the platform can bring this contender up itself — the norm.

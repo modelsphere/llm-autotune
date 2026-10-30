@@ -2,7 +2,8 @@
 cards are named under `resources`: what it claims, and the flags it passes,
 read for showing, never written."""
 
-from app.control.recipe.command import command_flags
+from app.control.launch_config import LaunchConfig
+from app.control.recipe.command import command_flags, recipe_flags
 from app.control.recipe.model import Recipe
 from app.control.recipe.shape import accelerator_request, shape
 
@@ -89,3 +90,11 @@ def test_a_branch_on_one_line_is_still_a_branch():
         'exec vllm serve "$@"\n')]}))
     assert found.flags == {"tp": 8}
     assert found.conditional == {"headless": True}
+
+
+def test_a_scripted_recipe_reads_as_the_flags_its_script_passes():
+    recipe = _ascend()
+    assert recipe_flags(recipe) == command_flags(recipe).flags
+    cfg = LaunchConfig.from_recipe(recipe, model_path="/data/m")
+    assert cfg.engine_args["tp"] == 8 and "headless" not in cfg.engine_args
+    assert recipe_flags(Recipe(values={"extraArgs": ["--tp-size=2"]})) == {"tp": 2}

@@ -104,3 +104,13 @@ def _commands(words: list[str]) -> list[list[str]]:
         if ends:
             out.append([])
     return [c for c in out if c]
+
+
+def recipe_flags(recipe: Recipe) -> dict[str, Any]:
+    """The engine flags a recipe runs with, as every part of the platform
+    reads them: `extraArgs`, or, when a `commandOverride` script replaces the
+    chart's command, the flags the script passes to every pod (read, never
+    written back)."""
+    if recipe.values.get("commandOverride") is not None:
+        return dict(command_flags(recipe).flags)
+    return recipe.flags()
