@@ -1662,16 +1662,21 @@ class Supervisor:
         self, session: Session, campaign: Campaign, machine: Machine | None = None
     ) -> Baseline | None:
         """The production reference for what this campaign tunes, resolved by
-        card type. A machine pins the card type; without one, the first usable
-        machine's does — a campaign's machines are one card type in practice."""
-        card_type = machine.gpu_type if machine is not None else ""
-        if not card_type:
-            card_type = next(
-                (m.gpu_type for m in self._usable_machines(session, campaign) if m.gpu_type),
-                "",
-            )
+        card type."""
         return resolve_baseline(
-            session, campaign.served_model_name, campaign.engine, card_type or ""
+            session, campaign.served_model_name, campaign.engine,
+            self._campaign_card_type(session, campaign, machine),
+        )
+
+    def _campaign_card_type(
+        self, session: Session, campaign: Campaign, machine: Machine | None = None
+    ) -> str:
+        """A machine pins the card type; without one, the first usable
+        machine's does — a campaign's machines are one card type in practice."""
+        if machine is not None and machine.gpu_type:
+            return machine.gpu_type
+        return next(
+            (m.gpu_type for m in self._usable_machines(session, campaign) if m.gpu_type), ""
         )
 
     def _has_baseline_candidate(

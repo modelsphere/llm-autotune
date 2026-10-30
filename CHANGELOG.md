@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Plugin API
 
+- **`recipe_flags` and `LaunchConfig.from_recipe`.** One reading of what a
+  recipe runs: its flags (`extraArgs`, or those its `commandOverride` script
+  passes), env and image, as a `LaunchConfig`. A plugin that keeps flat fields
+  beside a recipe reads them through this, so they never drift from the
+  platform's reading.
+
 - **`Cluster`, `recipe_pod_gpus` and `recipe_command_flags`.** A plugin can
   see a machine's cluster (its workload kind), count a recipe's cards the way
   the platform does, and read the flags of a recipe whose engine command is a
@@ -26,6 +32,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Policies are told production as the platform launches it (contract
+  1.7).** The manifest's `production` used to carry only the args recorded on
+  Baselines, and nothing when none were recorded, so a policy tuning a recipe
+  campaign had to dig the starting config out of the recipe itself. The
+  platform now builds it: the recipe with the recorded args applied (or the
+  recipe as written), as every flag, the env and the image, plus the `config`
+  that launches it and its `source`. The policy's anchor and the platform's
+  production validation are the same launch, from one definition.
+- **A recipe campaign's launch config is its recipe.** Reports, catalog
+  exports and plugins that take a run's config read a recipe campaign's run
+  as the recipe with the candidate's knobs applied. They used to see the
+  knobs alone, so an exported variant could lose the recipe's parallelism and
+  parsers.
+- **A forbidden parameter at the recipe's own value is not a change.** A
+  policy that repeats a recipe campaign's `--reasoning-parser` is no longer
+  refused as if it had changed it.
 - **A recipe's cards can be named under `resources`.** With `model.gpus` at 0
   (so the chart requests no `nvidia.com/gpu`), a pod's cards are the largest
   accelerator it requests, e.g. `volcano.sh/Ascend910B4-1: 8` on an Ascend
