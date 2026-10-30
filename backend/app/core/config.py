@@ -211,7 +211,9 @@ class Settings(BaseSettings):
     # 512 reasoning tokens — which blew past the old hardcoded 60s and failed
     # every candidate at `health_check`. Generous on purpose: a genuinely wedged
     # model is already caught earlier by ready_timeout at the /v1/models stage,
-    # and the whole run is still bounded by max_run_minutes.
+    # and the whole run is still bounded by max_run_minutes. The budget covers
+    # the probe's retries through transient faults and the warm-up burst that
+    # follows it (app/evaluation/health.py).
     health_probe_timeout_seconds: float = 600.0
 
     ssh_connect_timeout: int = 15
