@@ -37,6 +37,9 @@ from app.control.launch.k8s_api import LLMSVC_RESOURCE
 from app.control.recipe import Recipe
 from app.control.recipe.check import recipe_problems
 from app.control.recipe.compose import (
+    API_VERSION,
+    KIND,
+    MANAGED_LABEL,
     RunPlan,
     Site,
     llmservice,
@@ -215,6 +218,13 @@ class LLMServiceDriver(K8sDriver):
             super().teardown(handle)
             return
         self.api.delete(self._resource, handle.container_name)
+        if self.settings.k8s_service_nodeport:
+            # Owned by the LLMService, so collected with it anyway; deleted
+            # here so the fixed port is free for the next run at once.
+            try:
+                self.api.delete("service", fixed_port_service(handle.container_name))
+            except Exception:  # noqa: BLE001 - collected with its owner
+                pass
 
     def is_gone(self, handle: DeploymentHandle) -> bool:
         if handle.workload:
@@ -308,14 +318,58 @@ class LLMServiceDriver(K8sDriver):
         if (self.settings.k8s_endpoint or "dns") != "nodeport":
             return f"http://{name}.{self.settings.k8s_namespace}.svc:{port}"
         svc = self.api.get("service", name)
-        ports = ((svc or {}).get("spec") or {}).get("ports") or []
-        node_port = ports[0].get("nodePort") if ports else None
         host = self.settings.k8s_node_host or self._first_node_ip()
+        if svc is not None and self.settings.k8s_service_nodeport:
+            node_port = self._fixed_port(spec, svc, port)
+        else:
+            ports = ((svc or {}).get("spec") or {}).get("ports") or []
+            node_port = ports[0].get("nodePort") if ports else None
         if host and node_port:
             return f"http://{host}:{node_port}"
         # The operator creates the Service after the apply returns; attach()
         # re-resolves once the run is ready.
         return ""
+
+    def _fixed_port(self, spec: LaunchSpec, front: dict[str, Any], port: int) -> int:
+        """The cluster's fixed NodePort, on a Service of AutoTune's own: the
+        engine charts take no `nodePort`, so the one a firewall lets through
+        cannot be asked of theirs. It selects what the chart's front door
+        selects (the leader under lws, the routers under pd) and is owned by
+        the LLMService, so it goes when the run does. One run at a time holds
+        the port; another waits until it is free."""
+        name = fixed_port_service(spec.container_name)
+        node_port = int(self.settings.k8s_service_nodeport)
+        if self.api.get("service", name) is not None:
+            return node_port
+        owner = self.api.get(self._resource, spec.container_name) or {}
+        meta = owner.get("metadata") or {}
+        self.api.apply({
+            "apiVersion": "v1",
+            "kind": "Service",
+            "metadata": {
+                "name": name,
+                "namespace": self.settings.k8s_namespace,
+                "labels": {RUN_LABEL: str(spec.run_id), MANAGED_LABEL: "true"},
+                "ownerReferences": [{
+                    "apiVersion": API_VERSION, "kind": KIND,
+                    "name": spec.container_name, "uid": meta.get("uid", ""),
+                }] if meta.get("uid") else [],
+            },
+            "spec": {
+                "type": "NodePort",
+                "selector": dict((front.get("spec") or {}).get("selector") or {}),
+                "ports": [{
+                    "name": "http-inference", "port": port, "targetPort": port,
+                    "nodePort": node_port,
+                }],
+            },
+        })
+        return node_port
+
+
+def fixed_port_service(release: str) -> str:
+    """AutoTune's NodePort Service for a run on a cluster with a fixed port."""
+    return f"{release[:60].rstrip('-')}-np"
 
 
 def _transient() -> frozenset[str]:
