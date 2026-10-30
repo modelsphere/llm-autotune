@@ -54,7 +54,8 @@ const { t } = useI18n()
         <el-input v-model.trim="host" class="mono" :placeholder="t('resources.endpointHostPlaceholder')" />
       </el-form-item>
     </div>
-    <template v-if="workloadKind === 'deployment'">
+    <!-- A fixed port is for a firewall that lets only it through. -->
+    <template v-if="workloadKind === 'deployment' || (workloadKind === 'llmservice' && endpoint === 'nodeport')">
       <el-form-item>
         <template #label>
           {{ t('resources.serviceNodePort') }}

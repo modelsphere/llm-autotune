@@ -269,6 +269,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A fixed NodePort works on LLMService clusters.** The cluster form showed
+  the port only for the deprecated deployment kind, and an LLMService run's
+  Service always got a random port, which a firewall that lets one port
+  through blocks. The form now shows it whenever runs are reached by
+  NodePort, and a run gets a NodePort Service of AutoTune's on that port
+  (`<run>-np`), selecting what the chart's Service selects and owned by the
+  LLMService, so it goes with the run. One run at a time holds the port.
 - **A policy campaign on a recipe launches with the cards its recipe needs.**
   A policy counts a launch's cards from the config's own tp×dp×pp, which
   cannot see parallelism set in the recipe (`lws.size`, the pd roles, a tp

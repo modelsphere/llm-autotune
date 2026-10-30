@@ -185,6 +185,32 @@ def test_nodeport_is_opt_in():
     assert driver.attach(_spec()).endpoint_url == "http://10.1.1.1:31234"
 
 
+def test_a_fixed_nodeport_is_a_service_of_our_own_selecting_the_front_door():
+    """A firewall that lets one port through: the chart takes no nodePort, so
+    the run gets a NodePort Service of AutoTune's on that port, selecting what
+    the chart's Service selects, owned by the LLMService."""
+    driver, api = _driver(k8s_endpoint="nodeport", k8s_node_host="10.1.1.1",
+                          k8s_service_nodeport=30500)
+    handle, _ = driver.launch_nodes(_spec())
+    assert handle.endpoint_url == "", "no front door yet: attach resolves it"
+    api.objects[(LLMSVC_RESOURCE, "autotune-run-7")] = {"metadata": {"uid": "llmsvc-uid"}}
+    api.objects[("service", "autotune-run-7")] = {"spec": {
+        "selector": {"app": "autotune-run-7-sglang"},
+        "ports": [{"port": 30000, "nodePort": 31234}]}}
+    assert driver.attach(_spec()).endpoint_url == "http://10.1.1.1:30500"
+    ours = api.applied[-1]
+    assert ours["kind"] == "Service" and ours["metadata"]["name"] == "autotune-run-7-np"
+    assert ours["spec"]["selector"] == {"app": "autotune-run-7-sglang"}
+    assert ours["spec"]["ports"] == [{"name": "http-inference", "port": 30000,
+                                      "targetPort": 30000, "nodePort": 30500}]
+    assert ours["metadata"]["ownerReferences"][0]["uid"] == "llmsvc-uid"
+    applied = len(api.applied)
+    driver.attach(_spec())
+    assert len(api.applied) == applied, "made once"
+    driver.teardown(handle)
+    assert ("service", "autotune-run-7-np") in api.deleted
+
+
 def test_a_config_the_chart_would_refuse_never_launches():
     driver, api = _driver()
     with pytest.raises(RuntimeError) as exc:

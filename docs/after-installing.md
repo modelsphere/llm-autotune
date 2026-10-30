@@ -167,14 +167,17 @@ The
 **custom** (TuningRun) kinds still work and are deprecated: they take engine
 flags and env only, not pd or chart values, and are no longer extended.
 
-For engines reached over the public network with the deprecated
-**deployment** kind, in **Add GPU cluster** or **Clusters ▸ More ▸ Edit**, set **Public
-host** to a node address reachable by both the AutoTune worker
+For engines reached over the public network (**llmservice** with **NodePort**
+selected, or the deprecated **deployment** kind), in **Add GPU cluster** or
+**Clusters ▸ More ▸ Edit**, set **Public host** to a node address reachable by both the AutoTune worker
 and LLMBench. Enter only the host, without `http://`, a port or a path; the API
 server address in the kubeconfig is not necessarily a service entry point.
 Set **NodePort** to the exposed port, for example `31080`, to produce
 `http://<public-host>:31080`. The platform creates the NodePort Service for
-each run. A public NAT entry must forward that port to the same node port.
+each run: on **llmservice**, a Service of its own named `<run>-np` beside the
+chart's (the engine charts take no fixed node port), selecting the same pods
+and removed with the run. A public NAT entry must forward that port to the
+same node port.
 
 Use `0` for automatic port allocation when running concurrently. A fixed
 NodePort is shared cluster-wide and can belong to only one Service, so fixed
