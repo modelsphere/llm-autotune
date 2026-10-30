@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Plugin API
 
+- **`Cluster`, `recipe_pod_gpus` and `recipe_command_flags`.** A plugin can
+  see a machine's cluster (its workload kind), count a recipe's cards the way
+  the platform does, and read the flags of a recipe whose engine command is a
+  `commandOverride` script.
+
 - **`CatalogExportDialog` takes `hf`.** A caller that already knows the
   model's Hugging Face id passes it: the export writes it as `source.hf`,
   finds the model in the catalog by it, and the field is shown locked instead
@@ -21,6 +26,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A recipe's cards can be named under `resources`.** With `model.gpus` at 0
+  (so the chart requests no `nvidia.com/gpu`), a pod's cards are the largest
+  accelerator it requests, e.g. `volcano.sh/Ascend910B4-1: 8` on an Ascend
+  site; CPU, memory, hugepages and RDMA are not cards. Before, such a recipe
+  claimed no cards, so a second run could be queued onto the same pool.
+- **The flags in a `commandOverride` script are read for showing.** Lines
+  under `vllm serve`, `sglang serve` or `set --` give the flags. Flags inside
+  an `if` or `case` are kept apart, since only some pods get them. Values the
+  shell fills in at run time are kept as written. They are never written
+  back: a recipe like this runs as written.
 - **Cluster forms say less and show where the cluster is.** A tag next to
   **Reach runs by** reads *AutoTune's cluster*, *External cluster* or
   *Location unknown*, as soon as a kubeconfig is pasted (`POST

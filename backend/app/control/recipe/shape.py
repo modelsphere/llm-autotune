@@ -63,6 +63,35 @@ class Shape:
         }
 
 
+# Resources a pod requests that are not accelerators. RDMA devices ride next
+# to the cards on multi-node recipes and are not cards themselves.
+_NOT_CARDS = ("cpu", "memory", "ephemeral-storage", "storage", "pods")
+
+
+def accelerator_request(values: dict[str, Any]) -> int:
+    """Cards one pod asks for under `resources`, read when `model.gpus` is 0:
+    a recipe for an accelerator the chart has no key for (an Ascend card
+    under volcano, `volcano.sh/Ascend910B4-1: 8`) leaves `model.gpus` 0 so the
+    chart requests no `nvidia.com/gpu`, and names its cards there instead. The
+    largest one, limits before requests; 0 when none is named."""
+    resources = values.get("resources") or {}
+    for part in ("limits", "requests"):
+        counts = [
+            _int(qty)
+            for name, qty in (resources.get(part) or {}).items()
+            if name not in _NOT_CARDS
+            and not name.startswith(("hugepages-", "rdma/"))
+        ]
+        if any(counts):
+            return max(counts)
+    return 0
+
+
+def pod_gpus(recipe: Recipe) -> int:
+    """Cards each engine pod claims: `model.gpus`, else what its resources name."""
+    return recipe.gpus or accelerator_request(recipe.values)
+
+
 def shape(recipe: Recipe) -> Shape:
     values = recipe.values
     topology = recipe.topology
@@ -81,11 +110,12 @@ def shape(recipe: Recipe) -> Shape:
         return Shape(topology, groups)
     if topology == "lws":
         size = max(1, _int((values.get("lws") or {}).get("size"), 2))
+        gpus = pod_gpus(recipe)
         return Shape(
             topology,
-            [PodGroup("leader", recipe.gpus, 1), PodGroup("worker", recipe.gpus, size - 1)],
+            [PodGroup("leader", gpus, 1), PodGroup("worker", gpus, size - 1)],
         )
-    return Shape(topology, [PodGroup("engine", recipe.gpus, 1)])
+    return Shape(topology, [PodGroup("engine", pod_gpus(recipe), 1)])
 
 
 def parallelism_problems(recipe: Recipe) -> list[str]:
@@ -107,7 +137,7 @@ def parallelism_problems(recipe: Recipe) -> list[str]:
                 )
         return out
     size = max(1, _int((recipe.values.get("lws") or {}).get("size"), 2)) if topology == "lws" else 1
-    have = recipe.gpus * size
+    have = pod_gpus(recipe) * size
     need = cards_used(recipe.flags())
     if have and need != have:
         where = "model.gpus x lws.size" if topology == "lws" else "model.gpus"
