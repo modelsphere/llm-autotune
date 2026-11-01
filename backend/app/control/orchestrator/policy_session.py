@@ -41,6 +41,7 @@ from app.control.orchestrator.policy_lifecycle import (
     heartbeat_silence,
     heartbeat_timeout_seconds,
     settings_of,
+    token_expiry,
 )
 from app.control.orchestrator.schedule import from_campaign as schedule_of
 from app.control.orchestrator.timing import ready_timeout_minutes
@@ -270,6 +271,7 @@ class PolicySessionEngine:
             )
             self._terminate(db, session, final, session.error or "window cutoff")
             return
+        self._follow_window(db, session, hard)
 
         handler = {
             PolicySessionStatus.PENDING.value: self._advance_pending,
@@ -282,6 +284,22 @@ class PolicySessionEngine:
             handler(db, session, campaign, machine)
 
     # -- machine allocation ------------------------------------------------------
+
+    def _follow_window(self, db: Session, session: PolicySession, hard) -> None:
+        """A live session's token lasts as long as its window: a window moved
+        later (a force start, a schedule edit) takes the token with it."""
+        if session.status == PolicySessionStatus.PENDING.value or session.status in {
+            s.value for s in TERMINAL_SESSION_STATES
+        }:
+            return
+        key = db.scalars(
+            select(ApiKey).where(ApiKey.policy_session_id == session.id)
+        ).first()
+        if key is None:
+            return
+        want = token_expiry(hard, self.sup.settings)
+        if as_utc(key.expires_at) != want:
+            key.expires_at = want
 
     def waiting(self, db: Session) -> list[PolicySession]:
         """Pending sessions with no machine yet — waiters in the machine queue.
@@ -553,7 +571,7 @@ class PolicySessionEngine:
                 key_hash=key_hash,
                 owner_id=campaign.owner_id,
                 policy_session_id=session.id,
-                expires_at=now() + timedelta(hours=settings.policy_token_max_hours),
+                expires_at=token_expiry(deadlines(campaign, target)[1], settings),
             )
         )
 

@@ -1258,3 +1258,32 @@ async def test_force_start_takes_a_startup_the_campaign_states(night):
         timing.set_priors(campaign, {"screen": 30})
         await session.commit()
     assert (await _force_start(http, 4)).status_code == 200
+
+
+async def test_the_token_lasts_as_long_as_the_window(night):
+    """A 63-hour window under a flat 48-hour token lost its policy 15 hours
+    early, mid-search, to 401s. The token ends an hour after the window, and
+    follows the window when it moves."""
+    from app.control.orchestrator.lifecycle import as_utc
+
+    supervisor, driver, http = night
+    end = datetime.now(UTC) + timedelta(hours=60)
+    async with http.db() as session:
+        campaign = await session.get(Campaign, 1)
+        campaign.window_end = end
+        await session.commit()
+    policy = await _boot(supervisor, driver, http)
+    async with http.db() as session:
+        key = (await session.execute(select(ApiKey))).scalars().one()
+        assert as_utc(key.expires_at) == end + timedelta(hours=1)
+
+    later = end + timedelta(hours=10)
+    async with http.db() as session:
+        campaign = await session.get(Campaign, 1)
+        campaign.window_end = later
+        await session.commit()
+    supervisor.tick()
+    async with http.db() as session:
+        key = (await session.execute(select(ApiKey))).scalars().one()
+        assert as_utc(key.expires_at) == later + timedelta(hours=1)
+    assert (await policy.get("/session")).status_code == 200

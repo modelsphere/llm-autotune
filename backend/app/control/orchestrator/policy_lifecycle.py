@@ -133,6 +133,18 @@ def deadlines(
     return search_deadline(campaign, machine), hard_deadline(campaign, machine)
 
 
+def token_expiry(hard: datetime | None, settings) -> datetime:
+    """When a session's API token stops working: the session's hard deadline
+    (the end of its window) plus the grace a policy is promised to read its
+    results in. A session with no deadline gets the flat cap instead. Never a
+    flat cap for one that has a window: a 63-hour window under a 48-hour token
+    lost its policy 15 hours early, mid-search."""
+    grace = timedelta(hours=settings.policy_token_grace_hours)
+    if hard is not None:
+        return hard + grace
+    return now() + timedelta(hours=settings.policy_token_max_hours)
+
+
 def heartbeat_silence(session: PolicySession, moment: datetime | None = None) -> float:
     """Seconds since the policy was last heard from (or since start, before
     the first beat). Infinite silence would mean "never started", which the

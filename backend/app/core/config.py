@@ -153,8 +153,10 @@ class Settings(BaseSettings):
     # search_idle_timeout_s: how long a SEARCHING session may sit with nothing
     # running and no delegated request before earning an idle strike.
     policy_search_idle_seconds: int = 300
-    # Session tokens outlive their session by this grace, then die; hard cap
-    # regardless of session length.
+    # A session's token lasts until its window's end plus this grace (and
+    # follows the window when it moves), then dies; once the session ends, the
+    # grace counts from then. The max applies only to a session with no
+    # window to bound it.
     policy_token_grace_hours: int = 1
     policy_token_max_hours: int = 48
     policy_state_max_bytes: int = 16 * 1024 * 1024

@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A policy session's token lasts as long as its window.** The token
+  expired a flat 48 h after it was issued, so a session in a longer window
+  lost its policy partway through: every call got `401 Policy session token
+  expired`, and the session ended as `container_died` with hours of its window
+  left. It now expires an hour after the window ends, and moves with the
+  window when a force start or a schedule edit extends it.
+  `policy_token_max_hours` only bounds a session without a window.
+
 ### Plugin API
 
 - **`Cluster`, `recipe_pod_gpus` and `recipe_command_flags`.** A plugin can
