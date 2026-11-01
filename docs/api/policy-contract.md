@@ -8,7 +8,7 @@ This document is the narrative version: what the calls mean, and what each side
 guarantees. For the one-page summary see [policy-api.md](policy-api.md); the interactive reference that
 always matches the running build is **`/api/docs`**, section *policy sessions*.
 For real responses from a finished session see the
-Contract version: **1.6** (`/api/policy/v1`; see [Evolution](#evolution)).
+Contract version: **1.7** (`/api/policy/v1`; see [Evolution](#evolution)).
 
 ---
 
@@ -126,7 +126,10 @@ the response is always current.
   "space_policy": {"deviations": "allowed_if_declared",
                    "forbidden": ["quantization*", "kv_cache_dtype", "context_length", "…"]},
 
-  "production": {"engine_args": {}, "launch_command": "docker run …"},
+  "production": {"engine_args": {"tp": 8, "mem_fraction_static": 0.83, "…": "…"},
+                 "env": {"PYTORCH_ALLOC_CONF": "expandable_segments:True"},
+                 "image": "lmsysorg/sglang:v0.5.22",
+                 "config": {}, "source": "recipe", "launch_command": ""},
 
   "time": {
     "started_at": "2026-08-20T15:02:11Z",
@@ -187,8 +190,16 @@ Field notes:
 - **`objective`** — per suite: the metric the platform will reduce results to,
   its direction, and the redlines a config must hold. Your trials are scored
   with exactly this, so you never need to re-implement it.
-- **`production`** — what serves today, for parity checks and as a warm-start
-  hint.
+- **`production`** — what serves today, as the platform launches it when it
+  measures production next to the contenders (1.7). `engine_args`, `env` and
+  `image` are what it runs, read from the recipe the platform builds: every
+  flag, not a diff. `config` is what to send to launch exactly that — the keys
+  over the campaign's anchor, so `{}` when production is the recipe as written.
+  `source` says where it came from: `baselines` (a recorded reference, applied
+  over the recipe), `recipe` (none recorded, so the campaign's recipe as
+  written) or `campaign` (a campaign without a recipe: its fields and base).
+  Measure `config` first as your anchor; it is the same launch the platform
+  validates as production.
 - **`time`** — `search_deadline` is when exploration must stop (validation
   time is already reserved after it); `hard_deadline` is the end of the
   window, when anything still running is killed.
@@ -777,6 +788,13 @@ from their specs, time permitting. Either way the machine's own guarantees
   `search_idle_strikes`) and a recorded `search_end_reason`. A 1.0 image keeps
   working unchanged — it simply never sends the new fields, and the deadline
   plus the watchdog govern it exactly as before.
+- **1.7** (additive): `production` is the platform's production config —
+  built from the Baselines record or, with none, from the campaign's recipe —
+  with `env`, `image`, `config` and `source` beside `engine_args`, and
+  `services.production_config` on the menu. `engine_args` now lists every
+  flag production runs, not only the recorded ones. A forbidden parameter at
+  the value the campaign's recipe sets counts as unchanged, like one at the
+  space's base. A 1.6 policy runs unchanged.
 - **1.6** (additive): [recipes](#config-format). `model.recipe` in the
   manifest and `services.recipes` on the menu; `prefill.`, `decode.` and
   `values.` config addresses; `recipe`, `shape` (pods and cards) and `commands` (each

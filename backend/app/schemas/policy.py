@@ -15,7 +15,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-CONTRACT_VERSION = "1.6"
+CONTRACT_VERSION = "1.7"
 
 # Inbound payloads from policy containers: unknown fields are the future, not
 # an error.
@@ -232,6 +232,30 @@ class ManifestServices(BaseModel):
     # and chart values (`values.<path>`); the manifest carries the recipe every
     # launch starts from, and /configs/check returns the recipe it builds.
     recipes: bool = False
+    # 1.7: `production` is the platform's production config, built from the
+    # Baselines record or, with none, from the campaign's recipe: what it runs
+    # (`engine_args`, `env`), the config that launches it (`config`) and where
+    # it came from (`source`).
+    production_config: bool = False
+
+
+class ManifestProduction(BaseModel):
+    """Production: what serves today, as the platform launches it when it
+    measures production next to the contenders."""
+
+    # What it runs: every engine flag and env variable, read from the recipe
+    # the platform builds (the recipe's own, with the recorded args applied).
+    engine_args: dict[str, Any] = Field(default_factory=dict)
+    env: dict[str, str] = Field(default_factory=dict)
+    image: str = ""
+    # (1.7) The config a policy sends to launch exactly production: the keys
+    # over the campaign's anchor, so {} when production is the recipe as
+    # written.
+    config: dict[str, Any] = Field(default_factory=dict)
+    # (1.7) "baselines": a recorded reference; "recipe": none recorded, so the
+    # campaign's recipe as written; "campaign": the campaign's fields and base.
+    source: str = ""
+    launch_command: str = ""
 
 
 class SessionManifest(BaseModel):
@@ -249,7 +273,7 @@ class SessionManifest(BaseModel):
     space_policy: dict[str, Any] = Field(
         default_factory=lambda: {"deviations": "allowed_if_declared", "forbidden": []}
     )
-    production: dict[str, Any] = Field(default_factory=dict)
+    production: ManifestProduction = Field(default_factory=ManifestProduction)
     time: ManifestTime
     contenders: ManifestContenders
     services: ManifestServices

@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The health gate warms the engine up before the benchmark.** After its
+  probe answers, it sends 8 short requests at once, so every data-parallel
+  rank behind the API has served before the benchmark starts. One probe warmed
+  one rank; the benchmark's first request then met a cold one, and on an
+  engine whose first forward takes half a minute the benchmark platform's
+  preflight timed out and the run failed. The probe and the burst retry
+  dropped connections, 502/503/504 and timeouts, three tries each, within
+  the gate's budget (`health_probe_timeout_seconds`, 600 s).
 - **A policy session's token lasts as long as its window.** The token
   expired a flat 48 h after it was issued, so a session in a longer window
   lost its policy partway through: every call got `401 Policy session token
@@ -18,6 +26,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `policy_token_max_hours` only bounds a session without a window.
 
 ### Plugin API
+
+- **`recipe_flags` and `LaunchConfig.from_recipe`.** One reading of what a
+  recipe runs: its flags (`extraArgs`, or those its `commandOverride` script
+  passes), env and image, as a `LaunchConfig`. A plugin that keeps flat fields
+  beside a recipe reads them through this, so they never drift from the
+  platform's reading.
 
 - **`Cluster`, `recipe_pod_gpus` and `recipe_command_flags`.** A plugin can
   see a machine's cluster (its workload kind), count a recipe's cards the way
@@ -36,6 +50,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Policies are told production as the platform launches it (contract
+  1.7).** The manifest's `production` used to carry only the args recorded on
+  Baselines, and nothing when none were recorded, so a policy tuning a recipe
+  campaign had to dig the starting config out of the recipe itself. The
+  platform now builds it: the recipe with the recorded args applied (or the
+  recipe as written), as every flag, the env and the image, plus the `config`
+  that launches it and its `source`. The policy's anchor and the platform's
+  production validation are the same launch, from one definition.
+- **A recipe campaign's launch config is its recipe.** Reports, catalog
+  exports and plugins that take a run's config read a recipe campaign's run
+  as the recipe with the candidate's knobs applied. They used to see the
+  knobs alone, so an exported variant could lose the recipe's parallelism and
+  parsers.
+- **A forbidden parameter at the recipe's own value is not a change.** A
+  policy that repeats a recipe campaign's `--reasoning-parser` is no longer
+  refused as if it had changed it.
 - **A recipe's cards can be named under `resources`.** With `model.gpus` at 0
   (so the chart requests no `nvidia.com/gpu`), a pod's cards are the largest
   accelerator it requests, e.g. `volcano.sh/Ascend910B4-1: 8` on an Ascend

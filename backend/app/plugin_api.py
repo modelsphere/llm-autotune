@@ -64,6 +64,7 @@ from app.control.orchestrator.policy_lifecycle import settings_of as policy_sett
 from app.control.orchestrator.supervisor import Supervisor
 from app.control.recipe.check import recipe_problems
 from app.control.recipe.command import command_flags as recipe_command_flags
+from app.control.recipe.command import recipe_flags
 from app.control.recipe.importer import NotARecipe
 from app.control.recipe.importer import parse as parse_recipe
 from app.control.recipe.model import Recipe
@@ -256,6 +257,7 @@ __all__ = [
     "Recipe",
     "parse_recipe",
     "recipe_command_flags",
+    "recipe_flags",
     "recipe_pod_gpus",
     "recipe_problems",
     "recipe_shape",

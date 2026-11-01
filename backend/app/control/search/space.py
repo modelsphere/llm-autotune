@@ -365,22 +365,24 @@ def forbidden_hits(
     search_space: dict[str, Any],
     patterns: list[str] | tuple[str, ...],
     engine: str = "",
+    anchor: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """Forbidden parameters a config changes.
 
-    A forbidden parameter may still appear: with the value the space's `base`
-    fixes (the policy left it alone), or when the campaign's own space sweeps
-    it (its author chose to tune it, so it is not the policy's doing). Any
-    other value, or the key appearing where the base does not set it, is a
-    hit. Keys are matched in canonical spelling, so an alias spelling of a
-    forbidden flag cannot slip past the list.
+    A forbidden parameter may still appear: with the value the campaign
+    already runs — the space's `base`, or, for a recipe campaign, the flag the
+    recipe sets (`anchor`) — since the policy left it alone, or when the
+    campaign's own space sweeps it (its author chose to tune it, so it is not
+    the policy's doing). Any other value, or the key appearing where neither
+    sets it, is a hit. Keys are matched in canonical spelling, so an alias
+    spelling of a forbidden flag cannot slip past the list.
     """
     if not patterns:
         return []
     from app.control.engines.flags import normalize_args
 
     space = search_space or {}
-    base, _ = normalize_args(engine, dict(space.get("base") or {}))
+    base, _ = normalize_args(engine, {**(anchor or {}), **dict(space.get("base") or {})})
     swept = set(normalize_args(engine, {k: None for k in swept_keys(space)})[0])
     normalized, _ = normalize_args(engine, dict(config))
     out: list[dict[str, Any]] = []

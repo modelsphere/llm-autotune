@@ -360,3 +360,80 @@ def test_docker_gpu_mode_none_omits_gpu_flags(monkeypatch):
         assert "--runtime=nvidia" not in text
     finally:
         get_settings.cache_clear()
+
+
+def _models(url, **kw):
+    import httpx as _httpx
+
+    return _httpx.Response(200, json={"data": []})
+
+
+def _ok(**kw):
+    import httpx as _httpx
+
+    return _httpx.Response(200, json={
+        "choices": [{"message": {"content": "OK"}, "finish_reason": "stop"}],
+        "usage": {"completion_tokens": 1},
+    })
+
+
+def test_health_warms_every_rank_up_before_the_benchmark(monkeypatch):
+    """A data-parallel engine pays its first-request cost once per rank: one
+    probe warmed one, and LLMBench's preflight then timed out on the other.
+    The gate sends a concurrent burst after the probe."""
+
+    from app.evaluation import health as health_module
+
+    posts = []
+    monkeypatch.setattr(health_module.httpx, "get", _models)
+    monkeypatch.setattr(
+        health_module.httpx, "post", lambda url, **kw: posts.append(kw["json"]) or _ok()
+    )
+    evaluator = HealthEvaluator(timeout_seconds=30)
+    outcome = evaluator.poll(evaluator.start("http://x", "m", {}))
+    assert outcome.status == EvalStatus.PASSED, outcome.error
+    assert outcome.metrics["warmup_answered"] == health_module._WARMUP_REQUESTS
+    assert len(posts) == 1 + health_module._WARMUP_REQUESTS
+
+
+def test_health_retries_transient_faults_within_its_budget(monkeypatch):
+    import httpx as _httpx
+
+    from app.evaluation import health as health_module
+
+    monkeypatch.setattr(health_module.time, "sleep", lambda s: None)
+    monkeypatch.setattr(health_module.httpx, "get", _models)
+    faults = iter([_httpx.Response(503, text="settling"), _httpx.ConnectError("reset")])
+
+    def post(url, **kw):
+        fault = next(faults, None)
+        if isinstance(fault, Exception):
+            raise fault
+        return fault if fault is not None else _ok()
+
+    monkeypatch.setattr(health_module.httpx, "post", post)
+    evaluator = HealthEvaluator(timeout_seconds=30)
+    outcome = evaluator.poll(evaluator.start("http://x", "m", {}))
+    assert outcome.status == EvalStatus.PASSED, outcome.error
+
+
+def test_health_fails_when_the_burst_gets_no_answer(monkeypatch):
+    import httpx as _httpx
+
+    from app.evaluation import health as health_module
+
+    monkeypatch.setattr(health_module.time, "sleep", lambda s: None)
+    monkeypatch.setattr(health_module.httpx, "get", _models)
+    calls = {"n": 0}
+
+    def post(url, **kw):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return _ok()
+        raise _httpx.ReadTimeout("slow")
+
+    monkeypatch.setattr(health_module.httpx, "post", post)
+    evaluator = HealthEvaluator(timeout_seconds=30)
+    outcome = evaluator.poll(evaluator.start("http://x", "m", {}))
+    assert outcome.status == EvalStatus.FAILED
+    assert "warm-up" in outcome.error
