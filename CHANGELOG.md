@@ -17,6 +17,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   preflight timed out and the run failed. The probe and the burst retry
   dropped connections, 502/503/504 and timeouts, three tries each, within
   the gate's budget (`health_probe_timeout_seconds`, 600 s).
+- **A policy session's token lasts as long as its window.** The token
+  expired a flat 48 h after it was issued, so a session in a longer window
+  lost its policy partway through: every call got `401 Policy session token
+  expired`, and the session ended as `container_died` with hours of its window
+  left. It now expires an hour after the window ends, and moves with the
+  window when a force start or a schedule edit extends it.
+  `policy_token_max_hours` only bounds a session without a window.
 
 ### Plugin API
 
