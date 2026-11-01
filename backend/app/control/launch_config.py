@@ -30,6 +30,7 @@ from app.control.engines.flags import normalize_args
 from app.control.search.validation import cards_used
 
 if TYPE_CHECKING:  # pragma: no cover
+    from app.control.recipe.model import Recipe
     from app.db.models import Baseline, Campaign
 
 
@@ -64,6 +65,34 @@ class LaunchConfig(BaseModel):
     # -- conversions ---------------------------------------------------------
 
     @classmethod
+    def from_recipe(
+        cls,
+        recipe: Recipe,
+        *,
+        model_path: str = "",
+        served_model_name: str = "",
+        service_port: int = 0,
+        gpu_type: str = "",
+    ) -> LaunchConfig:
+        """What a recipe runs, in this shape: its image, the flags it passes
+        (`extraArgs`, or read off a `commandOverride` script) and its env. A pd
+        recipe's role flags have no place here; they stay in the recipe. Where
+        the weights live on the host and the card type are the substrate's, so
+        they come from the caller."""
+        from app.control.recipe.command import recipe_flags
+
+        return cls(
+            engine=recipe.engine,
+            image=recipe.image,
+            model_path=model_path,
+            served_model_name=served_model_name or recipe.served_name,
+            service_port=service_port,
+            engine_args=recipe_flags(recipe),
+            extra_env=recipe.env(),
+            gpu_type=gpu_type,
+        ).normalized()
+
+    @classmethod
     def from_campaign(
         cls,
         campaign: Campaign,
@@ -71,10 +100,21 @@ class LaunchConfig(BaseModel):
         gpu_type: str = "",
     ) -> LaunchConfig:
         """A campaign with the given knobs — a candidate's, or the search
-        space's base when none are given."""
+        space's base when none are given. A campaign with a recipe launches
+        the recipe with the knobs applied, so that is what this reads."""
         if engine_args is None:
             space = getattr(campaign, "search_space", None) or {}
             engine_args = dict(space.get("base") or {})
+        if getattr(campaign, "recipe", None):
+            from app.control.recipe.campaign import recipe_for
+
+            return cls.from_recipe(
+                recipe_for(campaign, engine_args),
+                model_path=campaign.model_path or "",
+                served_model_name=campaign.served_model_name or "",
+                service_port=int(campaign.service_port or 0),
+                gpu_type=gpu_type,
+            )
         # A config's `env.<NAME>` keys are part of the deployment's env.
         engine_args, config_env = split_env(engine_args or {})
         return cls(
