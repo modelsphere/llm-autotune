@@ -30,7 +30,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agent.loader import load_run
 from app.agent.parts import environment_part, results_part
-from app.control.baseline import resolve_baseline
+from app.control.baseline import production_for
 from app.control.engine_command import PLACEMENT_FLAGS, round_trip_problems
 from app.control.engines import vocabulary as vocab_mod
 from app.control.engines.base import render_args
@@ -57,6 +57,7 @@ from app.control.recipe.campaign import (
 )
 from app.control.recipe.check import config_problems as recipe_config_problems
 from app.control.recipe.check import recipe_problems
+from app.control.recipe.command import recipe_flags
 from app.control.recipe.render import chart_commands
 from app.control.search.base import CandidateConfig
 from app.control.search.space import deviations as space_deviations
@@ -120,6 +121,7 @@ from app.schemas.policy import (
     ManifestHardware,
     ManifestModel,
     ManifestObjective,
+    ManifestProduction,
     ManifestServices,
     ManifestTime,
     PlanIn,
@@ -313,6 +315,7 @@ def _config_problems(
     for hit in forbidden_hits(
         canonical, campaign.search_space or {}, settings_of(campaign).forbidden(),
         campaign.engine,
+        anchor=recipe_flags(base_recipe(campaign)) if campaign.recipe else None,
     ):
         problems.append(ConfigProblem(
             kind="forbidden", param=hit["param"],
@@ -757,16 +760,16 @@ async def manifest(
         ]
     }
 
-    # Production's config for this model, as recorded on Baselines.
+    # Production as the platform launches it: the Baselines record over the
+    # campaign's anchor, or the recipe as written when none is recorded.
     card_type = machine.gpu_type if machine is not None else ""
-    recorded = await db.run_sync(
-        lambda sync: resolve_baseline(
-            sync, campaign.served_model_name, campaign.engine, card_type or ""
-        )
-    )
-    production = (
-        {"engine_args": dict(recorded.engine_args or {}), "launch_command": ""}
-        if recorded is not None else {}
+    found = await db.run_sync(lambda sync: production_for(sync, campaign, card_type or ""))
+    production = ManifestProduction(
+        engine_args=dict(found.launch.engine_args),
+        env=dict(found.launch.extra_env),
+        image=found.launch.image,
+        config=dict(found.config),
+        source=found.source,
     )
 
     screen_slug = campaign.benchmark_slug or settings.llmbench_benchmark_slug
@@ -838,6 +841,7 @@ async def manifest(
             env_keys=True,
             vocabulary=True,
             recipes=True,
+            production_config=True,
             history=True,
         ),
         prior=prior,
