@@ -187,9 +187,12 @@ async def test_production_is_the_recipe_when_none_is_recorded(night):  # noqa: F
     assert production["engine_args"]["reasoning_parser"] == "glm45"
     assert production["env"]["PYTORCH_ALLOC_CONF"] == "expandable_segments:True"
     # Its config launches exactly that recipe.
-    checked = (await policy.post("/configs/check", json={"engine_args": production["config"]})).json()
+    checked = (
+        await policy.post("/configs/check", json={"engine_args": production["config"]})
+    ).json()
     assert checked["ok"] is True, checked["problems"]
-    assert checked["recipe"]["values"]["extraArgs"] == manifest["model"]["recipe"]["values"]["extraArgs"]
+    built = checked["recipe"]["values"]["extraArgs"]
+    assert built == manifest["model"]["recipe"]["values"]["extraArgs"]
 
 
 async def test_a_recorded_baseline_is_applied_over_the_recipe(night):  # noqa: F811
@@ -213,7 +216,8 @@ async def test_a_forbidden_flag_at_the_recipes_own_value_is_unchanged(night):  #
     assert not [p for p in same["problems"] if p["kind"] == "forbidden"], same["problems"]
     other = (await policy.post("/configs/check",
                                json={"engine_args": {"reasoning_parser": "qwen3"}})).json()
-    assert [p["param"] for p in other["problems"] if p["kind"] == "forbidden"] == ["reasoning_parser"]
+    forbidden = [p["param"] for p in other["problems"] if p["kind"] == "forbidden"]
+    assert forbidden == ["reasoning_parser"]
 
 
 def test_a_recipe_campaigns_launch_config_is_its_recipe():
