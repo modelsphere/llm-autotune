@@ -265,8 +265,12 @@ class Supervisor:
         # is (substrate, cluster): two k8s clusters are two drivers.
         self.driver = get_driver(driver_name)
         self._drivers: dict[tuple[str, int | None], DeploymentDriver] = {}
+        gate = get_settings()
         self.health = health_evaluator or HealthEvaluator(
-            timeout_seconds=get_settings().health_probe_timeout_seconds
+            timeout_seconds=gate.health_probe_timeout_seconds,
+            sanity_questions=gate.health_sanity_questions,
+            sanity_pass_rate=gate.health_sanity_pass_rate,
+            sanity_max_tokens=gate.health_sanity_max_tokens,
         )
         self.bench = bench_evaluator or LLMBenchEvaluator()
         # Built lazily: a platform with no pinned campaigns never calls it, and
@@ -1834,7 +1838,10 @@ class Supervisor:
                 return
             self._record_result(session, run, "health", outcome)
             if outcome.status != EvalStatus.PASSED:
-                self._fail(session, run, "health_check", outcome.error)
+                # A config that broke the model's output is told apart from an
+                # engine that is merely down: the policy learns from it.
+                why = (outcome.raw or {}).get("failure_class") or "health_check"
+                self._fail(session, run, why, outcome.error)
                 return
             if run.kind == RunKind.POLICY_LAUNCH.value:
                 # A delegated launch is FOR the policy, not for a benchmark:

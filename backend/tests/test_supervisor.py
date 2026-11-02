@@ -283,6 +283,30 @@ def test_a_slow_health_check_does_not_hold_up_the_tick():
     assert supervisor._health_refs == {}
 
 
+def test_a_launch_whose_output_is_garbage_fails_as_such():
+    """The gate says when a config broke the model's output; the run carries
+    that class (not plain health_check), so a policy learns from it."""
+
+    class Garbage(Evaluator):
+        name = "garbage"
+
+        def start(self, endpoint_url, served_model_name, context) -> str:
+            return "ref-garbage"
+
+        def poll(self, external_ref) -> EvalOutcome:
+            return EvalOutcome(status=EvalStatus.FAILED, error="got 1 of 10 right",
+                               raw={"failure_class": "garbage_output"})
+
+    supervisor, factory = make_supervisor(instant_ready=True)
+    supervisor.health = Garbage()
+    for _ in range(3):
+        supervisor.tick()
+    with factory() as session:
+        run = session.scalars(select(Run)).first()
+        assert run.status == RunStatus.FAILED.value
+        assert run.failure_class == "garbage_output" and "1 of 10" in run.error
+
+
 def test_a_paused_campaign_freezes_its_expired_lease():
     """Seen live: an operator hit Pause meaning to end a lease.
     The lease kept its own clock, expired, and auto-drained. Paused means

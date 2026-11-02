@@ -34,6 +34,7 @@ import json
 import sys
 import threading
 import time
+from pathlib import Path
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from landscape import Landscape, StartupError, parse_flags
@@ -74,6 +75,27 @@ def _prompt_tokens(body: dict) -> int:
             str(m.get("content", "")) for m in (body.get("messages") or []) if isinstance(m, dict)
         )
     return max(1, len(text) // 4)
+
+
+# The answers to the health gate's sanity questions (a copy of the backend's
+# app/evaluation/data/gsm8k_sanity.jsonl; a test keeps the two the same). A
+# mock cannot do arithmetic, but it must pass the gate that real engines pass.
+_ANSWERS = {
+    row["question"]: row["answer"]
+    for row in (
+        json.loads(line)
+        for line in (Path(__file__).parent / "gsm8k_sanity.jsonl").read_text().splitlines()
+        if line.strip()
+    )
+}
+
+
+def _known_answer(body: dict) -> int | None:
+    for message in reversed(body.get("messages") or []):
+        if isinstance(message, dict) and message.get("role") == "user":
+            text = str(message.get("content", ""))
+            return next((a for q, a in _ANSWERS.items() if text.startswith(q)), None)
+    return None
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -135,6 +157,10 @@ class Handler(BaseHTTPRequestHandler):
         # A reply that reads as one ("OK (mock reply from …)"), then filler
         # tokens up to the requested length.
         lead = ["OK ", "(mock ", "reply ", "from ", f"{self.served_model_name}) "]
+        answer = _known_answer(request_body)
+        if answer is not None:
+            lead = ["The ", "answer ", "is:\n", f"#### {answer}"]
+            n_tokens = min(n_tokens, len(lead))
         tokens = (lead + [f"tok{i} " for i in range(len(lead), n_tokens)])[:n_tokens]
         usage = {
             "prompt_tokens": prompt_tokens,
