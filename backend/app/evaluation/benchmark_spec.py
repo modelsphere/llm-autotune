@@ -46,6 +46,47 @@ _REPLAY_FALLBACK_METRICS = [
 ]
 
 
+QUALITY_MODULE = "opencompass"
+# The quality suites the opencompass module runs, and the name of each one's
+# sample-cap parameter there. hle needs a judge model, so it is not offered.
+QUALITY_TASKS: dict[str, str] = {
+    "gpqa_diamond": "sample_cap_gpqa",
+    "mmlu_pro": "sample_cap_mmlu",
+    "aime2025": "sample_cap_aime",
+    "ifeval": "sample_cap_ifeval",
+    "livecodebench_v6": "sample_cap_lcb",
+    "simpleqa": "sample_cap_simpleqa",
+    "longbench_v2": "sample_cap_longbench",
+}
+DEFAULT_QUALITY_TASKS = ["gpqa_diamond"]
+
+
+class QualitySpec(BaseModel):
+    """A quality check run after the workload, on the same endpoint: the
+    first `questions` of each task (a fixed subset, the same every run, so
+    two configs answer the same questions), answered once each at
+    temperature 0, `workers` at a time, in up to `max_tokens`. It judges
+    nothing by itself; a campaign compares its scores with production's
+    (app/quality.py)."""
+
+    tasks: list[str] = Field(default_factory=lambda: list(DEFAULT_QUALITY_TASKS))
+    questions: int = Field(default=100, ge=0, le=100_000)  # per task; 0 = all
+    max_tokens: int = Field(default=8192, ge=256, le=131_072)
+    workers: int = Field(default=16, ge=1, le=256)
+    max_seconds: int = Field(default=7200, ge=60, le=43_200)
+
+    @field_validator("tasks")
+    @classmethod
+    def _known(cls, v: list[str]) -> list[str]:
+        tasks = list(dict.fromkeys(t.strip() for t in v if t.strip()))
+        unknown = [t for t in tasks if t not in QUALITY_TASKS]
+        if unknown:
+            raise ValueError(f"unknown quality tasks {unknown}; known: {sorted(QUALITY_TASKS)}")
+        if not tasks:
+            raise ValueError("at least one quality task")
+        return tasks
+
+
 class BenchmarkSpec(BaseModel):
     """What every candidate is measured with. Two kinds:
 
@@ -60,6 +101,9 @@ class BenchmarkSpec(BaseModel):
       changes); neither replays LLMBench's built-in example set (proves the
       pipeline, measures nothing). `requests` caps how many (0 = the whole
       dataset).
+
+    Either kind may add `quality`: a quality suite after the workload, in the
+    same benchmark.
     """
 
     kind: Literal["sweep", "replay"] = "sweep"
@@ -72,6 +116,7 @@ class BenchmarkSpec(BaseModel):
     dataset_frozen: str = ""
     requests: int = Field(default=500, ge=0, le=1_000_000)
     concurrency: int = Field(default=16, ge=1, le=4096)
+    quality: QualitySpec | None = None
 
     @field_validator("concurrencies")
     @classmethod
@@ -93,15 +138,19 @@ class BenchmarkSpec(BaseModel):
         """Only what this kind actually uses, so two specs that differ in an
         unused field are the same benchmark."""
         if self.kind == "sweep":
-            return {"kind": "sweep", "input_tokens": self.input_tokens,
-                    "output_tokens": self.output_tokens, "concurrencies": self.concurrencies,
-                    "requests_per_concurrency": self.requests_per_concurrency,
-                    "max_seconds_per_level": self.max_seconds_per_level}
-        out = {"kind": "replay", "dataset_profile": self.dataset_profile.strip(),
-               "requests": self.requests, "concurrency": self.concurrency}
-        # Only when set, so every replay spec written before keeps its slug.
-        if self.dataset_frozen.strip():
-            out["dataset_frozen"] = self.dataset_frozen.strip()
+            out = {"kind": "sweep", "input_tokens": self.input_tokens,
+                   "output_tokens": self.output_tokens, "concurrencies": self.concurrencies,
+                   "requests_per_concurrency": self.requests_per_concurrency,
+                   "max_seconds_per_level": self.max_seconds_per_level}
+        else:
+            out = {"kind": "replay", "dataset_profile": self.dataset_profile.strip(),
+                   "requests": self.requests, "concurrency": self.concurrency}
+            # Only when set, so every replay spec written before keeps its slug.
+            if self.dataset_frozen.strip():
+                out["dataset_frozen"] = self.dataset_frozen.strip()
+        # Likewise only when set.
+        if self.quality is not None:
+            out["quality"] = self.quality.model_dump()
         return out
 
     @property
@@ -115,13 +164,19 @@ class BenchmarkSpec(BaseModel):
     def title(self) -> str:
         if self.kind == "sweep":
             levels = ",".join(str(c) for c in self.concurrencies)
-            return (f"AutoTune sweep — {self.input_tokens} in / {self.output_tokens} out "
-                    f"at concurrency {levels}, {self.requests_per_concurrency} requests "
-                    "per slot")
-        dataset = (self.dataset_profile.strip() or self.dataset_frozen.strip()
-                   or "the example set")
-        count = f"{self.requests} requests" if self.requests else "all requests"
-        return f"AutoTune replay — {dataset}, {count} at concurrency {self.concurrency}"
+            title = (f"AutoTune sweep — {self.input_tokens} in / {self.output_tokens} out "
+                     f"at concurrency {levels}, {self.requests_per_concurrency} requests "
+                     "per slot")
+        else:
+            dataset = (self.dataset_profile.strip() or self.dataset_frozen.strip()
+                       or "the example set")
+            count = f"{self.requests} requests" if self.requests else "all requests"
+            title = f"AutoTune replay — {dataset}, {count} at concurrency {self.concurrency}"
+        if self.quality is not None:
+            q = self.quality
+            each = f"{q.questions} questions each" if q.questions else "every question"
+            title += f" + quality ({', '.join(q.tasks)}, {each})"
+        return title
 
     @property
     def module(self) -> str:
@@ -166,6 +221,10 @@ def document(spec: BenchmarkSpec, client: LLMBenchClient | None = None) -> dict:
             "params": params,
             "metric_configs": _replay_metrics(client),
         }
+    modules = [{**module, "order_index": 0, "weight": 1.0, "skip_if_prev_failed": False}]
+    if spec.quality is not None:
+        modules.append({**quality_module(spec.quality), "order_index": 1, "weight": 0.0,
+                        "skip_if_prev_failed": False})
     return {
         "slug": spec.slug,
         "name": spec.title,
@@ -174,8 +233,33 @@ def document(spec: BenchmarkSpec, client: LLMBenchClient | None = None) -> dict:
         "version": "1",
         "status": "active",
         "group_tags": [spec.group_tag],
-        "modules": [{**module, "order_index": 0, "weight": 1.0,
-                     "skip_if_prev_failed": False}],
+        "modules": modules,
+    }
+
+
+def quality_module(quality: QualitySpec) -> dict:
+    """The opencompass module for `quality`. Each task answered once (k = 1),
+    which the module runs greedily (temperature 0) unless forced otherwise: a
+    score that moves only when the config does. Scores are display-only in
+    LLMBench; AutoTune judges them against production's."""
+    params: dict = {
+        "selected_benchmarks": list(quality.tasks),
+        "max_tokens": quality.max_tokens,
+        "max_workers": quality.workers,
+        "max_seconds": quality.max_seconds,
+        "request_timeout": 1800,
+        "force_temperature": False,
+        "stream": True,
+    }
+    for task in quality.tasks:
+        params[QUALITY_TASKS[task]] = quality.questions
+    return {
+        "module_name": QUALITY_MODULE,
+        "params": params,
+        "metric_configs": [
+            {"key": task, "role": "display", "weight": 1, "formula": "passthrough"}
+            for task in quality.tasks
+        ],
     }
 
 

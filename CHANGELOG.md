@@ -437,6 +437,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Quality checked against production.** A campaign can check its
+  finalists' quality: production and the finalists answer the same fixed
+  questions (the first 100 of GPQA Diamond by default, once each at
+  temperature 0), and a finalist more than the allowed drop (10 points by
+  default) below production's average score cannot win. A workload spec takes
+  `quality: {tasks, questions, max_tokens, workers}`, which adds an opencompass
+  module to its benchmark. An objective's redline can be relative to
+  production: `{"metric": "opencompass/accuracy[gpqa_diamond]", "op": ">=",
+  "relative_to": "production", "value": -0.10}`. A result is judged against
+  production's score so far, and judged again when another measurement of
+  production lands. In the campaign form: **Check quality against
+  production** in the Benchmark step; **Advanced: quality check** picks the
+  datasets or runs the questions in every run.
 - **The chart installs with no values.** `jwtSecret`, `adminPassword` and the
   Postgres password are generated on install when not given and kept on
   upgrade; the release's Secret is kept on uninstall, with the database

@@ -80,7 +80,8 @@ def objective(campaign: Campaign, stage: str) -> dict[str, Any]:
     "nothing stayed inside the redlines".
     """
     if stage == VERIFY and campaign.verify_benchmark_slug:
-        return campaign.verify_objective or {"target_metric": DEFAULT_VERIFY_TARGET_METRIC}
+        # One that only adds redlines (a quality floor) ranks on the default.
+        return {"target_metric": DEFAULT_VERIFY_TARGET_METRIC, **(campaign.verify_objective or {})}
     # No second benchmark: a verify-stage run (a policy's finalist measured
     # again) ran the campaign's own benchmark, so the campaign's objective
     # judges it.

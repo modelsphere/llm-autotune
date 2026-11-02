@@ -19,7 +19,7 @@ from datetime import datetime, timedelta
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app import plugins
+from app import plugins, quality
 from app.control.baseline import resolve_baseline
 from app.control.engines.env_keys import split_env
 from app.control.launch import (
@@ -133,7 +133,6 @@ from app.evaluation import (
     EvaluatorRejected,
     HealthEvaluator,
     LLMBenchEvaluator,
-    summarize,
 )
 from app.evaluation.aggregate import summary_of
 from app.hardware import is_node_pool, record_capacity
@@ -2714,7 +2713,10 @@ class Supervisor:
                 outcome.metrics, outcome.raw, run.candidate.config if run.candidate else None,
                 run.campaign,
             )
-            stored = summarize(_stage_objective(run.campaign, stage_of_run(run)), reader).as_dict()
+            # A quality floor relative to production is resolved against
+            # production's score so far (app/quality.py).
+            objective = _stage_objective(run.campaign, stage_of_run(run))
+            stored = quality.judge(session, run.campaign, objective, reader).as_dict()
             result.objective_value = stored["objective_value"]
             result.feasible = stored["feasible"]
             result.constraints = stored["constraints"]
@@ -2723,6 +2725,16 @@ class Supervisor:
             if run.policy_session_id is not None:
                 self._record_policy_trial(session, run, stored, outcome.metrics)
         session.add(result)
+        if source == "llmbench" and quality.is_production(run.candidate, run.campaign) and any(
+            quality.relative_redlines(_stage_objective(run.campaign, stage))
+            for stage in (SCREEN, VERIFY)
+        ):
+            # Production's score moved: every result held to it is judged again.
+            session.flush()
+            quality.rescore(
+                session, run.campaign,
+                lambda r: _stage_objective(r.campaign, stage_of_run(r)),
+            )
 
     def _record_policy_trial(
         self, session: Session, run: Run, stored: dict, metrics: dict

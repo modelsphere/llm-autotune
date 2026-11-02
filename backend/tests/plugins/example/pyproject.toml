@@ -51,6 +51,7 @@ known-first-party = ["example_plugin"]
 "app.mocks".msg = "import from app.plugin_api"
 "app.objective".msg = "import from app.plugin_api"
 "app.plugins".msg = "import from app.plugin_api"
+"app.quality".msg = "import from app.plugin_api"
 "app.reporting".msg = "import from app.plugin_api"
 "app.schemas".msg = "import from app.plugin_api"
 "app.staging".msg = "import from app.plugin_api"
