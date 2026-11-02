@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Plugin stops say so.** A plugin that stops its campaign (a Baseline Hub
+  abort, a competition stop) shuts the campaign's window, and the runs still
+  going were then ended with "window cutoff", as if the clock had run out.
+  They now read "stopped (<reason>) by <plugin>".
+- **A campaign name over 128 characters is refused with a 422** that says
+  so; it used to pass validation and fail the insert with a bare 500. The
+  form counts the characters.
+- **A cordoned node says why it counts as no cards.** The capacity probe
+  warns that the node is cordoned and names the toleration
+  (`node.kubernetes.io/unschedulable:NoSchedule`) that lets the platform use
+  a node an admin cordoned for it.
+- **A draft with a one-off window says it does not start by itself.**
+
 - **A slow health check no longer stalls every campaign.** The health gate
   ran inside the worker's tick, and a gate can take minutes (a slow first
   answer, retries, the warm-up burst), up to `health_probe_timeout_seconds`
@@ -30,6 +43,213 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   left. It now expires an hour after the window ends, and moves with the
   window when a force start or a schedule edit extends it.
   `policy_token_max_hours` only bounds a session without a window.
+
+- **A fixed NodePort works on LLMService clusters.** The cluster form showed
+  the port only for the deprecated deployment kind, and an LLMService run's
+  Service always got a random port, which a firewall that lets one port
+  through blocks. The form now shows it whenever runs are reached by
+  NodePort, and a run gets a NodePort Service of AutoTune's on that port
+  (`<run>-np`), selecting what the chart's Service selects and owned by the
+  LLMService, so it goes with the run. One run at a time holds the port.
+- **Saving a cluster changes only what the form sent.** A setting the edit
+  form does not show (in_cluster, the GPU-taint toleration, the model PVC) was
+  reset to its default on every save; on the platform's own cluster that cut
+  it off from its API server.
+- **A chart repository llm-operator would refuse is refused when saved.** It
+  accepts only `https://` and `oci://`; an `http://` one saved (on a cluster,
+  or as `gpuCluster.engineCharts.repo`, which now fails the render) and every
+  run then failed at launch.
+- **A refused Kubernetes object says why.** A run's error carried the API
+  server's reason only ("Unprocessable Entity"); it now carries its message,
+  which names the field and the rule.
+
+- **Cluster forms say less and show where the cluster is.** A tag next to
+  **Reach runs by** reads *AutoTune's cluster*, *External cluster* or
+  *Location unknown*, as soon as a kubeconfig is pasted (`POST
+  /clusters/locality`). On an external cluster, **Service name** is shown
+  locked and NodePort is picked. Hints moved from lines under the fields into
+  hover tips. The edit dialog keeps name, namespace, kubeconfig, how runs are
+  reached and notes; everything else is under **Advanced**. The cluster card
+  carries the same tag.
+
+- **The model load limit is a campaign setting, 2 hours by default.** How
+  long a started engine may take to answer before its run fails as
+  `ready_timeout` is now `ready_timeout_minutes` on the campaign (the form's
+  **1 Model → Advanced → Model load limit**), not a platform-wide setting.
+  The default goes from 30 to 120 minutes, existing campaigns included, so
+  very large models can load. Before a campaign has measured a start, the
+  window plans its first run with this limit. `AUTOTUNE_READY_TIMEOUT_MINUTES`
+  is gone; a policy container's first heartbeat has its own
+  `AUTOTUNE_POLICY_START_TIMEOUT_MINUTES` (30).
+- **llmservice is the default workload kind** (`gpuCluster.workloadKind`, a
+  new cluster's setting, `AUTOTUNE_K8S_WORKLOAD_KIND`). The cluster needs
+  llm-operator, which the modelsphere stack installs. Upgrading an install
+  whose GPU cluster has no llm-operator: set `gpuCluster.workloadKind:
+  deployment` to keep the old kind. Clusters added before keep their own.
+  `deployment` and `custom` are deprecated.
+
+- **A policy campaign on a recipe launches with the cards its recipe needs.**
+  A policy counts a launch's cards from the config's own tp×dp×pp, which
+  cannot see parallelism set in the recipe (`lws.size`, the pd roles, a tp
+  flag in its `extraArgs`). Such a launch was refused and the campaign ended
+  done with nothing run. The platform now takes the cards from the session's
+  allocation.
+- **A chart that refuses a run's values fails the run at once.** The operator
+  reports a values-schema refusal as `Failed`, which was not read as final, so
+  the run waited out the 45-minute pull limit. It now fails as `bad_config`
+  with the chart's message.
+- **A multi-node run keeps the pod that crashed.** The engine chart recreates
+  a whole lws group when one pod restarts, which deleted the crashed pod and
+  its log: the run failed with only the survivors' "peer went away". A run's
+  group now restarts in place (`lws.restartPolicy: Default`, LWS's name for
+  `None` that the chart's schema accepts, in AutoTune's run
+  layer), so the crash's log is read before the run is torn down.
+- **A crashed run says what the engine raised.** Its error was "container
+  crashed; see log"; it is now `container crashed: <the exception>`, taken from
+  the pod that failed first, not from a peer reporting it gone.
+- **A multi-pod run's saved log keeps every pod's end.** The log the run page
+  shows kept only the end of all pods' logs joined, so under an lws group the
+  leader's error, which comes first, was cut away and only the worker's "the
+  peer went away" was left. Each pod's section now keeps its own end, and
+  progress bars that redraw in place keep only their last frame.
+- **Force start refuses a window too short to search.** Before a campaign has
+  measured a start, validation holds back a whole model load limit per launch
+  at the end of the window, so a short force start could leave no search time:
+  the policy was finalized as it started. Force start now answers with what is
+  held back and the shortest window that works.
+- **Leasing read the wrong cluster's capacity.** A lease probed the platform's
+  default cluster with the machine's node selector, not the machine's own
+  cluster.
+- **Capacity counted cards that cannot be used.** A pool now counts only nodes
+  that take pods, capped at the namespace's GPU quota, and a node can no
+  longer be registered both alone and inside a pool.
+- **Only admins add, edit or remove machines and machine groups**, as with
+  clusters; registering a machine through the lease API is admin-only too.
+- **A cluster's workload kind or namespace cannot change under live runs**,
+  which would have left their pods holding GPUs out of the platform's reach.
+  The refusal lists the runs and policy sessions in the way
+  (`GET /api/clusters/{id}/live`).
+
+- **A recipe campaign's baseline.** Runs of the unchanged recipe (a policy's
+  anchor sends the empty config) now count as the production baseline, so the
+  board marks them and every other run gets its ratio to them. The campaign
+  overview says the recipe is the production reference.
+
+- **Publish to catalog** refused a model the catalog already has when the
+  export made a new variant its default: the dry run checks the metadata
+  against the catalog as it is, where that variant does not exist yet, and the
+  server took `defaultVariant` for a variant the model lacks. The dry run now
+  checks the metadata without that key, and the real write sends it after the
+  variant is committed. A refusal also shows the server's list of problems,
+  not only "not a change this catalog takes".
+
+- **GPU nodes cordoned for the platform** can be used. An admin may cordon
+  nodes to keep other workloads off them, for this platform to use. With
+  `node.kubernetes.io/unschedulable:NoSchedule` among the GPU cluster's
+  tolerations, our pods already scheduled there, but the platform still
+  counted the nodes as having no free cards, and the weights check skipped
+  them; it now counts them.
+
+- **The quickstart installs LLMBench with 32 benchmark slots** (4 worker pods ×
+  8 processes), not LLMBench's default of 2. Every benchmark past the second
+  queued while its engine held GPUs: a third validation run waited 9 minutes.
+  `docs/deploying.md` says how to size the slots to a campaign.
+- **An engine that dies during startup on Kubernetes now fails its run.** A
+  Deployment restarts a dead engine, and each restart reset the ready timeout's
+  clock, so a config that died after ten minutes of loading (an out-of-memory at
+  CUDA-graph capture exits 0) looped on its cards indefinitely. A container
+  restarted before its pod was ever ready is now a `crash_loop`, with its exit
+  code and restart count.
+
+- **Force stop on a policy campaign no longer wedges the worker.** Stopping a
+  policy's launch also stops the benchmarks on it, and each of those had a
+  stop request of its own; the second stop raised on the already-ended run,
+  which failed every tick that followed, for every campaign. Stopping a run
+  that has already ended is now a no-op.
+
+- **A policy launch whose engine Kubernetes restarted is failed, not left
+  serving.** A Deployment brings a dead engine back under the same name (a
+  crashed container restarted, a deleted or evicted pod recreated), so the
+  launch never read as crashed and a benchmark ran on against a cold engine.
+  The worker records the pod and restart count a launch started serving from
+  and fails it when they change, which also stops its benchmarks: an engine
+  restarted in its pod died (`engine_crashed`, or the cause its log or exit
+  names, such as `oom`); one whose pod the cluster replaced was moved
+  (`engine_replaced`, an infrastructure failure the config is not blamed for).
+- **Two contender updates a moment apart no longer register the list twice.**
+  Each read no current list and inserted its own; the next update then
+  superseded both. Updates are now serialized per session.
+- **A refused engine flag is classified `bad_config`, not `nccl`.** The
+  engine's own argument dump mentions NCCL options on every launch; the
+  argument error is now checked first and NCCL is matched by its error
+  messages.
+- A run's detail shows the values its objective names when they are
+  measures (`success_rate`, `ttft_ms@p99`); it showed "not reported", looking
+  them up among the raw benchmark keys. Results carry `named`.
+- A campaign's boards and run lists label configs by every parameter its runs
+  changed, not only the declared space's: a policy's best configs that differ
+  outside the space read as all-default.
+- The screen workload in a policy manifest lists the benchmark's params
+  (LLMBench names them `params_json`).
+
+- **A benchmark stops when the engine under it crashes.** A policy's benchmark
+  of one of its launches ran on against a dead engine for as long as
+  LLMBench's timeouts allowed (over an hour on a replay), and the policy
+  waited on it as if it were measuring. A benchmark now records the launch it
+  measures, and ends with it: failed with the launch's own reason when the
+  engine crashed, killed when it was released. Migration
+  `015_run_launch_link`.
+- **Stop no longer reopens a finished campaign as paused.** Stopping a policy
+  campaign whose session had just ended set it to paused, over the done its
+  session's end had set. Stop now leaves a done campaign done, and ends a
+  one-off policy night as done (it has no later night to resume into); a
+  nightly campaign is still paused for a person.
+
+- **Account and API keys in the user menu open again.** Clicking them did
+  nothing: the menu's links cancel their own click so the menu can navigate,
+  and Element Plus's dropdown ignores a cancelled click. The links navigate
+  themselves now (a middle or Ctrl/Cmd-click still opens a new tab).
+- **The API keys page is translated**; it was English only. The account page's
+  link to it no longer sits indented, and the help icons no longer warn in the
+  browser console.
+- **The dev server's API proxy matches `/api/` only**, as nginx does: `/api`
+  also caught the `/api-keys` page, which then loaded as an API 404.
+
+- **A machine reached over ssh no longer fails a run on an image it has not
+  pulled yet.** `docker run` pulled it inside the launch command's 180 s, and a
+  multi-GB image did not make it. The pull now runs in the background on the
+  machine (one per image); the run stays pending with "pulling <image> onto
+  <host>" as its reason and launches once the image is there. A pull that fails,
+  or runs past `AUTOTUNE_IMAGE_PULL_TIMEOUT_MINUTES` (45), fails the run with the pull's own
+  output. Policy sessions wait the same way before they start.
+
+- **Pages load faster on a slow connection, and say they are loading.**
+  - nginx compresses: the build leaves a `.gz` next to every script and
+    stylesheet, and API responses are compressed as they pass through.
+  - Element Plus is loaded per component, in the pages that use them, and
+    libraries get chunks of their own that stay cached across redeploys.
+    The first download goes from 1.5 MB uncompressed to about 180 kB.
+  - The page shows a spinner from the first byte instead of a blank page,
+    lists show "Loading…" until their rows arrive instead of "No data", and
+    a campaign's page shows a spinner, or the error with a retry, instead of
+    staying blank.
+  - Pages send their requests at once instead of one after another: a
+    campaign's page made up to 11 in a row on every 10-second refresh, the
+    new-campaign form up to 10.
+- A perf report shipped with a catalog export embedded the whole frozen
+  comparison, so the HTML named the machines, GPU indices, host paths, run and
+  campaign ids and names, and links into the platform it was measured on. The
+  shipped copy now keeps what the report draws and leaves the rest out
+  (`app/agent/publish.py`); saved reports are unchanged.
+- Catalog export: a run whose image was named by digest only exported no
+  image, so the chart's default engine would have deployed; it now asks for
+  the tag. `source.hf` is no longer written from a guess off the weights path:
+  a new model needs it given, with the guess offered. A tuned variant without
+  its baseline or report says that the catalog will ask for its tuning entry.
+- The CI routing file of a track export (`<name>.validation.json`) labels a
+  variant without a role `other` rather than `optimized`, and hashes each
+  variant file's content instead of its bytes, so the catalog's formatting does
+  not break it.
 
 ### Plugin API
 
@@ -106,6 +326,101 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   whose GPU cluster has no llm-operator: set `gpuCluster.workloadKind:
   deployment` to keep the old kind. Clusters added before keep their own.
   `deployment` and `custom` are deprecated.
+
+- **The platform's own cluster is a cluster row.** An empty in-cluster install
+  registers it on Resources ▸ Clusters (`gpuCluster.name`, `local`) with the
+  `gpuCluster` values, and its `local-cluster` machine on that row;
+  `gpuCluster.autoRegisterMachine=false` registers the cluster alone, for
+  pools per GPU type. Clusters added later keep their own settings.
+- **A policy calls home by the address its machine can reach.** On the
+  platform's own cluster that is the API's Service name
+  (`AUTOTUNE_INTERNAL_API_URL`, always set by the chart); anywhere else it is
+  `publicApiUrl`. With `gpuCluster.inCluster`, an empty `publicApiUrl` used to
+  become the Service name for every cluster, which a policy on an added
+  cluster cannot resolve; such a campaign now fails at start, saying so.
+- The chart carries 0.3.1's string rendering of `extraEnv` values and its
+  helm-unittest suite, from the copy in the helm-charts repository.
+
+- **Datasets is in the top menu**, next to Runs, instead of under Library.
+  The page explains collection first (gateway logs → filter → sample →
+  dataset → replay, and the rule that a fresh sample waits for campaigns
+  measuring on the current one), and shows each dataset as a card: its state,
+  the sample in use with its prefix-cache hit rate, a chart of prompt lengths,
+  when the next sample comes or what holds it back, the last few collections,
+  and the campaigns that replay it as chips instead of a cramped column.
+  Frozen datasets are cards too.
+
+- **Stop says which stop it is.** On a campaign whose policy is searching, the
+  run control reads **Request stop** (the policy wraps up: runs in progress
+  finish and its finalists are measured); otherwise, including after a
+  request, it reads **Force stop** (runs in progress end and their
+  measurements are lost). Both were labelled Stop.
+
+- **Navigation.** The top row is Campaigns, Runs and Resources; what a
+  campaign is built from (search spaces, objectives, datasets, policies,
+  baselines) is one **Library** menu, each entry with a line saying what it
+  is. A plugin's `nav` takes `group: 'library'` (`'tuning'` still lands
+  there) and an optional `hint`.
+- **List filters** are one bar: a search, the active filters as removable
+  chips, and one Filter button with every field and its values' counts.
+- **Look.** One system font stack and one slate palette for the app and
+  Element Plus, status colours that sit with the accent, lists drawn as
+  cards, times in the app's language (an English page no longer reads
+  "10月22日"), Runs a page of 50 at a time. A policy campaign's bars are
+  labelled by the parameters that differ between its configs, values only,
+  with the names once above.
+- **Save as search space** on a campaign whose space was written for it
+  alone, so the next campaign can pick it from the Search spaces page.
+
+- **Campaign page.** A bar's config card opens below the bar (above it near
+  the bottom of the window) and scrolls when long, instead of opening past the
+  page's right edge. Export to model catalog is a button in the header; Rerun
+  failed configs moved into the ⋯ menu. The bars and the winner say "vs
+  baseline", not "vs production", and the baseline's bar, the mean of its
+  measurements, ranks by that mean rather than where its best measurement did.
+- **Export to model catalog.** Publish checks every write, then shows them and
+  the catalog's address on a confirmation step; only Confirm commits. One
+  footer (Check again, Download, Publish), aligned form fields, and sections
+  named for what they hold.
+
+- **Catalog schemas** follow model-catalog `5b668ff`: a model's metadata no
+  longer needs `source` (a model with no weights, such as a mock server), and
+  a variant may run on no GPU (`requires.gpus: 0`) or as `engine: mock`.
+
+- **Export to model catalog writes the catalog's v2 layout**
+  (`catalog.swiss/v2`): one variant file per run, `models/<name>/<id>.yaml`,
+  each with its own version, and the model's `metadata.yaml` with a `tuning`
+  entry (the gain over the baseline, per workload, and the report). Model
+  catalog moved to it and no longer takes new v1 version files.
+  - The export reads the published catalog (`catalogIndexUrl`, the catalog's
+    `index-v2.json`): a model it already has keeps its name and metadata, a
+    variant it already has gets its next version (or no file when nothing
+    changed). Unreachable, the model is treated as new, with a warning.
+  - Checked against the catalog's current schemas and the rules its validator
+    adds; variants ask for the catalog's minimum chart (`sglang >=0.8.0`,
+    `vllm >=0.5.0`).
+  - **Download** gives one zip laid out as the catalog is
+    (`POST /api/catalog-export/archive`), once the export passes.
+  - `deploy/dev/check-catalog-export.sh` runs the catalog's own
+    `validate:schema` and `validate:helm` on an export.
+  - API: the preview returns `files` and `variants`; `version`, `base_entry`
+    and `with_metadata` are gone; a variant takes `image_tag`.
+- **Catalog export ships the saved report on the exported runs** with a tuned
+  variant (the newest one comparing exactly these runs, or the one picked under
+  Advanced), and writes its `tuning` entry. Without a report the export still
+  goes through, with no tuning entry and a warning (`report_source` says which
+  report shipped).
+- **Catalog export sorts env vars and mounts into the recipe and the site's
+  setup** instead of copying them as measured. Engine and runtime settings
+  are kept; network interfaces, store addresses, proxies, library paths, and
+  values that are addresses or paths no mount provides are left out. A draft
+  model a flag reads is published at `/data/models/<name>`; a mount an env var
+  reads is kept with it; cache mounts become empty directories; mounts nothing
+  reads are left out. The export lists every env var and mount with what it
+  did and why. A name no rule knows is kept and flagged, and can be settled for
+  one export (`env_categories`) or for all of them
+  (`PUT /api/catalog-export/env-categories/{name}`, migration
+  `012_catalog_env_categories`).
 
 ### Added
 
@@ -337,312 +652,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   as a signed-in browser.
 - **Plugin slots on the Reports page**: `reports.actions` (header buttons) and
   `reports.sections` (above the list), so a plugin can write reports from there.
-
-### Changed
-
-- **The platform's own cluster is a cluster row.** An empty in-cluster install
-  registers it on Resources ▸ Clusters (`gpuCluster.name`, `local`) with the
-  `gpuCluster` values, and its `local-cluster` machine on that row;
-  `gpuCluster.autoRegisterMachine=false` registers the cluster alone, for
-  pools per GPU type. Clusters added later keep their own settings.
-- **A policy calls home by the address its machine can reach.** On the
-  platform's own cluster that is the API's Service name
-  (`AUTOTUNE_INTERNAL_API_URL`, always set by the chart); anywhere else it is
-  `publicApiUrl`. With `gpuCluster.inCluster`, an empty `publicApiUrl` used to
-  become the Service name for every cluster, which a policy on an added
-  cluster cannot resolve; such a campaign now fails at start, saying so.
-- The chart carries 0.3.1's string rendering of `extraEnv` values and its
-  helm-unittest suite, from the copy in the helm-charts repository.
-
-- **Datasets is in the top menu**, next to Runs, instead of under Library.
-  The page explains collection first (gateway logs → filter → sample →
-  dataset → replay, and the rule that a fresh sample waits for campaigns
-  measuring on the current one), and shows each dataset as a card: its state,
-  the sample in use with its prefix-cache hit rate, a chart of prompt lengths,
-  when the next sample comes or what holds it back, the last few collections,
-  and the campaigns that replay it as chips instead of a cramped column.
-  Frozen datasets are cards too.
-
-- **Stop says which stop it is.** On a campaign whose policy is searching, the
-  run control reads **Request stop** (the policy wraps up: runs in progress
-  finish and its finalists are measured); otherwise, including after a
-  request, it reads **Force stop** (runs in progress end and their
-  measurements are lost). Both were labelled Stop.
-
-- **Navigation.** The top row is Campaigns, Runs and Resources; what a
-  campaign is built from (search spaces, objectives, datasets, policies,
-  baselines) is one **Library** menu, each entry with a line saying what it
-  is. A plugin's `nav` takes `group: 'library'` (`'tuning'` still lands
-  there) and an optional `hint`.
-- **List filters** are one bar: a search, the active filters as removable
-  chips, and one Filter button with every field and its values' counts.
-- **Look.** One system font stack and one slate palette for the app and
-  Element Plus, status colours that sit with the accent, lists drawn as
-  cards, times in the app's language (an English page no longer reads
-  "10月22日"), Runs a page of 50 at a time. A policy campaign's bars are
-  labelled by the parameters that differ between its configs, values only,
-  with the names once above.
-- **Save as search space** on a campaign whose space was written for it
-  alone, so the next campaign can pick it from the Search spaces page.
-
-- **Campaign page.** A bar's config card opens below the bar (above it near
-  the bottom of the window) and scrolls when long, instead of opening past the
-  page's right edge. Export to model catalog is a button in the header; Rerun
-  failed configs moved into the ⋯ menu. The bars and the winner say "vs
-  baseline", not "vs production", and the baseline's bar, the mean of its
-  measurements, ranks by that mean rather than where its best measurement did.
-- **Export to model catalog.** Publish checks every write, then shows them and
-  the catalog's address on a confirmation step; only Confirm commits. One
-  footer (Check again, Download, Publish), aligned form fields, and sections
-  named for what they hold.
-
-- **Catalog schemas** follow model-catalog `5b668ff`: a model's metadata no
-  longer needs `source` (a model with no weights, such as a mock server), and
-  a variant may run on no GPU (`requires.gpus: 0`) or as `engine: mock`.
-
-- **Export to model catalog writes the catalog's v2 layout**
-  (`catalog.swiss/v2`): one variant file per run, `models/<name>/<id>.yaml`,
-  each with its own version, and the model's `metadata.yaml` with a `tuning`
-  entry (the gain over the baseline, per workload, and the report). Model
-  catalog moved to it and no longer takes new v1 version files.
-  - The export reads the published catalog (`catalogIndexUrl`, the catalog's
-    `index-v2.json`): a model it already has keeps its name and metadata, a
-    variant it already has gets its next version (or no file when nothing
-    changed). Unreachable, the model is treated as new, with a warning.
-  - Checked against the catalog's current schemas and the rules its validator
-    adds; variants ask for the catalog's minimum chart (`sglang >=0.8.0`,
-    `vllm >=0.5.0`).
-  - **Download** gives one zip laid out as the catalog is
-    (`POST /api/catalog-export/archive`), once the export passes.
-  - `deploy/dev/check-catalog-export.sh` runs the catalog's own
-    `validate:schema` and `validate:helm` on an export.
-  - API: the preview returns `files` and `variants`; `version`, `base_entry`
-    and `with_metadata` are gone; a variant takes `image_tag`.
-- **Catalog export ships the saved report on the exported runs** with a tuned
-  variant (the newest one comparing exactly these runs, or the one picked under
-  Advanced), and writes its `tuning` entry. Without a report the export still
-  goes through, with no tuning entry and a warning (`report_source` says which
-  report shipped).
-- **Catalog export sorts env vars and mounts into the recipe and the site's
-  setup** instead of copying them as measured. Engine and runtime settings
-  are kept; network interfaces, store addresses, proxies, library paths, and
-  values that are addresses or paths no mount provides are left out. A draft
-  model a flag reads is published at `/data/models/<name>`; a mount an env var
-  reads is kept with it; cache mounts become empty directories; mounts nothing
-  reads are left out. The export lists every env var and mount with what it
-  did and why. A name no rule knows is kept and flagged, and can be settled for
-  one export (`env_categories`) or for all of them
-  (`PUT /api/catalog-export/env-categories/{name}`, migration
-  `012_catalog_env_categories`).
-
-### Fixed
-
-- **A fixed NodePort works on LLMService clusters.** The cluster form showed
-  the port only for the deprecated deployment kind, and an LLMService run's
-  Service always got a random port, which a firewall that lets one port
-  through blocks. The form now shows it whenever runs are reached by
-  NodePort, and a run gets a NodePort Service of AutoTune's on that port
-  (`<run>-np`), selecting what the chart's Service selects and owned by the
-  LLMService, so it goes with the run. One run at a time holds the port.
-- **Saving a cluster changes only what the form sent.** A setting the edit
-  form does not show (in_cluster, the GPU-taint toleration, the model PVC) was
-  reset to its default on every save; on the platform's own cluster that cut
-  it off from its API server.
-- **A chart repository llm-operator would refuse is refused when saved.** It
-  accepts only `https://` and `oci://`; an `http://` one saved (on a cluster,
-  or as `gpuCluster.engineCharts.repo`, which now fails the render) and every
-  run then failed at launch.
-- **A refused Kubernetes object says why.** A run's error carried the API
-  server's reason only ("Unprocessable Entity"); it now carries its message,
-  which names the field and the rule.
-
-- **Cluster forms say less and show where the cluster is.** A tag next to
-  **Reach runs by** reads *AutoTune's cluster*, *External cluster* or
-  *Location unknown*, as soon as a kubeconfig is pasted (`POST
-  /clusters/locality`). On an external cluster, **Service name** is shown
-  locked and NodePort is picked. Hints moved from lines under the fields into
-  hover tips. The edit dialog keeps name, namespace, kubeconfig, how runs are
-  reached and notes; everything else is under **Advanced**. The cluster card
-  carries the same tag.
-
-- **The model load limit is a campaign setting, 2 hours by default.** How
-  long a started engine may take to answer before its run fails as
-  `ready_timeout` is now `ready_timeout_minutes` on the campaign (the form's
-  **1 Model → Advanced → Model load limit**), not a platform-wide setting.
-  The default goes from 30 to 120 minutes, existing campaigns included, so
-  very large models can load. Before a campaign has measured a start, the
-  window plans its first run with this limit. `AUTOTUNE_READY_TIMEOUT_MINUTES`
-  is gone; a policy container's first heartbeat has its own
-  `AUTOTUNE_POLICY_START_TIMEOUT_MINUTES` (30).
-- **llmservice is the default workload kind** (`gpuCluster.workloadKind`, a
-  new cluster's setting, `AUTOTUNE_K8S_WORKLOAD_KIND`). The cluster needs
-  llm-operator, which the modelsphere stack installs. Upgrading an install
-  whose GPU cluster has no llm-operator: set `gpuCluster.workloadKind:
-  deployment` to keep the old kind. Clusters added before keep their own.
-  `deployment` and `custom` are deprecated.
-
-- **A policy campaign on a recipe launches with the cards its recipe needs.**
-  A policy counts a launch's cards from the config's own tp×dp×pp, which
-  cannot see parallelism set in the recipe (`lws.size`, the pd roles, a tp
-  flag in its `extraArgs`). Such a launch was refused and the campaign ended
-  done with nothing run. The platform now takes the cards from the session's
-  allocation.
-- **A chart that refuses a run's values fails the run at once.** The operator
-  reports a values-schema refusal as `Failed`, which was not read as final, so
-  the run waited out the 45-minute pull limit. It now fails as `bad_config`
-  with the chart's message.
-- **A multi-node run keeps the pod that crashed.** The engine chart recreates
-  a whole lws group when one pod restarts, which deleted the crashed pod and
-  its log: the run failed with only the survivors' "peer went away". A run's
-  group now restarts in place (`lws.restartPolicy: Default`, LWS's name for
-  `None` that the chart's schema accepts, in AutoTune's run
-  layer), so the crash's log is read before the run is torn down.
-- **A crashed run says what the engine raised.** Its error was "container
-  crashed; see log"; it is now `container crashed: <the exception>`, taken from
-  the pod that failed first, not from a peer reporting it gone.
-- **A multi-pod run's saved log keeps every pod's end.** The log the run page
-  shows kept only the end of all pods' logs joined, so under an lws group the
-  leader's error, which comes first, was cut away and only the worker's "the
-  peer went away" was left. Each pod's section now keeps its own end, and
-  progress bars that redraw in place keep only their last frame.
-- **Force start refuses a window too short to search.** Before a campaign has
-  measured a start, validation holds back a whole model load limit per launch
-  at the end of the window, so a short force start could leave no search time:
-  the policy was finalized as it started. Force start now answers with what is
-  held back and the shortest window that works.
-- **Leasing read the wrong cluster's capacity.** A lease probed the platform's
-  default cluster with the machine's node selector, not the machine's own
-  cluster.
-- **Capacity counted cards that cannot be used.** A pool now counts only nodes
-  that take pods, capped at the namespace's GPU quota, and a node can no
-  longer be registered both alone and inside a pool.
-- **Only admins add, edit or remove machines and machine groups**, as with
-  clusters; registering a machine through the lease API is admin-only too.
-- **A cluster's workload kind or namespace cannot change under live runs**,
-  which would have left their pods holding GPUs out of the platform's reach.
-  The refusal lists the runs and policy sessions in the way
-  (`GET /api/clusters/{id}/live`).
-
-- **A recipe campaign's baseline.** Runs of the unchanged recipe (a policy's
-  anchor sends the empty config) now count as the production baseline, so the
-  board marks them and every other run gets its ratio to them. The campaign
-  overview says the recipe is the production reference.
-
-- **Publish to catalog** refused a model the catalog already has when the
-  export made a new variant its default: the dry run checks the metadata
-  against the catalog as it is, where that variant does not exist yet, and the
-  server took `defaultVariant` for a variant the model lacks. The dry run now
-  checks the metadata without that key, and the real write sends it after the
-  variant is committed. A refusal also shows the server's list of problems,
-  not only "not a change this catalog takes".
-
-- **GPU nodes cordoned for the platform** can be used. An admin may cordon
-  nodes to keep other workloads off them, for this platform to use. With
-  `node.kubernetes.io/unschedulable:NoSchedule` among the GPU cluster's
-  tolerations, our pods already scheduled there, but the platform still
-  counted the nodes as having no free cards, and the weights check skipped
-  them; it now counts them.
-
-- **The quickstart installs LLMBench with 32 benchmark slots** (4 worker pods ×
-  8 processes), not LLMBench's default of 2. Every benchmark past the second
-  queued while its engine held GPUs: a third validation run waited 9 minutes.
-  `docs/deploying.md` says how to size the slots to a campaign.
-- **An engine that dies during startup on Kubernetes now fails its run.** A
-  Deployment restarts a dead engine, and each restart reset the ready timeout's
-  clock, so a config that died after ten minutes of loading (an out-of-memory at
-  CUDA-graph capture exits 0) looped on its cards indefinitely. A container
-  restarted before its pod was ever ready is now a `crash_loop`, with its exit
-  code and restart count.
-
-- **Force stop on a policy campaign no longer wedges the worker.** Stopping a
-  policy's launch also stops the benchmarks on it, and each of those had a
-  stop request of its own; the second stop raised on the already-ended run,
-  which failed every tick that followed, for every campaign. Stopping a run
-  that has already ended is now a no-op.
-
-- **A policy launch whose engine Kubernetes restarted is failed, not left
-  serving.** A Deployment brings a dead engine back under the same name (a
-  crashed container restarted, a deleted or evicted pod recreated), so the
-  launch never read as crashed and a benchmark ran on against a cold engine.
-  The worker records the pod and restart count a launch started serving from
-  and fails it when they change, which also stops its benchmarks: an engine
-  restarted in its pod died (`engine_crashed`, or the cause its log or exit
-  names, such as `oom`); one whose pod the cluster replaced was moved
-  (`engine_replaced`, an infrastructure failure the config is not blamed for).
-- **Two contender updates a moment apart no longer register the list twice.**
-  Each read no current list and inserted its own; the next update then
-  superseded both. Updates are now serialized per session.
-- **A refused engine flag is classified `bad_config`, not `nccl`.** The
-  engine's own argument dump mentions NCCL options on every launch; the
-  argument error is now checked first and NCCL is matched by its error
-  messages.
-- A run's detail shows the values its objective names when they are
-  measures (`success_rate`, `ttft_ms@p99`); it showed "not reported", looking
-  them up among the raw benchmark keys. Results carry `named`.
-- A campaign's boards and run lists label configs by every parameter its runs
-  changed, not only the declared space's: a policy's best configs that differ
-  outside the space read as all-default.
-- The screen workload in a policy manifest lists the benchmark's params
-  (LLMBench names them `params_json`).
-
-- **A benchmark stops when the engine under it crashes.** A policy's benchmark
-  of one of its launches ran on against a dead engine for as long as
-  LLMBench's timeouts allowed (over an hour on a replay), and the policy
-  waited on it as if it were measuring. A benchmark now records the launch it
-  measures, and ends with it: failed with the launch's own reason when the
-  engine crashed, killed when it was released. Migration
-  `015_run_launch_link`.
-- **Stop no longer reopens a finished campaign as paused.** Stopping a policy
-  campaign whose session had just ended set it to paused, over the done its
-  session's end had set. Stop now leaves a done campaign done, and ends a
-  one-off policy night as done (it has no later night to resume into); a
-  nightly campaign is still paused for a person.
-
-- **Account and API keys in the user menu open again.** Clicking them did
-  nothing: the menu's links cancel their own click so the menu can navigate,
-  and Element Plus's dropdown ignores a cancelled click. The links navigate
-  themselves now (a middle or Ctrl/Cmd-click still opens a new tab).
-- **The API keys page is translated**; it was English only. The account page's
-  link to it no longer sits indented, and the help icons no longer warn in the
-  browser console.
-- **The dev server's API proxy matches `/api/` only**, as nginx does: `/api`
-  also caught the `/api-keys` page, which then loaded as an API 404.
-
-- **A machine reached over ssh no longer fails a run on an image it has not
-  pulled yet.** `docker run` pulled it inside the launch command's 180 s, and a
-  multi-GB image did not make it. The pull now runs in the background on the
-  machine (one per image); the run stays pending with "pulling <image> onto
-  <host>" as its reason and launches once the image is there. A pull that fails,
-  or runs past `AUTOTUNE_IMAGE_PULL_TIMEOUT_MINUTES` (45), fails the run with the pull's own
-  output. Policy sessions wait the same way before they start.
-
-- **Pages load faster on a slow connection, and say they are loading.**
-  - nginx compresses: the build leaves a `.gz` next to every script and
-    stylesheet, and API responses are compressed as they pass through.
-  - Element Plus is loaded per component, in the pages that use them, and
-    libraries get chunks of their own that stay cached across redeploys.
-    The first download goes from 1.5 MB uncompressed to about 180 kB.
-  - The page shows a spinner from the first byte instead of a blank page,
-    lists show "Loading…" until their rows arrive instead of "No data", and
-    a campaign's page shows a spinner, or the error with a retry, instead of
-    staying blank.
-  - Pages send their requests at once instead of one after another: a
-    campaign's page made up to 11 in a row on every 10-second refresh, the
-    new-campaign form up to 10.
-- A perf report shipped with a catalog export embedded the whole frozen
-  comparison, so the HTML named the machines, GPU indices, host paths, run and
-  campaign ids and names, and links into the platform it was measured on. The
-  shipped copy now keeps what the report draws and leaves the rest out
-  (`app/agent/publish.py`); saved reports are unchanged.
-- Catalog export: a run whose image was named by digest only exported no
-  image, so the chart's default engine would have deployed; it now asks for
-  the tag. `source.hf` is no longer written from a guess off the weights path:
-  a new model needs it given, with the guess offered. A tuned variant without
-  its baseline or report says that the catalog will ask for its tuning entry.
-- The CI routing file of a track export (`<name>.validation.json`) labels a
-  variant without a role `other` rather than `optimized`, and hashes each
-  variant file's content instead of its bytes, so the catalog's formatting does
-  not break it.
 
 ### Security
 

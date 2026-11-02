@@ -21,6 +21,7 @@ from app.control.managed import (
     record_event,
     start_managed_campaign,
     stop_managed_campaign,
+    stop_reason,
 )
 from app.datasets import pinning
 from app.datasets.profiles import DatasetBuild
@@ -119,6 +120,26 @@ def test_stopping_waits_until_nothing_is_running(session):
     assert stop_managed_campaign(session, campaign, plugin="example") is True  # idempotent
     done = session.scalars(select(Event).where(Event.kind == "campaign_done")).all()
     assert [(e.actor, e.payload) for e in done] == [("plugin:example", {"reason": "aborted"})]
+
+
+def test_a_stopped_campaigns_runs_say_stopped_not_window_cutoff(session):
+    """A Hub abort shuts the window, and the window clock ends the runs still
+    going. Regression: they read "window cutoff", as if the clock had run out."""
+    campaign = create_managed_campaign(
+        session, owner=OWNER, owner_id=1, spec=SPEC, start_for=timedelta(hours=3)
+    )
+    assert stop_reason(session, campaign) is None
+    session.add(Candidate(id=1, campaign_id=campaign.id, config_hash="h", config={"tp": 2}))
+    session.add(Run(id=1, campaign_id=campaign.id, candidate_id=1,
+                    status=RunStatus.BENCHING.value))
+    session.flush()
+    stop_managed_campaign(session, campaign, plugin="example", reason="aborted")
+    session.flush()
+    assert stop_reason(session, campaign) == "stopped (aborted) by example"
+
+    # The window moved since (started again): the old stop no longer explains it.
+    campaign.window_end = datetime.now(UTC) + timedelta(hours=1)
+    assert stop_reason(session, campaign) is None
 
 
 def test_a_plugin_writes_to_the_event_log_under_its_own_name(session):

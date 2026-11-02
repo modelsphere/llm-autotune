@@ -42,6 +42,7 @@ from app.control.launch.failures import (
     is_transient_placement,
     restart_kind,
 )
+from app.control.managed import stop_reason
 from app.control.orchestrator import schedule as sched
 from app.control.orchestrator import timing
 from app.control.orchestrator.container_logs import (
@@ -2001,13 +2002,20 @@ class Supervisor:
         live_runs = session.scalars(
             select(Run).where(Run.status.not_in([s.value for s in TERMINAL_RUN_STATES]))
         ).all()
+        why: dict[int, str] = {}
         for run in live_runs:
             window_end = _as_utc(run.campaign.window_end)
             if window_end is not None and _now() >= window_end:
                 if run.llmbench_submission_id:
                     self.bench.cancel(run.llmbench_submission_id)
                 timing.record_cut(session, run, stage_of_run(run), _now())
-                self._finish(session, run, RunStatus.KILLED, error="window cutoff")
+                # A window a plugin shut to stop the campaign (a Hub abort) is
+                # a stop, not the clock: say which.
+                if run.campaign_id not in why:
+                    why[run.campaign_id] = (
+                        stop_reason(session, run.campaign) or "window cutoff"
+                    )
+                self._finish(session, run, RunStatus.KILLED, error=why[run.campaign_id])
 
     # --------------------------------------------------------------- helpers
 

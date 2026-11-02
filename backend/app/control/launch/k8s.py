@@ -1434,6 +1434,16 @@ class K8sDriver(DeploymentDriver):
             gpu_type = _node_gpu_type(node, self.settings.k8s_gpu_product_label)
             schedulable = _node_takes_pods(node, self.settings)
             used = None if held is None else held.get(_node_name(node), 0)
+            cordoned = (node.get("spec") or {}).get("unschedulable")
+            if cordoned and not _tolerates_cordon(self.settings):
+                # Read as 0 cards, which says nothing about why. A node an
+                # admin cordoned to hand it to this platform is used once the
+                # cluster tolerates the cordon.
+                warnings.append(
+                    f"{_node_name(node)} is cordoned, so its {count} cards count as none; "
+                    f"if it was cordoned for this platform, add the toleration "
+                    f"{CORDON_TAINT}:NoSchedule to the cluster"
+                )
             free = None if used is None else (max(count - used, 0) if schedulable else 0)
             if schedulable:
                 # Only nodes that take new pods are capacity: a cordoned or
