@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The quickstart works again with a VictoriaLogs address.** It wrote the
+  default policy list between the `llmbench:` block and that block's
+  `victoriaLogsUrl`, so with `VICTORIALOGS_URL` set its values file did not
+  parse and the AutoTune install stopped (`did not find expected '-'
+  indicator`). The list now comes after the block.
 - **Plugin stops say so.** A plugin that stops its campaign (a Baseline Hub
   abort, a competition stop) shuts the campaign's window, and the runs still
   going were then ended with "window cutoff", as if the clock had run out.
