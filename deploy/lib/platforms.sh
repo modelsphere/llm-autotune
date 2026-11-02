@@ -566,16 +566,19 @@ llmbench:
   url: http://llm-bench-backend.$BENCH_NS:8000
   webUrl: "$LLMBENCH_URL"
   apiKey: "$SERVICE_API_KEY"
+EOF
+    # Unset keeps the chart's default address.
+    if [ -n "${VICTORIALOGS_URL:-}" ]; then
+      printf '  victoriaLogsUrl: "%s"\n' "$VICTORIALOGS_URL"
+    fi
+    # After the optional key above: it belongs to the llmbench: block.
+    cat <<EOF
 defaultPolicies:
   - name: random-search
     image: "$POLICY_IMAGE"
     description: Samples the search space at random.
     repoUrl: https://github.com/modelsphere/llm-autotune-policies
 EOF
-    # Unset keeps the chart's default address.
-    if [ -n "${VICTORIALOGS_URL:-}" ]; then
-      printf '  victoriaLogsUrl: "%s"\n' "$VICTORIALOGS_URL"
-    fi
     if [ "$MODE" = demo ]; then
       printf 'mockModel:\n  image: "%s"\n' "$mock_image"
     else
