@@ -159,9 +159,15 @@ def reader_for(
     metrics: dict[str, Any] | None,
     raw: dict[str, Any] | None = None,
     config: dict[str, Any] | None = None,
+    campaign: Any = None,
 ) -> Reader:
     """A Reader for a stored result: module params from the raw submission,
-    cards from the config it measured (tp × dp × pp)."""
+    cards from the config it measured (tp × dp × pp).
+
+    With the campaign, the cards are those one launch of the config claims:
+    a recipe campaign's config holds only what differs from its recipe, so
+    the config alone has no tp and reads as one card (an 8-card launch then
+    reported 8× its per-GPU rate), and production's config is empty."""
     reports = None
     if raw:
         from app.evaluation.llmbench import module_reports
@@ -171,7 +177,14 @@ def reader_for(
         except Exception:
             reports = None
     cards = None
-    if config:
+    if campaign is not None and getattr(campaign, "recipe", None):
+        from app.control.recipe.campaign import config_cards
+
+        try:
+            cards = config_cards(campaign, config) or None
+        except Exception:
+            cards = None
+    elif config:
         from app.control.search.validation import cards_used
 
         try:

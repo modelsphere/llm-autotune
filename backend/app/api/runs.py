@@ -130,7 +130,7 @@ def _with_named(result: Result, campaign: Campaign, candidate: Candidate) -> Res
     if result.source != "llmbench":
         return out
     try:
-        reader = reader_for(result.metrics, result.raw, candidate.config)
+        reader = reader_for(result.metrics, result.raw, candidate.config, campaign)
         for name in _objective_names(campaign):
             value = reader.get(name)
             out.named[name] = float(value) if isinstance(value, (int, float)) else None

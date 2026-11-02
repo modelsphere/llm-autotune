@@ -134,6 +134,25 @@ def test_cards_come_from_the_recipe_not_the_config():
     assert config_cards(_campaign(None), {"tp": 4}) == 4
 
 
+def test_per_gpu_rates_divide_by_the_recipes_cards():
+    """Regression: a recipe campaign's config holds only what differs from the
+    recipe, so it has no tp and read as one card. A tp-2 launch then reported
+    twice its per-GPU rate, while production (an empty config) fell back to
+    the cards LLMBench was told, and every trial looked several times better."""
+    import json
+
+    from app.measures import reader_for
+
+    recipe = Recipe.from_variant(yaml.safe_load(QWEN.read_text()))  # tp 2
+    campaign = _campaign(recipe)
+    replay = Path(__file__).parent / "data/measures/replay.json"
+    metrics = json.loads(replay.read_text())["metrics"]
+    want = metrics["replay.output_tpm"] / 2
+    for config in ({}, {"mem_fraction_static": 0.88}):
+        (scenario,) = reader_for(metrics, {}, config, campaign).scenarios
+        assert scenario.operating["output_tpm_per_gpu"] == want, config
+
+
 # -- created through the API -------------------------------------------------------
 
 _counter = count()
