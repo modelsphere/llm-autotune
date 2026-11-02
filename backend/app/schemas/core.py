@@ -282,7 +282,7 @@ def served_name_for(model_path: str) -> str:
 
 
 class CampaignCreate(BaseModel):
-    name: str
+    name: str = Field(min_length=1, max_length=128)
     # With a recipe, engine and image are the recipe's and may be left empty.
     engine: str = ""  # sglang | vllm
     image: str = ""

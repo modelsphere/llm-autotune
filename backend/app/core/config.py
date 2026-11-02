@@ -215,7 +215,8 @@ class Settings(BaseSettings):
     # model is already caught earlier by ready_timeout at the /v1/models stage,
     # and the whole run is still bounded by max_run_minutes. The budget covers
     # the probe's retries through transient faults and the warm-up burst that
-    # follows it (app/evaluation/health.py).
+    # follows it (app/evaluation/health.py). The check runs in the background,
+    # so this long a gate holds up only its own run, not the worker's tick.
     health_probe_timeout_seconds: float = 600.0
 
     ssh_connect_timeout: int = 15

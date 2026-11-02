@@ -1,11 +1,18 @@
 """Lightweight health/availability gate — the only evaluation the platform
 runs itself. Checks that the service is up, answers a
 completion, and the output is not obviously broken; then warms it up, so the
-benchmark that follows meets an engine that has served before."""
+benchmark that follows meets an engine that has served before.
+
+The check runs on a background thread: start() returns at once and poll()
+answers RUNNING until it is done. The gate can take minutes (a slow first
+answer, retries, the warm-up), and the worker's tick, which advances every
+campaign, must not wait for it."""
 
 import json
+import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
+import uuid
+from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Any
 
 import httpx
@@ -30,6 +37,11 @@ _WARMUP_MAX_TOKENS = 16
 _ATTEMPTS = 3
 _BACKOFF_SECONDS = (5.0, 15.0)
 _TRANSIENT_STATUS = frozenset({502, 503, 504})
+# Checks running at once; more wait their turn (and read RUNNING meanwhile).
+_CONCURRENT_CHECKS = 8
+# A finished check nobody polled (its run was stopped meanwhile) is dropped
+# after this long.
+_UNCLAIMED_SECONDS = 3600.0
 
 
 class _Transient(Exception):
@@ -42,20 +54,49 @@ class HealthEvaluator(Evaluator):
     def __init__(self, timeout_seconds: float = 60.0):
         # The whole gate's budget: the probe, its retries and the warm-up.
         self.timeout_seconds = timeout_seconds
-        self._outcomes: dict[str, EvalOutcome] = {}
+        self._pool = ThreadPoolExecutor(max_workers=_CONCURRENT_CHECKS,
+                                        thread_name_prefix="health")
+        self._lock = threading.Lock()
+        # ref -> (the check, when it was started)
+        self._checks: dict[str, tuple[Future[EvalOutcome], float]] = {}
 
     def start(self, endpoint_url: str, served_model_name: str, context: dict[str, Any]) -> str:
-        ref = f"health:{endpoint_url}"
-        self._outcomes[ref] = self._check(endpoint_url, served_model_name)
+        ref = f"health:{uuid.uuid4().hex[:12]}:{endpoint_url}"
+        future = self._pool.submit(self._check, endpoint_url, served_model_name)
+        with self._lock:
+            self._drop_unclaimed()
+            self._checks[ref] = (future, time.monotonic())
         return ref
 
     def poll(self, external_ref: str) -> EvalOutcome:
-        return self._outcomes.get(
-            external_ref,
-            # After a worker restart the in-memory outcome is gone; health is
-            # cheap, so a missing ref simply means "re-run start()".
-            EvalOutcome(status=EvalStatus.FAILED, error="health outcome lost; re-run"),
-        )
+        """RUNNING until the check is done; then its outcome, once (the ref
+        is forgotten). A ref this process does not know (a worker restart
+        lost it, or it was read already) is a failure to re-run start() on."""
+        with self._lock:
+            entry = self._checks.get(external_ref)
+            if entry is None:
+                return EvalOutcome(status=EvalStatus.FAILED, error="health outcome lost; re-run")
+            future, _ = entry
+            if not future.done():
+                return EvalOutcome(status=EvalStatus.RUNNING)
+            del self._checks[external_ref]
+        try:
+            return future.result()
+        except Exception as exc:  # noqa: BLE001 — a bug in the check is its verdict
+            return EvalOutcome(status=EvalStatus.FAILED, error=f"{type(exc).__name__}: {exc}")
+
+    def cancel(self, external_ref: str) -> None:
+        """Forget the check; one already running finishes on its own."""
+        with self._lock:
+            entry = self._checks.pop(external_ref, None)
+        if entry is not None:
+            entry[0].cancel()
+
+    def _drop_unclaimed(self) -> None:
+        cutoff = time.monotonic() - max(_UNCLAIMED_SECONDS, self.timeout_seconds * 2)
+        for ref, (future, started) in list(self._checks.items()):
+            if future.done() and started < cutoff:
+                del self._checks[ref]
 
     # -- checks --------------------------------------------------------------
 

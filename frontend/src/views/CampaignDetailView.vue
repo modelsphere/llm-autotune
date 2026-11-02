@@ -1072,7 +1072,10 @@ const configRows = computed(() => {
     {
       label: 'Schedule',
       value: window,
-      hint: 'when the campaign is awake; runs are cut at the window end',
+      // A one-off window does not start a draft by itself.
+      hint: c.status === 'draft' && c.window_end && !c.daily_start
+        ? 'a draft does not start on its own: Start it, and it runs until the window ends'
+        : 'when the campaign is awake; runs are cut at the window end',
     },
     {
       label: 'Current occurrence',

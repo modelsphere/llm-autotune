@@ -1092,7 +1092,7 @@ onMounted(async () => {
         <template v-if="step === 0">
           <el-form label-position="top">
             <el-form-item :label="t('campaignNew.name')">
-              <el-input v-model="form.name" :placeholder="defaultName" />
+              <el-input v-model="form.name" :placeholder="defaultName" maxlength="128" show-word-limit />
             </el-form-item>
             <el-form-item>
               <template #label>
