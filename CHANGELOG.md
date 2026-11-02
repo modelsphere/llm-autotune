@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Production is recognised in a listed set of configs.** A search space
+  that lists configs side by side writes `null` for a flag one of them lacks,
+  so production's row is all nulls rather than empty, and the quality floor
+  found no production score. A config is now production when applying it to
+  the recipe leaves the recipe as it is.
 - **A launch whose output is garbage fails before any benchmark.** A config
   that breaks the model's numerics still generates tokens at full speed, and
   the health gate passed any non-empty answer, so a benchmark that counts
