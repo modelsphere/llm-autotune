@@ -32,6 +32,7 @@ from app.db.models import (
     Campaign,
     CampaignStatus,
     Candidate,
+    CandidateKind,
     ContenderStatus,
     Machine,
     MachineState,
@@ -1287,3 +1288,54 @@ async def test_the_token_lasts_as_long_as_the_window(night):
         key = (await session.execute(select(ApiKey))).scalars().one()
         assert as_utc(key.expires_at) == later + timedelta(hours=1)
     assert (await policy.get("/session")).status_code == 200
+
+
+async def test_an_operator_validates_chosen_configs_in_a_finished_campaign(night):
+    """A night whose contenders were not the ones worth keeping: the operator
+    names the configs, and the platform validates them, production first, on
+    the machine given, with the validation benchmark, in this campaign. No
+    search session starts."""
+    supervisor, driver, http = night
+    async with http.db() as session:
+        campaign = await session.get(Campaign, 1)
+        campaign.status = CampaignStatus.DONE.value
+        machine = await session.get(Machine, 1)
+        machine.lease_state = "active"
+        await session.commit()
+        token = create_token(await session.get(User, 1))
+
+    response = await http.post(
+        "/api/campaigns/1/validate",
+        json={"configs": [{"tp_size": 2}, {"tp_size": 4}], "machine": "gpu-1", "hours": 4,
+              "benchmark_slug": "replay-and-gpqa", "quality_max_drop": 10},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200, response.text
+    for _ in range(30):
+        supervisor.tick()
+        if (await _session_row(http)).status in ("done", "failed"):
+            break
+
+    row = await _session_row(http)  # one session: no search one was opened
+    assert row.status == PolicySessionStatus.DONE.value, row.error
+    assert not driver.workloads, "no policy container is started to validate"
+    async with http.db() as session:
+        contenders = (await session.execute(
+            select(PolicyContender).order_by(PolicyContender.rank))).scalars().all()
+        assert [c.status for c in contenders] == ["validated", "validated"]
+        candidates = (await session.execute(
+            select(Candidate).where(Candidate.kind == CandidateKind.VERIFICATION.value)
+        )).scalars().all()
+        assert sum(c.is_baseline for c in candidates) == 1  # production, measured too
+        assert {tuple(sorted(c.config.items())) for c in candidates if not c.is_baseline} == {
+            (("tp_size", 2),), (("tp_size", 4),)}
+        campaign = await session.get(Campaign, 1)
+        assert campaign.verify_benchmark_slug == "replay-and-gpqa"
+        floor = [r for r in campaign.verify_objective["redlines"] if r.get("relative_to")]
+        assert floor == [{"metric": "opencompass/accuracy[gpqa_diamond]", "op": ">=",
+                          "relative_to": "production", "value": -0.1}]
+
+    again = await http.post("/api/campaigns/1/validate",
+                            json={"configs": [{"tp_size": 2}], "machine": "nope"},
+                            headers={"Authorization": f"Bearer {token}"})
+    assert again.status_code == 404

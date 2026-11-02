@@ -450,6 +450,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Validate chosen configs in a finished campaign.** `POST
+  /api/campaigns/{id}/validate` with `configs` (best first), a leased
+  `machine`, `hours`, and optionally a `benchmark_slug` (e.g. the workload
+  plus a quality suite) and `quality_max_drop` (points below production). The
+  platform validates them as it validates a night's contenders, production
+  first, launched from their spec, and the results land in the campaign. No
+  search runs. For a night whose session ended before validating, or whose
+  contenders were not the ones worth keeping.
 - **Quality checked against production.** A campaign can check its
   finalists' quality: production and the finalists answer the same fixed
   questions (the first 100 of GPQA Diamond by default, once each at

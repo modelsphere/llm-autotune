@@ -44,6 +44,7 @@ from app.db.models import (
     MachineGroupMember,
     ModelConfig,
     Policy,
+    PolicyContender,
     PolicySession,
     PolicySessionStatus,
     PolicyState,
@@ -1115,6 +1116,119 @@ async def force_start(
             payload={"until": until.isoformat(), "hours": body.hours},
         )
     )
+    await session.commit()
+    await session.refresh(campaign)
+    return await _campaign_out(session, campaign)
+
+
+class ValidateRequest(BaseModel):
+    configs: list[dict[str, Any]] = Field(
+        min_length=1, max_length=10,
+        description="The configs to validate, best first: each as the campaign's "
+        "candidates write it (what differs from production).",
+    )
+    machine: str = Field(description="The leased machine to measure them on.")
+    hours: int = Field(8, ge=1, le=_FORCE_START_MAX_HOURS,
+                       description="How long the validation may take.")
+    benchmark_slug: str = Field(
+        "", description="The benchmark to validate with, e.g. one that adds a quality "
+        "suite to the campaign's workload. Empty: the campaign's validation benchmark.")
+    quality_tasks: list[str] = Field(default_factory=lambda: ["gpqa_diamond"])
+    quality_max_drop: float | None = Field(
+        None, ge=0, le=100,
+        description="Points a config may score below production on each quality task. "
+        "Empty: no quality floor.")
+
+
+@router.post(
+    "/{campaign_id}/validate",
+    response_model=CampaignOut,
+    summary="Validate chosen configs now",
+    description="Measures the given configs, and production next to them, the way a "
+    "policy session's contenders are validated at the end of a night: launched by the "
+    "platform from their spec, on the given machine, with the validation benchmark. "
+    "Their results land in this campaign. For a policy campaign whose session ended "
+    "before its contenders were validated, or whose contenders were not the ones worth "
+    "keeping. No search runs.",
+)
+async def validate_configs(
+    campaign_id: int,
+    body: ValidateRequest,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_async_session),
+):
+    from app import quality
+    from app.control.search import CandidateConfig
+
+    campaign = await session.get(Campaign, campaign_id)
+    if campaign is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "no such campaign")
+    if campaign.owner_id != user.id and user.role != "admin":
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "not your campaign")
+    if not campaign.policy_id:
+        raise HTTPException(status.HTTP_409_CONFLICT,
+                            "validation runs in a policy session; this campaign has no policy")
+    live = (await session.execute(select(PolicySession.id).where(
+        PolicySession.campaign_id == campaign.id,
+        PolicySession.status.not_in([s.value for s in TERMINAL_SESSION_STATES]),
+    ))).first()
+    if live is not None:
+        raise HTTPException(status.HTTP_409_CONFLICT,
+                            f"policy session {live[0]} is still live; stop it first")
+    machine = (await session.execute(
+        select(Machine).where(Machine.name == body.machine))).scalars().first()
+    if machine is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"no machine {body.machine}")
+    if machine.lease_state != "active":
+        raise HTTPException(status.HTTP_409_CONFLICT, f"{body.machine} is not leased")
+
+    if body.benchmark_slug.strip():
+        campaign.verify_benchmark_slug = body.benchmark_slug.strip()
+        campaign.verify_top_k = max(campaign.verify_top_k or 0, len(body.configs))
+    if body.quality_max_drop is not None:
+        base = dict(campaign.verify_objective or campaign.objective or {})
+        kept = [r for r in base.get("redlines") or [] if not r.get("relative_to")]
+        base["redlines"] = kept + quality.quality_floor(
+            body.quality_tasks, body.quality_max_drop / 100)
+        campaign.verify_objective = base
+
+    now = datetime.now(UTC)
+    until = now + timedelta(hours=body.hours)
+    campaign.status = CampaignStatus.ACTIVE.value
+    campaign.override_until = until
+    campaign.window_start = now
+    campaign.window_end = until
+    # A session of this window, already VALIDATING: the worker opens no search
+    # session for the window, and validates these as it would a night's
+    # contenders, production first.
+    policy_session = PolicySession(
+        campaign_id=campaign.id,
+        policy_id=campaign.policy_id,
+        machine_id=machine.id,
+        window_start=now,
+        status=PolicySessionStatus.VALIDATING.value,
+        gpu_indices=list(range(machine.gpu_count or 0)),
+        ports=[],
+        started_at=now,
+    )
+    session.add(policy_session)
+    await session.flush()
+    for rank, config in enumerate(body.configs, start=1):
+        session.add(PolicyContender(
+            session_id=policy_session.id,
+            campaign_id=campaign.id,
+            rank=rank,
+            launch_spec={"engine_args": dict(config)},
+            config_hash=CandidateConfig(engine_args=dict(config)).hash,
+            evidence={"source": "operator", "by": user.username},
+        ))
+    session.add(Event(
+        actor=user.username, kind="campaign_validation_started", campaign_id=campaign.id,
+        payload={"session_id": policy_session.id, "configs": len(body.configs),
+                 "machine": machine.name, "until": until.isoformat(),
+                 "benchmark": campaign.verify_benchmark_slug,
+                 "quality_max_drop": body.quality_max_drop},
+    ))
     await session.commit()
     await session.refresh(campaign)
     return await _campaign_out(session, campaign)
