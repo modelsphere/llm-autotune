@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The health gate fails an engine that answers in a loop.** A config that
+  breaks the engine's numerics still generates tokens at full speed, and the
+  gate passed any non-empty answer: an engine whose answer to "Reply with
+  exactly the word OK" was 512 tokens of `_2.5.5.5.5…` was benchmarked, and a
+  benchmark that counts tokens scored it well. An answer (or reasoning) that
+  is one short pattern repeated now fails the gate.
 - **The quickstart works again with a VictoriaLogs address.** It wrote the
   default policy list between the `llmbench:` block and that block's
   `victoriaLogsUrl`, so with `VICTORIALOGS_URL` set its values file did not

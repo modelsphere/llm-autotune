@@ -12,6 +12,7 @@ import json
 import threading
 import time
 import uuid
+import zlib
 from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Any
 
@@ -37,6 +38,12 @@ _WARMUP_MAX_TOKENS = 16
 _ATTEMPTS = 3
 _BACKOFF_SECONDS = (5.0, 15.0)
 _TRANSIENT_STATUS = frozenset({502, 503, 504})
+# An answer that compresses this many times over is a loop, not language
+# ("_2.5.5.5.5…", "_2_2_2_2…"): an engine whose config breaks its numerics
+# still generates tokens, at full speed, and a benchmark that counts tokens
+# scores it well. English, code and reasoning compress about 2-4×.
+_LOOP_MIN_CHARS = 200
+_LOOP_RATIO = 8.0
 # Checks running at once; more wait their turn (and read RUNNING meanwhile).
 _CONCURRENT_CHECKS = 8
 # A finished check nobody polled (its run was stopped meanwhile) is dropped
@@ -46,6 +53,12 @@ _UNCLAIMED_SECONDS = 3600.0
 
 class _Transient(Exception):
     pass
+
+
+def looping(text: str) -> bool:
+    """Whether a long answer is one short pattern repeated."""
+    data = text.encode()
+    return len(data) >= _LOOP_MIN_CHARS and len(data) / len(zlib.compress(data)) >= _LOOP_RATIO
 
 
 class HealthEvaluator(Evaluator):
@@ -192,6 +205,14 @@ class HealthEvaluator(Evaluator):
                 return EvalOutcome(
                     status=EvalStatus.FAILED,
                     error=f"empty completion (finish_reason={finish_reason or 'unknown'})",
+                    raw={"response": body},
+                )
+            if looping(content) or looping(reasoning):
+                sample = (content or reasoning)[:120]
+                return EvalOutcome(
+                    status=EvalStatus.FAILED,
+                    error=f"the engine answers in a loop, not in words ({sample!r}…): "
+                    "its output is garbage, however fast it comes",
                     raw={"response": body},
                 )
             answered, slowest, warm_error = self._warm(url, served_model_name, deadline)

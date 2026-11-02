@@ -446,3 +446,40 @@ def test_health_fails_when_the_burst_gets_no_answer(monkeypatch):
     outcome = _settle(evaluator, evaluator.start("http://x", "m", {}))
     assert outcome.status == EvalStatus.FAILED
     assert "warm-up" in outcome.error
+
+
+def test_health_fails_an_engine_that_answers_in_a_loop(monkeypatch):
+    """Regression: a config that broke the engine's numerics answered the
+    probe with 512 tokens of "_2.5.5.5…" in its reasoning and passed, and
+    its benchmark, which counts tokens, scored it the campaign's best."""
+    import httpx as _httpx
+
+    from app.evaluation import health as health_module
+
+    def answering(reasoning):
+        return lambda url, **kw: _httpx.Response(200, json={
+            "choices": [{"message": {"content": "", "reasoning_content": reasoning},
+                         "finish_reason": "length"}],
+            "usage": {"completion_tokens": 512},
+        })
+
+    monkeypatch.setattr(health_module.httpx, "get", _models)
+    monkeypatch.setattr(health_module.httpx, "post", answering("_2" + ".5" * 500))
+    evaluator = HealthEvaluator(timeout_seconds=30)
+    outcome = _settle(evaluator, evaluator.start("http://x", "m", {}))
+    assert outcome.status == EvalStatus.FAILED and "loop" in outcome.error
+
+    # Reasoning cut off at the token budget is still a healthy engine.
+    thinking = (
+        "The user wants me to reply with exactly the word OK. There is no trick here; "
+        "they asked for a single word, so I should not add punctuation, quotes or any "
+        "explanation around it. Let me make sure about the casing: they wrote OK in "
+        "capitals, which is the usual form, and replying in lower case could be read as "
+        "not following the instruction exactly. I will answer with the two capital "
+        "letters and nothing else, since anything more would break the instruction."
+    )
+    assert not health_module.looping(thinking)
+    monkeypatch.setattr(health_module.httpx, "post", answering(thinking))
+    evaluator = HealthEvaluator(timeout_seconds=30)
+    outcome = _settle(evaluator, evaluator.start("http://x", "m", {}))
+    assert outcome.status == EvalStatus.PASSED, outcome.error
