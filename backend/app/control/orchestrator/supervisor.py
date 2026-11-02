@@ -2711,7 +2711,8 @@ class Supervisor:
             # Through a Reader, so an objective may name measures
             # (output_tpm_per_gpu, ttft_ms@p99) as well as raw LLMBench keys.
             reader = reader_for(
-                outcome.metrics, outcome.raw, run.candidate.config if run.candidate else None
+                outcome.metrics, outcome.raw, run.candidate.config if run.candidate else None,
+                run.campaign,
             )
             stored = summarize(_stage_objective(run.campaign, stage_of_run(run)), reader).as_dict()
             result.objective_value = stored["objective_value"]

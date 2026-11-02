@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Per-GPU rates of a recipe campaign divide by the launch's cards.** A
+  recipe campaign's config holds only what differs from the recipe, so it
+  has no `tp`, and the per-GPU measures (`total_tpm_per_gpu` and the rest)
+  divided a trial's rate by one card. Production, whose config is empty,
+  fell back to the cards LLMBench was told. On an 8-card recipe every trial
+  then scored about 8× production. The cards are now those one launch of the
+  config claims (the recipe with the config applied), in the stored
+  objective, the run page and what a policy reads.
 - **The quickstart works again with a VictoriaLogs address.** It wrote the
   default policy list between the `llmbench:` block and that block's
   `victoriaLogsUrl`, so with `VICTORIALOGS_URL` set its values file did not

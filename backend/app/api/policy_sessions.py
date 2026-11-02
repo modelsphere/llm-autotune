@@ -588,8 +588,12 @@ async def _waiting_reason(db: AsyncSession, run: Run) -> str:
     return str((payload or {}).get("reason") or "")
 
 
-def _measures_out(result: Result, candidate: Candidate | None) -> list[ScenarioMeasures]:
-    reader = reader_for(result.metrics, result.raw, candidate.config if candidate else None)
+def _measures_out(
+    result: Result, candidate: Candidate | None, campaign: Campaign | None
+) -> list[ScenarioMeasures]:
+    reader = reader_for(
+        result.metrics, result.raw, candidate.config if candidate else None, campaign
+    )
     return [ScenarioMeasures(**s) for s in scenarios_out(reader.scenarios)]
 
 
@@ -670,7 +674,8 @@ async def _benchmark_out(db: AsyncSession, run: Run, candidate: Candidate | None
         )
         metrics = dict(result.metrics or {})
         try:
-            measures = _measures_out(result, candidate)
+            campaign = await db.get(Campaign, run.campaign_id)
+            measures = _measures_out(result, candidate, campaign)
         except Exception:
             logger.exception("could not read benchmark %s as measures", run.id)
     from app.staging import stage_of
