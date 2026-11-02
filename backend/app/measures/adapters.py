@@ -427,13 +427,16 @@ OPENCOMPASS_TASKS = (
 def _opencompass(out: dict[str, float], raw: dict[str, Any]) -> frozenset[str]:
     supports = {"ttft_ms@mean", "tpot_ms@mean", "request_output_tps@mean", "output_tpm"}
     for key, value in raw.items():
-        # Its task scores are percentages; measures are shares.
+        # Measures are shares. The module reports a task's score as a share
+        # (0.83) and, in older releases, as a percentage (83.0): above 1 can
+        # only be a percentage. Read the other way, a share became 0.0083 and a
+        # quality floor relative to it passed everything.
         if key in OPENCOMPASS_TASKS or (
             key not in _OPENCOMPASS_PERF and number(value) is not None and "." not in key
         ):
             n = number(value)
             if n is not None:
-                out[f"accuracy[{key}]"] = n / 100.0
+                out[f"accuracy[{key}]"] = n / 100.0 if n > 1 else n
                 supports.add(f"accuracy[{key}]")
     for task in OPENCOMPASS_TASKS:
         supports.add(f"accuracy[{task}]")
