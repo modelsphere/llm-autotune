@@ -240,6 +240,34 @@ def pin_managed_dataset(
     campaign.dataset_build_row = 0
 
 
+# The event stop_managed_campaign records when it shuts a window.
+CAMPAIGN_STOPPED = "campaign_stopped"
+
+
+def stop_reason(session: Session, campaign: Campaign) -> str | None:
+    """Why the campaign's window ended, if stop_managed_campaign ended it
+    (rather than the clock): the reason it was given, and by whom."""
+    end = campaign.window_end
+    if end is None:
+        return None
+    event = session.scalars(
+        select(Event)
+        .where(Event.campaign_id == campaign.id, Event.kind == CAMPAIGN_STOPPED)
+        .order_by(Event.id.desc())
+        .limit(1)
+    ).first()
+    if event is None:
+        return None
+    try:
+        shut = datetime.fromisoformat(event.payload.get("window_end", ""))
+    except (TypeError, ValueError):
+        return None
+    if abs((as_utc(shut) - as_utc(end)).total_seconds()) > 1:
+        return None  # the window was moved since
+    by = event.actor.removeprefix("plugin:")
+    return f"stopped ({event.payload.get('reason') or 'stopped'}) by {by}"
+
+
 def stop_managed_campaign(
     session: Session, campaign: Campaign, *, plugin: str, reason: str = ""
 ) -> bool:
@@ -257,6 +285,16 @@ def stop_managed_campaign(
     campaign.override_until = None
     if campaign.window_end is None or as_utc(campaign.window_end) > moment:
         campaign.window_end = moment
+        # Read by the window clock, which ends the runs still going: it says
+        # "stopped (<reason>)" and not "window cutoff" for a window shut here.
+        session.add(
+            Event(
+                actor=f"plugin:{plugin}",
+                kind=CAMPAIGN_STOPPED,
+                campaign_id=campaign.id,
+                payload={"reason": reason or "stopped", "window_end": moment.isoformat()},
+            )
+        )
     sessions = session.scalars(
         select(PolicySession).where(
             PolicySession.campaign_id == campaign.id,

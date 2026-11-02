@@ -122,6 +122,9 @@ def test_a_node_cordoned_for_us_counts_when_our_pods_tolerate_the_cordon():
         MachineInfo(name="pool", host="", driver="k8s", node_selector=POOL)
     )
     assert probe["gpu_free"] == 0, "a cordon we do not tolerate keeps our pods off"
+    # ...and says why, rather than leaving a bare 0.
+    assert any("gpu-a is cordoned" in w and "node.kubernetes.io/unschedulable:NoSchedule" in w
+               for w in probe["warnings"])
 
 
 # -- sessions on a pool -------------------------------------------------------------

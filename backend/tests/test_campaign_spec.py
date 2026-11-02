@@ -251,3 +251,14 @@ async def test_a_built_in_objective_is_duplicated_into_an_editable_one(api):
         "Throughput (copy)", "Throughput (copy 2)")
     assert first.json()["is_builtin"] is False
     assert first.json()["redlines"] == [{"metric": "a.c", "op": ">=", "value": 1}]
+
+
+def test_a_name_longer_than_the_column_is_refused_up_front():
+    """Regression: a 129-character name passed validation and the insert
+    failed, a bare 500 instead of a 422 that says what is wrong."""
+    from pydantic import ValidationError
+
+    body = {"model_path": "/models/m", "search_space": {"grid": {}}}
+    CampaignCreate(name="x" * 128, **body)
+    with pytest.raises(ValidationError, match="at most 128 characters"):
+        CampaignCreate(name="x" * 129, **body)
