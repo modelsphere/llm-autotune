@@ -117,6 +117,24 @@ compared.
 workload reports are listed ([Objectives](objectives.md)); **Build one** opens
 the Objectives page.
 
+**Check quality against production.** A config can be faster and worse: a
+precision or kernel switch that breaks the model's answers still makes tokens
+quickly. With this on, production and the finalists answer the same fixed
+questions from an accuracy suite (the first 100 of GPQA Diamond by default,
+once each at temperature 0), and a finalist scoring more than the **Allowed
+drop** (10 points by default) below production's score cannot win.
+Production's score is the average of its measurements in the campaign. The
+questions run in the final validation only: production and the top-k
+finalists, measured again on this workload plus the questions (or in the
+verify stage, when the campaign has one). The search itself runs without them.
+It needs a workload described here; an existing benchmark cannot take the
+extra module.
+
+**Advanced: quality check** changes the **Datasets** (GPQA Diamond, MMLU-Pro,
+AIME 2025, IFEval, LiveCodeBench, SimpleQA, LongBench v2), or runs the
+questions in **every run**, the search included: slower, and every result is
+held to the floor.
+
 **Advanced: verify stage.** Screen every candidate with the workload above,
 then measure only the best few again with a second, more realistic workload
 (usually a replay); the second measurement decides. A replay can take most of

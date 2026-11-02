@@ -20,6 +20,13 @@ Objective shape (stored on the campaign, all fields optional):
         {"metric": "functional_acceptance.pass_rate", "op": ">=", "value": 0.99}
       ]
     }
+
+A redline may be relative to production: `"relative_to": "production"` makes
+`value` an offset from production's own score on the metric (the average of
+its measurements in the campaign), e.g. {"metric": "opencompass/accuracy[gpqa_diamond]",
+"op": ">=", "relative_to": "production", "value": -0.10}: no more than ten
+points below production. app.quality resolves it before a result is judged;
+unresolved (production not measured yet) it is crossed.
 """
 
 from dataclasses import dataclass
@@ -47,8 +54,16 @@ class RedlineResult:
     limit: Any
     actual: Any
     ok: bool
+    # Why it could not be judged, when it could not.
+    note: str = ""
+    # Where a relative limit came from ("production 0.71 - 0.10").
+    basis: str = ""
 
     def describe(self) -> str:
+        if self.note:
+            return f"{self.metric}: {self.note}"
+        if self.basis and isinstance(self.actual, int | float):
+            return f"{self.metric}={self.actual:g} {self.op} {self.limit:g} ({self.basis})"
         if self.actual is None:
             return f"{self.metric} missing (needed {self.op} {self.limit})"
         return f"{self.metric}={self.actual:g} {self.op} {self.limit:g}" if isinstance(
@@ -127,6 +142,15 @@ def evaluate_redlines(
         metric = redline.get("metric")
         op = redline.get("op", "<=")
         limit = redline.get("value")
+        if redline.get("relative_to"):
+            # app.quality.resolve writes the absolute limit in `value` and
+            # drops `relative_to`; one still here had nothing to resolve from.
+            actual = metrics.get(metric) if metric and metrics else None
+            results.append(RedlineResult(
+                str(metric), str(op), None, actual, ok=False,
+                note=f"no {redline['relative_to']} score to compare with yet",
+            ))
+            continue
         # A plain metrics dict, or a measures Reader that also answers measure
         # references (app.measures.Reader) — both have `.get`.
         actual = metrics.get(metric) if metric else None
@@ -140,7 +164,8 @@ def evaluate_redlines(
                 ok = bool(compare(actual, limit))
             except TypeError:
                 ok = False
-        results.append(RedlineResult(metric, op, limit, actual, ok))
+        results.append(RedlineResult(metric, op, limit, actual, ok,
+                                     basis=str(redline.get("basis") or "")))
     return results
 
 

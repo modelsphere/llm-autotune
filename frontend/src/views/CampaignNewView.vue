@@ -136,6 +136,14 @@ const form = ref({
   verify_benchmark_slug: '',
   verify_top_k: 2,
   verify_max_run_minutes: 180,
+  // The quality check: a fixed set of questions (GPQA Diamond by default)
+  // answered by production and the finalists, each finalist held within
+  // `quality_max_drop` points of production's average.
+  quality_enabled: false,
+  quality_max_drop: 10,
+  quality_questions: 100,
+  quality_tasks: ['gpqa_diamond'] as string[],
+  quality_every_run: false,
   // The traffic sample the replay stage is held to for this campaign's whole
   // life. Empty = whatever the benchmark resolves each time it submits, which
   // is fine for one night and not for several.
@@ -271,6 +279,34 @@ const staged = computed(
   () => form.value.verify_enabled &&
     (verifyWorkload.value.mode !== 'existing' || verifyWorkload.value.slug.trim().length > 0))
 
+/** The quality suites the platform can add to a described workload. */
+const QUALITY_TASKS = [
+  'gpqa_diamond', 'mmlu_pro', 'aime2025', 'ifeval', 'livecodebench_v6', 'simpleqa', 'longbench_v2',
+]
+/** Quality rides on a workload the platform builds; an existing benchmark is
+ *  someone else's and cannot take a module. */
+const qualityAvailable = computed(() =>
+  workload.value.mode !== 'existing' && !(staged.value && verifyWorkload.value.mode === 'existing'))
+const qualityOn = computed(() =>
+  form.value.quality_enabled && qualityAvailable.value && form.value.quality_tasks.length > 0)
+/** Quality on the finalists only, with no verify stage set up: the finalists
+ *  are measured again on the screening workload plus the quality suite. */
+const qualityVerifyOnly = computed(() =>
+  qualityOn.value && !form.value.quality_every_run && !staged.value)
+function qualitySpec() {
+  return { tasks: form.value.quality_tasks, questions: form.value.quality_questions }
+}
+/** Each task held within the allowed drop of production's average score. */
+function qualityFloors(): Record<string, unknown>[] {
+  return form.value.quality_tasks.map((task) => ({
+    metric: `opencompass/accuracy[${task}]`, op: '>=', relative_to: 'production',
+    value: -Math.abs(form.value.quality_max_drop) / 100,
+  }))
+}
+function withQuality(spec: Record<string, unknown> | null) {
+  return spec && { ...spec, quality: qualitySpec() }
+}
+
 /** Whether a module's results can report a target metric: its own
  *  `module.metric` names, or a measure (a name with no module, such as
  *  total_tpm_per_gpu), which the platform derives for every module. */
@@ -332,13 +368,17 @@ const rebuildAtStart = computed({
 /** Empty means "use the platform default", which is a replay metric. Sending
  *  the screening objective here instead would score every replay run None. */
 const verifyObjectivePayload = computed(() => {
-  const chosen = selectedVerifyObjective.value
-  if (!staged.value || !chosen) return {}
+  // With no verify stage of its own, a quality check re-measures the
+  // finalists on the screening workload: the screening objective ranks them.
+  const chosen = staged.value ? selectedVerifyObjective.value
+    : qualityVerifyOnly.value ? selectedObjective.value : null
+  const floors = qualityOn.value ? qualityFloors() : []
+  if (!chosen) return floors.length && staged.value ? { redlines: floors } : {}
   return {
     name: chosen.name,
     target_metric: chosen.target_metric,
     direction: chosen.direction,
-    redlines: chosen.redlines,
+    redlines: [...chosen.redlines, ...floors],
   }
 })
 
@@ -430,11 +470,14 @@ function useCustomForbidden(on: string | number | boolean) {
 /** The benchmark half of a campaign body: a described workload goes as a
  *  spec (the API creates its benchmark), an existing one as its slug. */
 function benchmarkFields() {
-  const verify = staged.value ? verifyWorkload.value : null
+  const verify = staged.value ? verifyWorkload.value
+    : qualityVerifyOnly.value ? workload.value : null
+  const screen = specOf(workload.value)
   return {
-    benchmark_spec: specOf(workload.value),
+    benchmark_spec: qualityOn.value && form.value.quality_every_run ? withQuality(screen) : screen,
     benchmark_slug: workload.value.mode === 'existing' ? workload.value.slug.trim() : '',
-    verify_benchmark_spec: verify ? specOf(verify) : null,
+    verify_benchmark_spec: verify ? (qualityOn.value ? withQuality(specOf(verify)) : specOf(verify))
+      : null,
     verify_benchmark_slug: verify?.mode === 'existing' ? verify.slug.trim() : '',
     // A replay's dataset is pinned for the campaign's whole life.
     dataset_profile: pinnedProfile.value,
@@ -1008,11 +1051,14 @@ async function create() {
         name: selectedObjective.value!.name,
         target_metric: selectedObjective.value!.target_metric,
         direction: selectedObjective.value!.direction,
-        redlines: selectedObjective.value!.redlines,
+        redlines: [
+          ...selectedObjective.value!.redlines,
+          ...(qualityOn.value && form.value.quality_every_run ? qualityFloors() : []),
+        ],
       },
       // Both halves, or neither: the API refuses a second benchmark with no
       // top-k and a top-k with none, because either one silently never fires.
-      verify_top_k: staged.value ? form.value.verify_top_k : 0,
+      verify_top_k: staged.value || qualityVerifyOnly.value ? form.value.verify_top_k : 0,
       verify_max_run_minutes: form.value.verify_max_run_minutes,
       verify_objective: verifyObjectivePayload.value,
       dataset_policy: form.value.dataset_policy,
@@ -1423,7 +1469,48 @@ onMounted(async () => {
               </div>
             </el-form-item>
 
+            <el-form-item>
+              <div class="stage-box" :class="{ off: !qualityOn }">
+                <div class="stage-head">
+                  <el-checkbox v-model="form.quality_enabled" :disabled="!qualityAvailable">
+                    <h4>{{ t('campaignNew.quality.title') }}</h4>
+                  </el-checkbox>
+                  <InfoHint :width="380">{{ t('campaignNew.quality.hint') }}</InfoHint>
+                </div>
+                <p v-if="!qualityAvailable" class="muted tiny">{{ t('campaignNew.quality.needsSpec') }}</p>
+                <div v-else-if="form.quality_enabled" class="grid-2 verify-fields">
+                  <label class="field">
+                    <span class="muted tiny">{{ t('campaignNew.quality.maxDrop') }}</span>
+                    <el-input-number v-model="form.quality_max_drop" :min="1" :max="50"
+                      size="small" controls-position="right" />
+                  </label>
+                  <label class="field">
+                    <span class="muted tiny">{{ t('campaignNew.quality.questions') }}</span>
+                    <el-input-number v-model="form.quality_questions" :min="0" :max="10000"
+                      :step="50" size="small" controls-position="right" />
+                  </label>
+                  <p class="muted tiny span-2">
+                    {{ form.quality_every_run ? t('campaignNew.quality.everyRunNote')
+                      : staged ? t('campaignNew.quality.verifyNote')
+                      : t('campaignNew.quality.finalistsNote', { k: form.verify_top_k }) }}
+                  </p>
+                </div>
+              </div>
+            </el-form-item>
+
             <el-collapse v-model="advancedNames" class="advanced">
+              <el-collapse-item v-if="form.quality_enabled && qualityAvailable" name="quality">
+                <template #title>{{ t('campaignNew.quality.advanced') }}</template>
+                <label class="field">
+                  <span class="muted tiny">{{ t('campaignNew.quality.tasks') }}</span>
+                  <el-select v-model="form.quality_tasks" multiple size="small" style="width: 100%">
+                    <el-option v-for="task in QUALITY_TASKS" :key="task" :value="task" :label="task" />
+                  </el-select>
+                </label>
+                <el-checkbox v-model="form.quality_every_run">
+                  {{ t('campaignNew.quality.everyRun') }}
+                </el-checkbox>
+              </el-collapse-item>
               <el-collapse-item name="split">
                 <template #title>{{ t('campaignNew.verifyStage') }}</template>
                 <div class="stage-box" :class="{ off: !form.verify_enabled }">
@@ -1766,6 +1853,9 @@ onMounted(async () => {
   display: flex;
   flex-direction: column;
   gap: 2px;
+}
+.span-2 {
+  grid-column: 1 / -1;
 }
 .verify-fields {
   margin-top: 10px;
