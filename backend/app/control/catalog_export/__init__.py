@@ -93,15 +93,17 @@ SERVING_CONTRACT: dict[str, tuple[str, ...]] = {
     "sglang": ("enable_cache_report", "stream_response_default_include_usage"),
 }
 
-# nvidia.com/gpu.product values, as the catalog's own entries spell them. The
-# platform keeps only the normalized card name ("H100"), so this is the one
-# place a card is taught its node label; a card missing here gets no
-# gpuProduct and a warning, never a guessed label that matches no node.
+# requires.gpuProduct names, as the catalog's own entries spell them: the
+# nvidia.com/gpu.product value for NVIDIA, <Vendor>-<model> for the others. The
+# platform keeps only the normalized card name (app/hardware.py GPU_TYPES), so
+# this is the one place a card is taught its catalog name; a card missing here
+# gets no gpuProduct and a warning, never a guessed name that matches no node.
 GPU_PRODUCTS: dict[str, list[str]] = {
     "A100": ["NVIDIA-A100-SXM4-80GB"],
     "H100": ["NVIDIA-H100-80GB-HBM3"],
     "H800": ["NVIDIA-H800"],
     "B300": ["NVIDIA-B300-SXM6-AC"],
+    "ASCEND-910B4-1": ["Ascend-910B4"],
 }
 
 # Startup budget: the newest catalog entries give every model 90 minutes
@@ -114,6 +116,8 @@ PROBE_PERIOD_SECONDS = 30
 # A tag that reads as a release (v0.5.19, 0.5.15-cu129, v0.5.10.post1). Anything
 # else (dev-dsv41, latest, a branch name) is likely to be moved to another build.
 _RELEASE_TAG = re.compile(r"^v?\d+\.\d+(\.\d+)?([.-][0-9A-Za-z]+)*$")
+# A tag that carries its digest ("pinned@sha256:..."): it cannot move.
+_PINNED_TAG = re.compile(r"@sha256:[a-f0-9]{64}$")
 _DEV_WORDS = re.compile(r"dev|latest|nightly|test|tmp|wip|snapshot", re.I)
 
 # Top-level chart value keys a catalog entry must not write (swiss refuses
@@ -239,6 +243,10 @@ class ExportedVariant:
     # report on these runs), no_baseline; "" for any other variant.
     tuning: str = ""
     uplift: float | None = None
+    # The card type the run measured, and the gpuProduct names written ([]
+    # when none are: an unknown card, or requires.gpus 0).
+    gpu_type: str = ""
+    gpu_product: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -287,9 +295,12 @@ class CatalogExport:
                     "inputs": [i.payload() for i in v.inputs],
                     "tuning": v.tuning,
                     "uplift": v.uplift,
+                    "gpu_type": v.gpu_type,
+                    "gpu_product": list(v.gpu_product),
                 }
                 for v in self.variants
             ],
+            "gpu_products": {k: list(v) for k, v in GPU_PRODUCTS.items()},
             "metadata": self.metadata,
             "files": [{"path": f.path, "kind": f.kind, "text": f.text} for f in self.files],
             "warnings": list(self.warnings),
@@ -396,14 +407,48 @@ def extra_args(engine: str, args: dict[str, Any]) -> tuple[list[str], str, list[
 # -- the builder ---------------------------------------------------------------
 
 
-def _variant_id(src: VariantSource, gpus: int) -> str:
+def source_nodes(src: VariantSource) -> int:
+    """Nodes one instance spans: a recipe's LeaderWorkerSet size, else what
+    the caller said."""
+    if src.recipe is not None:
+        return int(src.recipe.to_variant()["requires"].get("nodes") or 1)
+    return max(1, int(src.nodes or 1))
+
+
+# Resource names a pod requests that are not its accelerator.
+_NOT_CARDS = re.compile(r"^(cpu|memory|ephemeral-storage|hugepages-.*|rdma/.*)$")
+
+
+def recipe_cards(requires: dict[str, Any], values: dict[str, Any]) -> tuple[int, str]:
+    """Cards per node and what to call them. requires.gpus when it is set;
+    else the accelerator the values request under resources -- an Ascend
+    variant keeps requires.gpus at 0 so the chart asks for no nvidia.com/gpu
+    (swiss#41) and requests its cards there."""
+    gpus = int(requires.get("gpus") or 0)
+    if gpus:
+        return gpus, "GPU"
+    resources = values.get("resources") or {}
+    for part in ("limits", "requests"):
+        for key, value in (resources.get(part) or {}).items():
+            if _NOT_CARDS.match(str(key)):
+                continue
+            try:
+                count = int(str(value))
+            except ValueError:
+                continue
+            if count > 0:
+                return count, "GPU" if "gpu" in str(key).lower() else "card"
+    return 0, "GPU"
+
+
+def _variant_id(src: VariantSource, gpus: int, nodes: int | None = None) -> str:
     if src.id:
         return _id_slug(src.id)[:63]
     cfg = src.config
     parts = [cfg.engine, parallelism(cfg.engine_args)]
     if cfg.gpu_type:
         parts.append(cfg.gpu_type)
-    if src.nodes > 1:
+    if (nodes if nodes is not None else src.nodes) > 1:
         parts.append("lws")
     if src.role:
         parts.append(src.role)
@@ -459,22 +504,34 @@ def gain_pct(src: VariantSource, reference: VariantSource | None) -> float | Non
     return -raw if ev.get("direction") == "minimize" else raw
 
 
-def _describe(src: VariantSource, gpus: int, reference: VariantSource | None) -> str:
+def _describe(
+    src: VariantSource,
+    gpus: int,
+    reference: VariantSource | None,
+    nodes: int | None = None,
+    unit: str = "GPU",
+) -> str:
     """Hardware and features, the way the catalog's entries read ("TP8 with
     DCP8 on one eight-GPU B300 node, fp8 KV cache"), plus the measured gain over
     the baseline variant. No metric keys or benchmark names: the file is public
-    and frozen, and those are specific to one installation."""
+    and frozen, and those are specific to one installation. `gpus` is per
+    node; `unit` is "card" for an accelerator that is not a GPU."""
     if src.description:
         return src.description[:512]
     cfg = src.config
+    nodes = src.nodes if nodes is None else nodes
     shape = parallelism(cfg.engine_args).upper().replace("-", " ")
-    card = cfg.gpu_type or "GPU"
+    card = cfg.gpu_type or unit
     count = _WORDS.get(gpus, str(gpus))
-    noun = "GPU" if gpus == 1 else "GPUs"
-    if src.nodes > 1:
-        where = f"{count} {card} {noun} per node, {src.nodes} nodes"
+    noun = unit if gpus == 1 else f"{unit}s"
+    if not gpus:
+        # A count we could not read is left out, never written as 0.
+        count, noun = "", "" if card == unit else f"{unit}s"
+    cards = " ".join(p for p in (count, card, noun) if p)
+    if nodes > 1:
+        where = f"{cards} per node, {nodes} nodes"
     else:
-        where = f"{count} {card} {noun}, single node"
+        where = f"{cards}, single node"
     head = {"baseline": "Baseline", "optimized": "Tuned by LLM AutoTune"}.get(src.role, "")
     body = f"{shape} on {where}"
     extra = features(cfg.engine_args)
@@ -533,8 +590,10 @@ def _variant_from_recipe(
     assert src.recipe is not None
     body = src.recipe.to_variant()
     requires = dict(body["requires"])
-    vid = _variant_id(src, int(requires.get("gpus") or 0))
-    description = _describe(src, requires["gpus"], reference)
+    nodes = int(requires.get("nodes") or 1)
+    cards, unit = recipe_cards(requires, body["values"])
+    vid = _variant_id(src, cards, nodes)
+    description = _describe(src, cards, reference, nodes, unit)
     variant: dict[str, Any] = {"id": vid, "description": description}
     variant["engine"] = body["engine"]
     variant["chart"] = {
@@ -546,22 +605,43 @@ def _variant_from_recipe(
         image["tag"] = src.image_tag.strip()
     digest = image.get("digest") or src.image_digest
     if image.get("repository") and image.get("tag"):
-        if re.fullmatch(r"sha256:[a-f0-9]{64}", digest or ""):
-            image["digest"] = digest
         tag = image["tag"]
-        if (not _RELEASE_TAG.match(tag) or _DEV_WORDS.search(tag)) and "digest" not in image:
+        if _PINNED_TAG.search(tag):
+            # The tag already names the digest (a chart without a digest key
+            # pulls "<repository>:<tag>"): a second copy only adds a diff.
+            image.pop("digest", None)
+        elif re.fullmatch(r"sha256:[a-f0-9]{64}", digest or ""):
+            image["digest"] = digest
+        if (
+            (not _RELEASE_TAG.match(tag) or _DEV_WORDS.search(tag))
+            and "digest" not in image
+            and not _PINNED_TAG.search(tag)
+        ):
             warnings.append(f"{vid}: image tag {tag} isn't a release tag and may move")
         variant["image"] = image
     else:
         errors.append(f"{vid}: the recipe's image has no tag; the catalog names an image by tag")
-    products = src.gpu_product or opts.gpu_product or GPU_PRODUCTS.get(src.config.gpu_type, [])
-    if products:
-        requires["gpuProduct"] = list(dict.fromkeys(products))
+    if not requires.get("gpus"):
+        # The catalog reads gpus 0 as CPU only and refuses a gpuProduct beside
+        # it; an Ascend recipe sets 0 on purpose (swiss#41) and requests its
+        # cards under resources. The export-wide list simply does not apply.
+        if src.gpu_product:
+            errors.append(
+                f"{vid}: gpuProduct is set, but requires.gpus is 0, which the catalog reads"
+                " as CPU only and refuses a gpuProduct beside"
+            )
+        details.append(f"{vid}: no gpuProduct, as requires.gpus is 0")
     else:
-        warnings.append(
-            f"{vid}: no node label known for {src.config.gpu_type or 'this card'}: set gpuProduct"
-            " under Advanced"
+        products = (
+            src.gpu_product or opts.gpu_product or GPU_PRODUCTS.get(src.config.gpu_type, [])
         )
+        if products:
+            requires["gpuProduct"] = list(dict.fromkeys(products))
+        else:
+            warnings.append(
+                f"{vid}: no catalog name known for {src.config.gpu_type or 'this card'}: set"
+                " gpuProduct under Advanced"
+            )
     variant["requires"] = requires
     variant["values"] = body["values"]
     details.append(f"{vid}: the recipe the run measured, published unchanged")
@@ -625,7 +705,7 @@ def _variant(
         requires["gpuProduct"] = list(dict.fromkeys(products))
     else:
         warnings.append(
-            f"{vid}: no node label known for {cfg.gpu_type or 'this card'}: set gpuProduct"
+            f"{vid}: no catalog name known for {cfg.gpu_type or 'this card'}: set gpuProduct"
             " under Advanced"
         )
     variant["requires"] = requires
@@ -799,7 +879,25 @@ def build_catalog_entry(sources: list[VariantSource], opts: CatalogOptions) -> C
         doc.update({k: v for k, v in body.items() if k != "id"})
         status = "new"
         published = (existing.variants if existing else {}).get(doc["id"])
-        if published is not None:
+        twin, differs = ("", [])
+        if src.recipe is not None and existing is not None:
+            twin, differs = _published_twin(doc, existing)
+        if twin and not differs:
+            # A published variant measured again (a recipe submitted from
+            # the catalog): it is that variant, under its own id and words.
+            old = existing.variants[twin]
+            doc = copy.deepcopy(old["document"])
+            status = "unchanged"
+            details.append(f"{twin}: the published {old.get('version')} is this recipe")
+        elif twin and twin != doc["id"]:
+            warnings.append(
+                f"{doc['id']}: the same as the published {twin} but for {', '.join(differs)}."
+                " If that is this site's own setting (a port, a host path), deploy"
+                f" {twin} with an override instead of publishing a new variant"
+            )
+        if status == "unchanged":
+            pass
+        elif published is not None:
             was = str(published.get("version") or "1.0.0")
             old = published.get("document")
             if old is not None and _same_variant(old, doc):
@@ -826,6 +924,8 @@ def build_catalog_entry(sources: list[VariantSource], opts: CatalogOptions) -> C
                 path=f"models/{name}/{doc['id']}.yaml",
                 document=doc,
                 inputs=ins,
+                gpu_type=src.config.gpu_type,
+                gpu_product=list((doc.get("requires") or {}).get("gpuProduct") or []),
             )
         )
 
@@ -835,9 +935,14 @@ def build_catalog_entry(sources: list[VariantSource], opts: CatalogOptions) -> C
         for v in exported
         if v.status != "unchanged"
     ]
-    if existing is not None and existing.metadata_text and "#" in existing.metadata_text:
-        details.append("metadata.yaml is rewritten from its fields, without its comments")
-    files.append(CatalogFile(f"models/{name}/metadata.yaml", "metadata", dump(meta)))
+    meta_text = dump(meta)
+    if existing is not None and existing.metadata_text:
+        patched = edit_top_level(existing.metadata_text, meta)
+        if patched is not None:
+            meta_text = patched
+        elif "#" in existing.metadata_text:
+            details.append("metadata.yaml is rewritten from its fields, without its comments")
+    files.append(CatalogFile(f"models/{name}/metadata.yaml", "metadata", meta_text))
     return CatalogExport(
         name=name,
         variants=exported,
@@ -859,6 +964,58 @@ def _same_variant(old: dict[str, Any], new: dict[str, Any]) -> bool:
     return {k: v for k, v in old.items() if k not in strip} == {
         k: v for k, v in new.items() if k not in strip
     }
+
+
+def _leaves(value: Any, prefix: str = "") -> dict[str, Any]:
+    """A document's leaves by dotted path; a list is one leaf."""
+    if isinstance(value, dict) and value:
+        out: dict[str, Any] = {}
+        for key, item in value.items():
+            out |= _leaves(item, f"{prefix}.{key}" if prefix else str(key))
+        return out
+    return {prefix: value}
+
+
+def _serving(doc: dict[str, Any]) -> dict[str, Any]:
+    """What a variant serves, as the recipe identity reads it (flags and env by
+    meaning), plus the image by repository and tag."""
+    identity = Recipe.from_variant(doc, model_name=str(doc.get("model") or "")).identity()
+    image = doc.get("image") or {}
+    identity["image"] = f"{image.get('repository', '')}:{image.get('tag', '')}"
+    identity["nodes"] = (doc.get("requires") or {}).get("nodes") or 1
+    return identity
+
+
+# A variant this close to a published one is named as a near copy of it.
+TWIN_MAX_DIFFERENCES = 3
+
+
+def _published_twin(doc: dict[str, Any], existing: CatalogModel) -> tuple[str, list[str]]:
+    """The published variant closest to this one, and the paths they differ in,
+    when it is within TWIN_MAX_DIFFERENCES of them ("", [] when none is)."""
+    try:
+        mine = _leaves(_serving(doc))
+    except Exception:
+        return "", []
+    best: tuple[str, list[str]] = ("", [])
+    for vid, published in existing.variants.items():
+        old = published.get("document")
+        if not isinstance(old, dict):
+            continue
+        try:
+            theirs = _leaves(_serving(old))
+        except Exception:
+            continue
+        differs = sorted(
+            path.removeprefix("values.")
+            for path in mine.keys() | theirs.keys()
+            if mine.get(path) != theirs.get(path)
+        )
+        if len(differs) > TWIN_MAX_DIFFERENCES:
+            continue
+        if not best[0] or len(differs) < len(best[1]):
+            best = (vid, differs)
+    return best
 
 
 def _metadata(
@@ -916,23 +1073,34 @@ def _metadata(
                 + (f" (the weights path suggests {suggestion})" if suggestion else "")
             )
 
-    ids = {v.id for v in exported} | set(existing.variants if existing else {})
-    default = (
-        opts.default_variant
-        or meta.get("defaultVariant")
-        or next((v.id for v in exported if v.role == "optimized"), "")
-    )
-    if default:
-        if default not in ids:
-            errors.append(f"default variant {default!r} is not a variant of {name}")
-        meta["defaultVariant"] = default
-
     tuning = _tuning(sources, exported, opts, warnings)
     if tuning:
         recorded = [t for t in meta.get("tuning") or [] if t not in tuning]
         meta["tuning"] = recorded + tuning
     named = re.compile(r"(^|-)optimi[sz]ed(-|$)")
     covered = {str(t.get("optimized", "")).split("@")[0] for t in meta.get("tuning") or []}
+
+    ids = {v.id for v in exported} | set(existing.variants if existing else {})
+    published_default = str(meta.get("defaultVariant") or "") if existing else ""
+    default = (
+        opts.default_variant
+        or meta.get("defaultVariant")
+        or next((v.id for v in exported if v.role == "optimized"), "")
+    )
+    if default and published_default and default != published_default and default not in covered:
+        # The default is what a deploy of the model gets: only a measured
+        # gain over a baseline, with its report, takes it from the published one.
+        errors.append(
+            f"default variant {default!r}: no tuning result names it, so it does not replace"
+            f" the published default {published_default!r}; leave the default as it is, or"
+            " publish it as an optimized variant with its baseline and report"
+        )
+        default = published_default
+    if default:
+        if default not in ids:
+            errors.append(f"default variant {default!r} is not a variant of {name}")
+        meta["defaultVariant"] = default
+
     for v in exported:
         # An optimized variant was already warned about by _tuning.
         if named.search(v.id) and v.id not in covered and v.role != "optimized":
@@ -1112,7 +1280,7 @@ def suggest_metadata(sources: list[VariantSource], model_label: str) -> dict[str
         tags.append("tool-use")
     if re.search(r"(?<![a-z])(vl|vision)(?![a-z])", lowered):
         tags.append("vision")
-    if any(s.nodes > 1 for s in sources):
+    if any(source_nodes(s) > 1 for s in sources):
         tags.append("multi-node")
     if any(a.get("speculative_algorithm") for a in args_all):
         tags.append("speculative-decoding")
@@ -1128,8 +1296,9 @@ def suggest_metadata(sources: list[VariantSource], model_label: str) -> dict[str
         cfg = src.config
         noun = "GPU" if cfg.cards == 1 else "GPUs"
         where = f"{cfg.cards} {cfg.gpu_type} {noun}" if cfg.gpu_type else f"{cfg.cards} {noun}"
-        if src.nodes > 1:
-            where = f"{src.nodes} nodes of {cfg.cards // src.nodes} {cfg.gpu_type or ''} GPUs"
+        nodes = source_nodes(src)
+        if nodes > 1:
+            where = f"{nodes} nodes of {cfg.cards // nodes} {cfg.gpu_type or ''} GPUs"
         if where not in cards:
             cards.append(where)
     feats = []
@@ -1147,7 +1316,7 @@ def suggest_metadata(sources: list[VariantSource], model_label: str) -> dict[str
     ]
     if feats:
         parts.append("Configs use " + ", ".join(feats) + ".")
-    if any(src.nodes > 1 for src in sources):
+    if any(source_nodes(src) > 1 for src in sources):
         parts.append(
             "Does not fit on one node: a LeaderWorkerSet group, which needs the LWS"
             " controller and RDMA (rdma-shared-dev-plugin)."
@@ -1169,6 +1338,77 @@ class _Dumper(yaml.SafeDumper):
 
     def increase_indent(self, flow: bool = False, indentless: bool = False):
         return super().increase_indent(flow, False)
+
+
+def _str(dumper: yaml.SafeDumper, value: str) -> yaml.ScalarNode:
+    """A multi-line string (a commandOverride script) as a literal block, the
+    way a person writes it, not one quoted line of \\n escapes. PyYAML still
+    quotes one it cannot write as a block (trailing spaces on a line)."""
+    style = "|" if "\n" in value else None
+    return dumper.represent_scalar("tag:yaml.org,2002:str", value, style=style)
+
+
+_Dumper.add_representer(str, _str)
+
+_TOP_KEY = re.compile(r"^([A-Za-z_][\w.-]*):(\s|$)")
+
+
+def edit_top_level(text: str, document: dict[str, Any]) -> str | None:
+    """`text` (a published file) changed into `document` key by key: a
+    top-level key whose value differs is rewritten, a new one inserted after
+    the key it follows in `document`, a dropped one removed, and every other
+    line -- comments, wrapping, quoting -- left as the author wrote it. None
+    when the text cannot be split that way or the result would not read back
+    as `document`."""
+    try:
+        old = yaml.safe_load(text)
+    except yaml.YAMLError:
+        return None
+    if not isinstance(old, dict):
+        return None
+    lines = text.splitlines(keepends=True)
+    if lines and not lines[-1].endswith("\n"):
+        lines[-1] += "\n"
+    keys = [(i, m.group(1)) for i, line in enumerate(lines) if (m := _TOP_KEY.match(line))]
+    if [k for _, k in keys] != list(old):
+        return None
+    # Each key's span: its own lines, from the key line to the next key's
+    # leading comments, which stay with that next key.
+    spans: dict[str, tuple[int, int]] = {}
+    for n, (start, key) in enumerate(keys):
+        end = keys[n + 1][0] if n + 1 < len(keys) else len(lines)
+        while end > start + 1 and lines[end - 1].startswith("#"):
+            end -= 1
+        spans[key] = (start, end)
+    chunks: dict[str, list[str]] = {k: lines[s:e] for k, (s, e) in spans.items()}
+    for key in old:
+        if key not in document:
+            chunks[key] = []
+        elif document[key] != old[key]:
+            chunks[key] = dump({key: document[key]}).splitlines(keepends=True)
+    inserted: dict[str, list[str]] = {}
+    after = ""
+    for key in document:
+        if key in old:
+            after = key
+        else:
+            inserted.setdefault(after, []).extend(dump({key: document[key]}).splitlines(True))
+    out = lines[: keys[0][0]] if keys else list(lines)
+    out += inserted.get("", [])
+    for n, (_, key) in enumerate(keys):
+        e = spans[key][1]
+        out += chunks[key]
+        out += inserted.get(key, [])
+        # The next key's leading comments.
+        nxt = keys[n + 1][0] if n + 1 < len(keys) else len(lines)
+        out += lines[e:nxt]
+    result = "".join(out)
+    try:
+        if yaml.safe_load(result) != document:
+            return None
+    except yaml.YAMLError:
+        return None
+    return result
 
 
 def dump(document: dict[str, Any]) -> str:
