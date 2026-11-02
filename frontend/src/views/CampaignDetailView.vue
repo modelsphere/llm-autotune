@@ -27,6 +27,7 @@ import {
   type PolicySessionDetail,
   type Run,
   type RunDetail,
+  type RunLaunch,
 } from '../api/client'
 import CatalogExportDialog, { type CatalogCandidate } from '../components/CatalogExportDialog.vue'
 import InfoHint from '../components/InfoHint.vue'
@@ -216,6 +217,36 @@ async function abortSession() {
   }
 }
 
+/** A space written for this campaign alone lives only in it; saving it puts
+ *  it on the Search spaces page for the next campaign. */
+const spaceSaved = ref('')
+async function saveSpace() {
+  const c = campaign.value
+  if (!c) return
+  let name: string
+  try {
+    ({ value: name } = await ElMessageBox.prompt('A name for it on the Search spaces page.',
+      'Save as search space', {
+        inputValue: `${c.served_model_name}-${c.id}`, confirmButtonText: 'Save',
+        cancelButtonText: 'Cancel', inputPattern: /\S/, inputErrorMessage: 'Give it a name',
+      }))
+  } catch {
+    return
+  }
+  const space = (c.search_space ?? {}) as Record<string, unknown>
+  try {
+    await api.post('/search-spaces', {
+      name: name.trim(), engine: c.engine, description: `From campaign ${c.name}`,
+      base: space.base ?? {}, grid: space.grid ?? {}, tied: space.tied ?? [],
+      ranges: space.ranges ?? {}, conditions: space.conditions ?? {},
+    })
+    spaceSaved.value = name.trim()
+    ElMessage.success(`Saved as ${name.trim()}`)
+  } catch (error) {
+    ElMessage.error(apiErrorText(error, 'Could not save the search space'))
+  }
+}
+
 /** The grid this campaign was created from, when it recorded one. */
 const spaceName = computed(
   () => ((campaign.value?.search_space ?? {}) as { name?: string }).name ?? '')
@@ -281,6 +312,33 @@ const datasetPin = computed(() => {
  *  their scores share no scale and merging them would rank nothing. */
 const verifiedBoard = computed(() => leaderboard.value.filter((e) => e.stage === 'verify'))
 const screenBoard = computed(() => leaderboard.value.filter((e) => e.stage !== 'verify'))
+
+/** Production's config as the board measured it — the hover diffs each bar
+ *  against it. The validation's flagged production run first, else the
+ *  search's anchors. */
+const productionConfig = computed<Record<string, unknown> | null>(() => {
+  const base = verifiedBoard.value.find((e) => e.is_baseline) ?? screenBoard.value.find((e) => e.is_baseline)
+  return base && !base.config?.__baseline__ ? base.config : null
+})
+
+/** The one config the board recommends: the best validated finalist that held
+ *  its redlines, else the best such search result. */
+const winnerEntry = computed<LeaderboardEntry | null>(() => {
+  const pick = (rows: LeaderboardEntry[]) =>
+    rows.find((e) => !e.is_baseline && e.holds_redlines && e.comparable !== false) ?? null
+  return pick(verifiedBoard.value) ?? pick(screenBoard.value)
+})
+const winnerObjective = computed(() =>
+  winnerEntry.value?.stage === 'verify' ? verifyObjective.value : objective.value)
+/** What the winner changes from production — the keys worth reading. */
+const winnerChanged = computed(() => {
+  const w = winnerEntry.value
+  if (!w) return []
+  const prod = productionConfig.value ?? {}
+  const keys = new Set([...Object.keys(w.config), ...Object.keys(prod)])
+  return [...keys].filter((k) => !k.startsWith('__')
+    && JSON.stringify(w.config[k]) !== JSON.stringify(prod[k])).sort()
+})
 
 async function stopRun(run: Run) {
   try {
@@ -526,24 +584,30 @@ const StopIcon = () =>
   h('svg', { viewBox: '0 0 1024 1024', fill: 'currentColor' },
     [h('rect', { x: 224, y: 224, width: 576, height: 576, rx: 64 })])
 
+/** What the run control's Stop does now, the same test the server makes: a
+ *  searching policy is first asked to wrap up (its finalists are measured),
+ *  and only after that, or for anything else, does Stop end things at once.
+ *  The button says which, since the two lose very different amounts. */
+const stopIsRequest = computed(() => {
+  const s = session.value
+  return !!s && !!s.first_heartbeat_at && s.status === 'searching' && !s.finalize_requested_at
+})
+
 async function forceStop() {
   const live = liveRuns.value.length
-  const s = session.value
-  // A searching policy is first asked to wrap up (measure its finalists); a
-  // second Stop ends it at once.
-  const windDown = !!s && s.status === 'searching' && !s.finalize_requested_at
+  const windDown = stopIsRequest.value
   let message = 'Pause this campaign?'
   if (windDown) {
-    message = 'Ask the policy to wrap up? It measures its finalists, then stops. ' +
-      'Press Stop again to end it at once.'
+    message = 'Ask the policy to wrap up? Runs in progress finish, its finalists are measured, ' +
+      'then it stops. Force stop stays available if it should end at once.'
   } else if (live || policyLive.value) {
     const what = [live ? `${live} run(s)` : '', policyLive.value ? 'the policy' : '']
       .filter(Boolean).join(' and ')
     message = `Stop now? ${what} will be ended; measurements in progress are lost.`
   }
   try {
-    await ElMessageBox.confirm(message, t('campaign.forceStop'), {
-      confirmButtonText: windDown ? 'Wrap up' : t('campaign.forceStop'),
+    await ElMessageBox.confirm(message, windDown ? t('campaign.requestStop') : t('campaign.forceStop'), {
+      confirmButtonText: windDown ? t('campaign.requestStop') : t('campaign.forceStop'),
       cancelButtonText: 'Cancel', type: windDown ? 'warning' : 'error',
       confirmButtonClass: windDown ? '' : 'el-button--danger',
     })
@@ -556,7 +620,7 @@ async function forceStop() {
     ElMessage.error(apiErrorText(error, 'Could not stop'))
     return
   }
-  ElMessage.success(windDown ? 'The policy is wrapping up' : 'Stopped')
+  ElMessage.success(windDown ? 'Stop requested: the policy is wrapping up' : 'Stopped')
   await load()
 }
 
@@ -751,12 +815,42 @@ let openSeq = 0
 async function openRun(run: Run) {
   const seq = ++openSeq
   const detail = (await api.get(`/runs/${run.id}`)).data
-  const log = await fetchRunLog(run.id)
+  // A benchmark of a policy's launch owns no engine: its launch (the applied
+  // command, the pod) is the engine run it measured.
+  const launchOf = detail.launch_run_id ?? detail.id
+  const [log, launch] = await Promise.all([
+    fetchRunLog(run.id),
+    api.get(`/agent/v1/runs/${launchOf}/launch`).then((r) => r.data as RunLaunch).catch(() => null),
+  ])
   if (seq !== openSeq) return
   selectedRun.value = detail
   runLog.value = log
+  runLaunch.value = launch
+  launchTab.value = 'serve'
   drawerOpen.value = true
 }
+
+/** The launch tabs' contents, each one copyable as-is. */
+const runLaunch = ref<RunLaunch | null>(null)
+const launchTab = ref('serve')
+const launchYaml = computed(() => {
+  const l = runLaunch.value
+  if (!l) return ''
+  const c = l.config
+  return toYaml({
+    engine: c.engine, image: c.image, model_path: c.model_path,
+    served_model_name: c.served_model_name, gpu_type: c.gpu_type || undefined, cards: l.cards,
+    engine_args: c.engine_args,
+    ...(Object.keys(c.extra_env ?? {}).length ? { extra_env: c.extra_env } : {}),
+    ...(Object.keys(c.extra_volumes ?? {}).length ? { extra_volumes: c.extra_volumes } : {}),
+  })
+})
+/** What the platform actually applied — the launch's own record when the run
+ *  was a benchmark of it. */
+const appliedCommand = computed(() =>
+  runLaunch.value?.rendered.docker_command || selectedRun.value?.launch_command || '')
+const engineArgsJson = computed(() =>
+  JSON.stringify(runLaunch.value?.config.engine_args ?? selectedRun.value?.config ?? {}, null, 2))
 
 function downloadRunLog() {
   const r = selectedRun.value
@@ -807,7 +901,7 @@ function moreAction(command: string) {
   if (command === 'logs') logOpen.value = true
   else if (command === 'clone') copyToNew()
   else if (command === 'export') exportOpen.value = true
-  else if (command === 'catalog') catalogOpen.value = true
+  else if (command === 'retry') void retryFailed()
   else if (command === 'delete') void deleteCampaign()
   else if (command === 'done') void markDone()
 }
@@ -880,6 +974,19 @@ const configRows = computed(() => {
   return [
     { label: 'Engine', value: c.engine },
     { label: 'Image', value: c.image },
+    ...(hasRecipe.value
+      ? [{
+          label: 'Chart',
+          value: `${c.recipe?.chart?.name ?? c.engine} ` +
+            (c.chart_version || `${c.recipe?.chart?.version || 'latest'} — not pinned yet`),
+          hint: c.chart_version
+            ? 'pinned: every run renders this version'
+            : 'pinned to the version the first run installs',
+        }]
+      : []),
+    ...(c.recipe_source
+      ? [{ label: 'Recipe from', value: c.recipe_source, hint: 'the catalog variant it started as' }]
+      : []),
     { label: 'Model path', value: c.model_path, hint: 'bind-mounted to /model' },
     { label: 'Served model name', value: c.served_model_name },
     { label: 'Engine port', value: String(c.service_port) },
@@ -942,10 +1049,21 @@ const configRows = computed(() => {
       hint: `learned from this campaign's runs; capped at ${c.max_run_minutes} min`,
     },
     {
-      label: 'Production reference',
-      value: c.run_baseline_canary ? 'measured' : 'not measured',
-      hint: "the recorded baseline config, launched and benchmarked like a candidate",
+      label: 'Model load limit',
+      value: `${c.ready_timeout_minutes} min`,
+      hint: 'a started engine that has not answered by then fails as ready_timeout',
     },
+    Object.keys(c.recipe ?? {}).length
+      ? {
+          label: 'Production reference',
+          value: 'the recipe as written',
+          hint: 'runs of the unchanged recipe are the baseline every change is compared to',
+        }
+      : {
+          label: 'Production reference',
+          value: c.run_baseline_canary ? 'measured' : 'not measured',
+          hint: "the recorded baseline config, launched and benchmarked like a candidate",
+        },
     {
       label: 'Machine sharing',
       value: c.share_machine ? 'yes' : 'no — one run owns the machine',
@@ -954,7 +1072,10 @@ const configRows = computed(() => {
     {
       label: 'Schedule',
       value: window,
-      hint: 'when the campaign is awake; runs are cut at the window end',
+      // A one-off window does not start a draft by itself.
+      hint: c.status === 'draft' && c.window_end && !c.daily_start
+        ? 'a draft does not start on its own: Start it, and it runs until the window ends'
+        : 'when the campaign is awake; runs are cut at the window end',
     },
     {
       label: 'Current occurrence',
@@ -976,6 +1097,8 @@ const extrasYaml = computed(() =>
   }),
 )
 const searchSpaceYaml = computed(() => toYaml(campaign.value?.search_space ?? {}))
+const hasRecipe = computed(() => Object.keys(campaign.value?.recipe ?? {}).length > 0)
+const recipeYaml = computed(() => toYaml(campaign.value?.recipe ?? {}))
 const objectiveYaml = computed(() => toYaml(campaign.value?.objective ?? {}))
 
 const hasExtras = computed(
@@ -999,6 +1122,7 @@ function copyEverything() {
       benchmark_slug: c.benchmark_slug,
       machine_names: c.machine_names,
       max_run_minutes: c.max_run_minutes,
+      ready_timeout_minutes: c.ready_timeout_minutes,
       run_baseline_canary: c.run_baseline_canary,
       extra_env: c.extra_env,
       extra_volumes: c.extra_volumes,
@@ -1086,14 +1210,6 @@ function openCandidateRun(candidate: Candidate) {
   if (run) openRun(run)
 }
 
-/** Columns that would say "—" on every row are left out. */
-function hasCards(rows: LeaderboardEntry[]): boolean {
-  return rows.some((r) => !!r.card_type)
-}
-function hasBaseline(rows: LeaderboardEntry[]): boolean {
-  return rows.some((r) => r.is_baseline || r.vs_baseline != null)
-}
-
 /** 68586.56244036907 is twelve digits of a number whose last six are noise. */
 function fmtScore(value: number | null): string {
   if (value === null || value === undefined) return '—'
@@ -1106,16 +1222,6 @@ function fmtScore(value: number | null): string {
  *  two boards no longer show the comparison two different ways. */
 const fmtVsBaseline = fmtBaselineDelta
 const beatsBaseline = beatsBaselineRatio
-
-/** Did this run land on a different card than the baseline it is measured
- *  against? Per-card throughput is card-COUNT normalized, not card-TYPE, so an
- *  off-chip run carries no vs_baseline and ranks below the same-chip entries —
- *  the tag says why it is not being compared. */
-function offChip(row: LeaderboardEntry): boolean {
-  if (row.is_baseline || !row.card_type) return false
-  const baseline = leaderboard.value.find((e) => e.is_baseline && e.stage === row.stage)
-  return !!baseline?.card_type && baseline.card_type !== row.card_type
-}
 
 const progress = computed(() => {
   // The denominator is the LARGER of the declared space size and the candidate
@@ -1233,6 +1339,9 @@ onMounted(() => {
       <div class="actions">
         <el-button :icon="Tickets" @click="logOpen = true">{{ t('campaign.logs') }}</el-button>
         <el-button :icon="Document" @click="openReport">{{ t('campaign.report') }}</el-button>
+        <el-button :icon="Upload" :disabled="!catalogCandidates.length" @click="catalogOpen = true">
+          {{ t('catalogExport.menu') }}
+        </el-button>
         <!-- The occasional actions, one click away instead of a row of buttons
              nobody reads past. -->
         <el-dropdown trigger="click" @command="moreAction">
@@ -1246,8 +1355,12 @@ onMounted(() => {
                 title="Everything needed to recreate this campaign — import it on the New campaign page">
                 {{ t('campaign.exportYaml') }}
               </el-dropdown-item>
-              <el-dropdown-item command="catalog" :icon="Upload" :disabled="!catalogCandidates.length">
-                {{ t('catalogExport.menu') }}
+              <!-- Re-queues only candidates whose every run failed, then puts
+                   the campaign back to work. -->
+              <el-dropdown-item v-if="retryableCount" command="retry" :icon="RefreshRight">
+                {{ retryableCount === 1
+                  ? t('campaign.rerunFailedOne', { n: retryableCount })
+                  : t('campaign.rerunFailedMany', { n: retryableCount }) }}
               </el-dropdown-item>
               <el-dropdown-item v-if="closable" command="done" :icon="CircleCheck" divided>
                 {{ t('campaign.markDone') }}
@@ -1258,14 +1371,6 @@ onMounted(() => {
             </el-dropdown-menu>
           </template>
         </el-dropdown>
-
-        <!-- Re-queues only candidates whose every run failed, then puts the
-             campaign back to work. -->
-        <el-button v-if="retryableCount" :icon="RefreshRight" @click="retryFailed">
-          {{ retryableCount === 1
-            ? t('campaign.rerunFailedOne', { n: retryableCount })
-            : t('campaign.rerunFailedMany', { n: retryableCount }) }}
-        </el-button>
 
         <!-- The run control: one segmented group, the way forward first and
              Stop always last. Pause lets current runs finish; Stop ends them.
@@ -1296,9 +1401,11 @@ onMounted(() => {
           <el-button v-else type="primary" :icon="VideoPlay" @click="setStatus('active')">
             {{ t('campaign.start') }}</el-button>
           <el-button v-if="campaign.status === 'active' || liveRuns.length || policyLive"
-            class="stop"
-            :icon="StopIcon" title="Stop now: runs in progress are ended and their measurements lost"
-            @click="forceStop">{{ t('campaign.forceStop') }}</el-button>
+            :class="stopIsRequest ? 'stop-request' : 'stop'" :icon="StopIcon"
+            :title="stopIsRequest
+              ? 'Ask the policy to wrap up: runs in progress finish and its finalists are measured'
+              : 'Stop now: runs in progress are ended and their measurements lost'"
+            @click="forceStop">{{ stopIsRequest ? t('campaign.requestStop') : t('campaign.forceStop') }}</el-button>
         </el-button-group>
       </div>
     </div>
@@ -1476,6 +1583,32 @@ onMounted(() => {
 
     <el-tabs>
       <el-tab-pane :label="t('campaign.tabs.leaderboard')">
+        <!-- The answer first: the one config the board says to run, with what
+             it changes from production and its commands a click away. The
+             bars below are the evidence; hover one for its config. -->
+        <div v-if="winnerEntry" class="winner-card">
+          <div class="winner-head">
+            <span class="winner-badge">{{ t('campaign.winner') }}</span>
+            <b class="winner-score mono">{{ fmtScore(winnerEntry.score) }}</b>
+            <span class="muted tiny">{{ winnerObjective.unit || winnerObjective.label }}</span>
+            <span v-if="winnerEntry.vs_baseline != null" class="mono"
+              :class="beatsBaseline(winnerEntry.vs_baseline, winnerObjective.direction) ? 'better' : 'worse'">
+              {{ fmtVsBaseline(winnerEntry.vs_baseline, winnerObjective.direction) }} {{ t('campaign.vsBaseline') }}</span>
+            <el-tag size="small" effect="plain" :type="winnerEntry.stage === 'verify' ? 'warning' : 'info'">
+              {{ winnerEntry.stage === 'verify' ? t('campaign.validated') : t('campaign.screenOnly') }}</el-tag>
+            <el-tag v-if="winnerEntry.card_type" size="small" effect="plain" type="info">{{ winnerEntry.card_type }}</el-tag>
+            <span class="muted tiny">{{ t('campaign.run') }} #{{ winnerEntry.run_id }}</span>
+            <span class="winner-actions">
+              <el-button size="small" type="primary" plain @click="openBoardRow(winnerEntry)">
+                {{ t('campaign.launchConfig') }}</el-button>
+            </span>
+          </div>
+          <div class="winner-config">
+            <span class="muted tiny">{{ t('campaign.changesFromBaseline') }}</span>
+            <ConfigChips v-if="winnerChanged.length" :config="winnerEntry.config" :keys="winnerChanged" />
+            <span v-else class="muted">{{ t('campaign.sameAsBaseline') }}</span>
+          </div>
+        </div>
         <!-- The expensive stage first, in its own table: it decides the winner,
              and its scores come from a different benchmark in different units.
              One table sorted across both would be a ranking of nothing. -->
@@ -1506,55 +1639,8 @@ onMounted(() => {
             </InfoHint>
           </div>
           <ScoreBars :rows="verifiedBoard" :swept-keys="sweptKeys"
-            :direction="verifyObjective.direction" />
-          <el-table :data="verifiedBoard" class="clickable" @row-click="openBoardRow">
-            <el-table-column prop="run_id" :label="t('campaign.run')" width="80" />
-            <el-table-column :label="t('common.config')" min-width="280">
-              <template #default="{ row }">
-                <ConfigChips :config="row.config" :keys="sweptKeys" />
-              </template>
-            </el-table-column>
-            <el-table-column v-if="hasCards(verifiedBoard)" label="GPU" width="90">
-              <template #default="{ row }">
-                <el-tag v-if="row.card_type" size="small" effect="plain"
-                  :type="offChip(row) ? 'warning' : 'info'"
-                  :title="offChip(row)
-                    ? 'Ran on a different card than the baseline — not comparable per-card'
-                    : ''">{{ row.card_type }}</el-tag>
-                <span v-else class="muted">—</span>
-              </template>
-            </el-table-column>
-            <el-table-column prop="score" :label="verifyObjective.unit ? `${verifyObjective.label} (${verifyObjective.unit})` : verifyObjective.label"
-              min-width="170" sortable>
-              <template #default="{ row }">
-                <el-tag v-if="row.is_baseline" size="small" type="info" effect="plain"
-                  class="baseline-tag">{{ t('campaign.baselineRow') }}</el-tag>
-                {{ fmtScore(row.score) }}
-              </template>
-            </el-table-column>
-            <el-table-column v-if="hasBaseline(verifiedBoard)" :label="t('campaign.vsBaseline')" width="110">
-              <template #default="{ row }">
-                <span v-if="row.is_baseline" class="muted">—</span>
-                <span v-else-if="row.vs_baseline != null"
-                  :class="beatsBaseline(row.vs_baseline, verifyObjective.direction) ? 'better' : 'worse'">
-                  {{ fmtVsBaseline(row.vs_baseline, verifyObjective.direction) }}
-                </span>
-                <span v-else class="muted">—</span>
-              </template>
-            </el-table-column>
-            <el-table-column :label="t('campaign.redlines')" width="110" align="center">
-              <template #default="{ row }">
-                <el-tag v-if="row.comparable === false" type="warning" size="small"
-                  :title="row.dataset_build_id">{{ t('campaign.otherDataset') }}</el-tag>
-                <el-icon v-else-if="row.holds_redlines" class="held" :title="t('campaign.held')">
-                  <CircleCheckFilled /></el-icon>
-                <el-tooltip v-else placement="top"
-                  :content="row.breaches.join('; ') || t('campaign.crossed')">
-                  <el-icon class="crossed"><CircleCloseFilled /></el-icon>
-                </el-tooltip>
-              </template>
-            </el-table-column>
-          </el-table>
+            :direction="verifyObjective.direction" :production="productionConfig"
+            :unit="verifyObjective.unit" @select="openBoardRow" />
         </template>
 
         <div class="board-head" :class="{ screening: verifiedBoard.length }">
@@ -1577,55 +1663,8 @@ onMounted(() => {
           </span>
         </div>
         <ScoreBars :rows="screenBoard" :swept-keys="sweptKeys"
-          :direction="objective.direction" />
-          <el-table v-if="screenBoard.length" :data="screenBoard" class="clickable" @row-click="openBoardRow">
-            <el-table-column prop="run_id" :label="t('campaign.run')" width="80" />
-            <el-table-column :label="t('common.config')" min-width="280">
-              <template #default="{ row }">
-                <ConfigChips :config="row.config" :keys="sweptKeys" />
-              </template>
-            </el-table-column>
-            <el-table-column v-if="hasCards(screenBoard)" label="GPU" width="90">
-              <template #default="{ row }">
-                <el-tag v-if="row.card_type" size="small" effect="plain"
-                  :type="offChip(row) ? 'warning' : 'info'"
-                  :title="offChip(row)
-                    ? 'Ran on a different card than the baseline — not comparable per-card'
-                    : ''">{{ row.card_type }}</el-tag>
-                <span v-else class="muted">—</span>
-              </template>
-            </el-table-column>
-            <el-table-column prop="score" :label="objective.unit ? `${objective.label} (${objective.unit})` : objective.label"
-              min-width="170" sortable>
-              <template #default="{ row }">
-                <el-tag v-if="row.is_baseline" size="small" type="info" effect="plain"
-                  class="baseline-tag">{{ t('campaign.baselineRow') }}</el-tag>
-                {{ fmtScore(row.score) }}
-              </template>
-            </el-table-column>
-            <el-table-column v-if="hasBaseline(screenBoard)" :label="t('campaign.vsBaseline')" width="110">
-              <template #default="{ row }">
-                <span v-if="row.is_baseline" class="muted">—</span>
-                <span v-else-if="row.vs_baseline != null"
-                  :class="beatsBaseline(row.vs_baseline, objective.direction) ? 'better' : 'worse'">
-                  {{ fmtVsBaseline(row.vs_baseline, objective.direction) }}
-                </span>
-                <span v-else class="muted">—</span>
-              </template>
-            </el-table-column>
-            <el-table-column :label="t('campaign.redlines')" width="110" align="center">
-              <template #default="{ row }">
-                <el-tag v-if="row.comparable === false" type="warning" size="small"
-                  :title="row.dataset_build_id">{{ t('campaign.otherDataset') }}</el-tag>
-                <el-icon v-else-if="row.holds_redlines" class="held" :title="t('campaign.held')">
-                  <CircleCheckFilled /></el-icon>
-                <el-tooltip v-else placement="top"
-                  :content="row.breaches.join('; ') || t('campaign.crossed')">
-                  <el-icon class="crossed"><CircleCloseFilled /></el-icon>
-                </el-tooltip>
-              </template>
-            </el-table-column>
-          </el-table>
+          :direction="objective.direction" :production="productionConfig"
+          :unit="objective.unit" @select="openBoardRow" />
         <el-empty v-if="screenBoard.length === 0 && !verifiedBoard.length" :image-size="64"
           :description="t('campaign.noRuns')" />
       </el-tab-pane>
@@ -1719,28 +1758,44 @@ onMounted(() => {
           </el-table-column>
         </el-table>
 
-        <div class="block-head">
+        <template v-if="hasRecipe">
+          <div class="block-head">
+            <h3>Recipe</h3>
+            <InfoHint>The engine chart's values every run starts from, as a model-catalog
+              variant writes them. A run is this with its configuration applied, and a
+              winner is published as the recipe it ran.</InfoHint>
+            <span class="spacer" />
+            <el-button size="small" text type="primary"
+              @click="copyText(recipeYaml, 'Recipe copied')">Copy YAML</el-button>
+          </div>
+          <pre class="mono block">{{ recipeYaml }}</pre>
+        </template>
+
+        <div v-if="!hasRecipe" class="block-head">
           <h3>Launch extras</h3>
           <InfoHint>Env vars and bind mounts every container in this campaign gets.</InfoHint>
           <span class="spacer" />
           <el-button size="small" text type="primary"
             @click="copyText(extrasYaml, 'Launch extras copied')">Copy YAML</el-button>
         </div>
-        <pre class="mono block">{{ hasExtras ? extrasYaml : '(none)' }}</pre>
+        <pre v-if="!hasRecipe" class="mono block">{{ hasExtras ? extrasYaml : '(none)' }}</pre>
 
         <div class="block-head">
           <h3>Difference from production</h3>
           <InfoHint>Flags production's recorded baseline sets that this campaign never
             sets.</InfoHint>
         </div>
-        <pre class="mono block">{{ parity?.missing?.length
+        <pre v-if="hasRecipe" class="mono block">none: the recipe is production's config</pre>
+        <pre v-else class="mono block">{{ parity?.missing?.length
           ? parity.missing.map((m) => `${m.flag}: ${m.production}`).join('\n')
           : (parity?.baseline_id ? 'none' : 'no baseline recorded for this model') }}</pre>
 
         <div class="block-head">
           <h3>Search space</h3>
-          <span class="muted tiny">{{ spaceName || 'written for this campaign' }}</span>
+          <span class="muted tiny">{{ spaceName || (spaceSaved ? `saved as ${spaceSaved}` : 'written for this campaign') }}</span>
           <span class="spacer" />
+          <el-button v-if="!spaceName && !spaceSaved" size="small" text type="primary" @click="saveSpace">
+            Save as search space</el-button>
           <el-button size="small" text type="primary"
             @click="copyText(searchSpaceYaml, 'Search space copied')">Copy YAML</el-button>
         </div>
@@ -1872,27 +1927,44 @@ onMounted(() => {
         <h3>{{ t('common.config') }}</h3>
         <ConfigChips :config="selectedRun.config" :keys="sweptKeys" />
 
-        <el-collapse class="run-more">
-          <el-collapse-item :title="t('campaign.fullConfig')" name="config">
-            <pre class="mono block">{{ JSON.stringify(selectedRun.config, null, 2) }}</pre>
-          </el-collapse-item>
-          <el-collapse-item v-if="selectedRun.serve_command" name="serve">
-            <template #title>{{ t('runs.engineCommand') }}</template>
+        <h3>{{ t('campaign.launchConfig') }}</h3>
+        <el-tabs v-model="launchTab" type="border-card" class="launch-tabs">
+          <el-tab-pane :label="t('runs.serveTab')" name="serve">
             <div class="log-head">
-              <span class="muted tiny">{{ t('runs.engineCommandNote') }}</span>
-              <el-button size="small"
-                @click="copyText(selectedRun.serve_command, t('runs.engineCommandCopied'))">
-                {{ t('common.copy') }}</el-button>
+              <span class="muted tiny">{{ t('runs.serveNote') }}</span>
+              <CopyButton :value="runLaunch?.rendered.serve_command || selectedRun.serve_command || ''"
+                :label="t('runs.engineCommandCopied')" />
             </div>
-            <pre class="mono block">{{ selectedRun.serve_command }}</pre>
+            <pre class="mono block">{{ runLaunch?.rendered.serve_command || selectedRun.serve_command || '—' }}</pre>
+          </el-tab-pane>
+          <el-tab-pane :label="t('runs.engineArgsTab')" name="args">
+            <div class="log-head">
+              <span class="muted tiny">{{ t('runs.engineArgsNote') }}</span>
+              <CopyButton :value="engineArgsJson" :label="t('runs.engineArgsCopied')" />
+            </div>
+            <pre class="mono block">{{ engineArgsJson }}</pre>
+          </el-tab-pane>
+          <el-tab-pane v-if="launchYaml" :label="t('runs.launchConfigTab')" name="yaml">
+            <div class="log-head">
+              <span class="muted tiny">{{ t('runs.launchConfigNote') }}</span>
+              <CopyButton :value="launchYaml" :label="t('runs.launchConfigCopied')" />
+            </div>
+            <pre class="mono block">{{ launchYaml }}</pre>
+          </el-tab-pane>
+          <el-tab-pane :label="t('runs.appliedTab')" name="applied">
+            <div class="log-head">
+              <span class="muted tiny">{{ t('runs.appliedNote') }}</span>
+              <CopyButton v-if="appliedCommand" :value="appliedCommand" :label="t('runs.appliedCopied')" />
+            </div>
+            <pre class="mono block">{{ appliedCommand || t('runs.notLaunched') }}</pre>
             <dl class="run-image">
-              <dt>Image</dt><dd class="mono">{{ selectedRun.image }}</dd>
-              <dt>Weights</dt><dd class="mono">{{ selectedRun.model_path }}</dd>
+              <dt>Image</dt><dd class="mono">{{ runLaunch?.config.image || selectedRun.image }}</dd>
+              <dt>Weights</dt><dd class="mono">{{ runLaunch?.config.model_path || selectedRun.model_path }}</dd>
             </dl>
-          </el-collapse-item>
-          <el-collapse-item :title="t('runs.launchCommandApplied')" name="launch">
-            <pre class="mono block">{{ selectedRun.launch_command || '(not launched yet)' }}</pre>
-          </el-collapse-item>
+          </el-tab-pane>
+        </el-tabs>
+
+        <el-collapse class="run-more">
           <el-collapse-item v-for="(r, i) in selectedRun.results" :key="i" :name="`result-${i}`">
             <template #title>
               {{ t('runs.metrics') }} · {{ r.source }}
@@ -1935,6 +2007,9 @@ onMounted(() => {
 }
 .run-control .stop {
   color: var(--el-color-danger);
+}
+.run-control .stop-request {
+  color: var(--el-color-warning-dark-2);
 }
 .run-control .stop:hover,
 .run-control .stop:focus-visible {
@@ -2432,5 +2507,46 @@ onMounted(() => {
 }
 .metric-count {
   margin-left: 8px;
+}
+
+/* The board's answer, above its evidence. */
+.winner-card {
+  border: 1px solid var(--el-color-success-light-5, #b3e19d);
+  background: var(--el-color-success-light-9, #f0f9eb);
+  border-radius: 6px;
+  padding: 10px 14px;
+  margin-bottom: 16px;
+}
+.winner-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+}
+.winner-badge {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--el-color-success-dark-2, #529b2e);
+}
+.winner-score {
+  font-size: 18px;
+}
+.winner-actions {
+  margin-left: auto;
+}
+.winner-config {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+}
+.launch-tabs {
+  margin-bottom: 12px;
+}
+.launch-tabs pre.block {
+  margin: 0;
 }
 </style>

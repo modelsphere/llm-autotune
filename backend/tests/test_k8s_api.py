@@ -70,3 +70,42 @@ def test_client_logs_include_the_container_before_a_crash_restart():
     assert "CUDA out of memory" in text
     assert "b'" not in text, "decoded text, not the repr of the bytes"
     assert api._core.calls == [True, False]
+
+
+def test_client_logs_read_every_container_of_a_sidecar_pod():
+    """The engine charts run a hang-watcher beside the engine; the API refuses
+    a log read without a container name on such a pod."""
+    from types import SimpleNamespace as NS
+
+    class FakeCore:
+        def list_namespaced_pod(self, ns, label_selector=""):
+            spec = NS(containers=[NS(name="sglang"), NS(name="hang-watcher")])
+            status = NS(container_statuses=[NS(name="sglang", restart_count=0)])
+            return NS(items=[NS(metadata=NS(name="run-1-abc"), spec=spec, status=status)])
+
+        def read_namespaced_pod_log(self, name, ns, tail_lines=200, previous=False,
+                                    _preload_content=True, container=None):
+            assert container is not None
+            return NS(data=f"{container} says hi\n".encode())
+
+    api = ClientApi(_s(k8s_namespace="runs"))
+    api._core = FakeCore()
+    api._ApiException = Exception
+    text = api.logs("autotune.modelsphere.dev/run=1")
+    assert "[run-1-abc/sglang]\nsglang says hi" in text
+    assert "[run-1-abc/hang-watcher]" in text
+
+
+def test_an_api_error_says_what_the_server_refused():
+    """A rejected LLMService used to read only "Unprocessable Entity"."""
+    from types import SimpleNamespace
+
+    from app.control.launch.k8s_api import _why
+
+    body = ('{"kind":"Status","message":"LLMService.serving.modelsphere.dev \\"r\\" is invalid: '
+            "spec.chart.repo: Invalid value: \\\"http://c\\\": should match '^(https://|oci://).+'\"}")
+    refused = SimpleNamespace(reason="Unprocessable Entity", body=body)
+    assert _why(refused).startswith("Unprocessable Entity: LLMService")
+    assert "spec.chart.repo" in _why(refused)
+    assert _why(SimpleNamespace(reason="Forbidden", body="not json")) == "Forbidden"
+    assert _why(SimpleNamespace(reason="Not Found", body=None)) == "Not Found"

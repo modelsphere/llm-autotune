@@ -64,6 +64,19 @@ def test_a_delegated_policy_asks_for_no_hardware_and_no_placement():
     assert "volumes" not in pod and "volumeMounts" not in container
 
 
+def test_an_install_can_say_where_a_delegated_policy_may_run():
+    """On a cluster where only some nodes reach what a policy calls (an agent
+    policy's LLM endpoint), the install pins controllers to those nodes. The
+    machine's GPU selector and the global engine selector stay out of it."""
+    settings = _clone(k8s_policy_node_selector="kubernetes.io/hostname=cpu-1, zone=a",
+                      k8s_node_selector="nvidia.com/gpu.present=true")
+    pod = render_policy_job(_spec(), settings)["spec"]["template"]["spec"]
+    assert pod["nodeSelector"] == {"kubernetes.io/hostname": "cpu-1", "zone": "a"}
+    # A self-serving policy still follows its machine, not the controller pin.
+    pod = render_policy_job(_spec(gpu_indices=[0]), settings)["spec"]["template"]["spec"]
+    assert pod["nodeSelector"] == {"nvidia.com/gpu.product": "NVIDIA-A100-SXM4-80GB"}
+
+
 def test_it_is_burstable_not_besteffort():
     """A pod with no requests is first to be evicted under node pressure, and
     losing the controller mid-night ends the session."""

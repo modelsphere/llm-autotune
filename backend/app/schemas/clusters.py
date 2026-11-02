@@ -11,7 +11,9 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 ApiMode = Literal["client", "kubectl", "unavailable"]
-WorkloadKind = Literal["deployment", "custom"]
+# "deployment" and "custom" are deprecated: kept running, no new features.
+WorkloadKind = Literal["llmservice", "deployment", "custom"]
+EndpointMode = Literal["dns", "nodeport"]
 
 
 class ClusterIn(BaseModel):
@@ -27,9 +29,15 @@ class ClusterIn(BaseModel):
     # Where engine pods run. Empty = the namespace the kubeconfig's context
     # names, which is how deploy/gpu-cluster.sh writes it.
     namespace: str = ""
-    workload_kind: WorkloadKind = "deployment"
+    workload_kind: WorkloadKind = "llmservice"
+    chart_repo: str = Field("", max_length=512)
+    chart_credentials_secret: str = Field("", max_length=253)
+    endpoint: EndpointMode = "dns"
+    image_mirror: str = Field("", max_length=255)
+    site_values: str = ""
     node_host: str = ""
     gpu_resource: str = "nvidia.com/gpu"
+    gpu_product_label: str = Field(default="nvidia.com/gpu.product", min_length=1, max_length=253)
     runtime_class: str = "nvidia"
     tolerate_gpu_taint: bool = True
     tolerations: str = ""
@@ -38,6 +46,8 @@ class ClusterIn(BaseModel):
     model_pvc_root: str = ""
     shm_size_mb: int = Field(2048, ge=0, le=1_048_576)
     node_selector: str = ""
+    # Where a delegated policy pod runs; empty = the install's setting.
+    policy_node_selector: str = Field("", max_length=512)
     service_nodeport: int = Field(0, ge=0, le=65535)
     run_ttl_seconds: int = Field(0, ge=0)
     in_cluster: bool = False
@@ -63,6 +73,29 @@ class ClusterIn(BaseModel):
     def _strip(cls, v: str) -> str:
         return v.strip()
 
+    @field_validator("chart_repo")
+    @classmethod
+    def _chart_repo(cls, v: str) -> str:
+        # llm-operator refuses an LLMService whose chart comes from anywhere
+        # else, so every run would fail at launch.
+        v = v.strip()
+        if v and not v.startswith(("https://", "oci://")):
+            raise ValueError("must start with https:// or oci:// (llm-operator accepts no other)")
+        return v
+
+
+class LocalityIn(BaseModel):
+    """A kubeconfig not saved yet, to tell where its cluster is."""
+
+    kubeconfig: str = ""
+    context: str = ""
+    in_cluster: bool = False
+
+
+class LocalityOut(BaseModel):
+    # True: the cluster AutoTune runs in; False: another one; None: unknown.
+    same_cluster: bool | None
+
 
 class RegisterNodes(BaseModel):
     """GPU nodes of a cluster to register as machines, by hostname label."""
@@ -71,10 +104,13 @@ class RegisterNodes(BaseModel):
 
 
 class RegisterPools(BaseModel):
-    """GPU products of a cluster (the nvidia.com/gpu.product label) to register
+    """Accelerator products of a cluster (its configured product label) to register
     as node pools: one machine per product, spanning every node that has it."""
 
-    products: list[str] = Field(..., min_length=1)
+    products: list[str] = Field(default_factory=list)
+    # With no node access: one pool for the whole namespace, sized by its GPU
+    # quota, instead of one per product.
+    namespace: bool = False
 
 
 class ClusterOut(BaseModel):
@@ -88,8 +124,14 @@ class ClusterOut(BaseModel):
     context: str
     namespace: str
     workload_kind: str
+    chart_repo: str = ""
+    chart_credentials_secret: str = ""
+    endpoint: str = "dns"
+    image_mirror: str = ""
+    site_values: str = ""
     node_host: str
     gpu_resource: str
+    gpu_product_label: str
     runtime_class: str
     tolerate_gpu_taint: bool
     tolerations: str
@@ -98,6 +140,7 @@ class ClusterOut(BaseModel):
     model_pvc_root: str
     shm_size_mb: int
     node_selector: str
+    policy_node_selector: str = ""
     service_nodeport: int
     run_ttl_seconds: int
     in_cluster: bool
@@ -116,3 +159,6 @@ class ClusterOut(BaseModel):
     # How many machines name this cluster — the UI's "in use" signal, and what
     # makes a delete worth refusing.
     machine_count: int = 0
+    # Whether this is the cluster AutoTune itself runs in (locality.py), which
+    # decides whether a run's Service name resolves. None = cannot tell.
+    same_cluster: bool | None = None

@@ -38,7 +38,12 @@ async function loadCampaigns() {
 }
 
 const first = useFirstLoad(load)
-watch(selected, () => void load(), { deep: true })
+watch(selected, () => { page.value = 1; void load() }, { deep: true })
+
+/** A page at a time: 200 rows in one table was a page you scroll for a minute. */
+const PAGE = 50
+const page = ref(1)
+const pageRows = computed(() => runs.value.slice((page.value - 1) * PAGE, page.value * PAGE))
 
 const STATUSES = ['live', 'succeeded', 'failed', 'killed']
 const filterFields = computed(() => [
@@ -94,7 +99,7 @@ onMounted(() => {
   <div class="page">
     <h1 class="page-title">{{ t('runs.title') }}</h1>
     <ListFilters v-model="selected" :fields="filterFields" />
-    <el-table :data="runs" v-bind="runRows" style="cursor: pointer"
+    <el-table :data="pageRows" v-bind="runRows" style="cursor: pointer"
       v-loading="first.loading" :empty-text="first.emptyText()">
       <el-table-column prop="id" :label="t('common.id')" width="70" />
       <el-table-column :label="t('runs.campaign')" min-width="200">
@@ -116,7 +121,9 @@ onMounted(() => {
       <el-table-column :label="t('filters.owner')" width="110">
         <template #default="{ row }"><span class="muted">{{ row.owner_name || '—' }}</span></template>
       </el-table-column>
-      <el-table-column prop="container_name" :label="t('runs.container')" min-width="160" class-name="mono" />
+      <el-table-column :label="t('runs.container')" min-width="160">
+        <template #default="{ row }"><span class="mono">{{ row.container_name }}</span></template>
+      </el-table-column>
       <el-table-column :label="t('common.started')" min-width="120">
         <template #default="{ row }">
           <span :title="exactTime(row.started_at ?? row.created_at)">
@@ -139,5 +146,11 @@ onMounted(() => {
         <span class="muted">{{ first.emptyText(t('runs.noneMatch')) }}</span>
       </template>
     </el-table>
+    <el-pagination v-if="runs.length > PAGE" v-model:current-page="page" :page-size="PAGE"
+      :total="runs.length" layout="total, prev, pager, next" class="pager" />
   </div>
 </template>
+
+<style scoped>
+.pager { margin-top: 12px; justify-content: flex-end; }
+</style>

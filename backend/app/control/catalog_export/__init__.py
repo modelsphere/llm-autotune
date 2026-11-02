@@ -54,6 +54,7 @@ from app.control.engine_command import PLACEMENT_FLAGS
 from app.control.engines.base import MODEL_MOUNT
 from app.control.engines.flags import negated_flag, render_flag
 from app.control.launch_config import LaunchConfig
+from app.control.recipe import Recipe
 
 from .portability import ENV_ACTIONS, Input, classify_env, plan_mounts
 
@@ -162,6 +163,11 @@ class VariantSource:
     # The tag to publish when the run's image was named by digest alone: the
     # catalog needs a tag, and the platform cannot invent one.
     image_tag: str = ""
+    # The recipe the run launched (app/control/recipe), when it ran as one. It
+    # is published as it is: no value added, removed or rewritten, so what a
+    # deploy renders is what was measured. Without one, `config` is converted
+    # (the deprecated drivers' runs).
+    recipe: Recipe | None = None
 
 
 @dataclass
@@ -513,6 +519,55 @@ def startup_minutes(src: VariantSource, opts: CatalogOptions) -> int:
     return min(240, 5 * math.ceil(minutes / 5))
 
 
+def _variant_from_recipe(
+    src: VariantSource,
+    opts: CatalogOptions,
+    reference: VariantSource | None,
+    warnings: list[str],
+    errors: list[str],
+    details: list[str],
+) -> dict[str, Any]:
+    """The variant a recipe IS. The values are the recipe's to the byte; what is
+    added is only what a publisher decides and the run cannot: the id, the
+    description, the cards it fits (gpuProduct) and the image digest it pulled."""
+    assert src.recipe is not None
+    body = src.recipe.to_variant()
+    requires = dict(body["requires"])
+    vid = _variant_id(src, int(requires.get("gpus") or 0))
+    description = _describe(src, requires["gpus"], reference)
+    variant: dict[str, Any] = {"id": vid, "description": description}
+    variant["engine"] = body["engine"]
+    variant["chart"] = {
+        "name": body["chart"]["name"],
+        "version": opts.chart_version or body["chart"]["version"] or chart_range(body["engine"]),
+    }
+    image = dict(body.get("image") or {})
+    if not image.get("tag") and src.image_tag.strip():
+        image["tag"] = src.image_tag.strip()
+    digest = image.get("digest") or src.image_digest
+    if image.get("repository") and image.get("tag"):
+        if re.fullmatch(r"sha256:[a-f0-9]{64}", digest or ""):
+            image["digest"] = digest
+        tag = image["tag"]
+        if (not _RELEASE_TAG.match(tag) or _DEV_WORDS.search(tag)) and "digest" not in image:
+            warnings.append(f"{vid}: image tag {tag} isn't a release tag and may move")
+        variant["image"] = image
+    else:
+        errors.append(f"{vid}: the recipe's image has no tag; the catalog names an image by tag")
+    products = src.gpu_product or opts.gpu_product or GPU_PRODUCTS.get(src.config.gpu_type, [])
+    if products:
+        requires["gpuProduct"] = list(dict.fromkeys(products))
+    else:
+        warnings.append(
+            f"{vid}: no node label known for {src.config.gpu_type or 'this card'}: set gpuProduct"
+            " under Advanced"
+        )
+    variant["requires"] = requires
+    variant["values"] = body["values"]
+    details.append(f"{vid}: the recipe the run measured, published unchanged")
+    return variant
+
+
 def _variant(
     src: VariantSource,
     opts: CatalogOptions,
@@ -522,6 +577,8 @@ def _variant(
     inputs: list[Input],
     details: list[str],
 ) -> dict[str, Any]:
+    if src.recipe is not None:
+        return _variant_from_recipe(src, opts, reference, warnings, errors, details)
     cfg = src.config
     nodes = max(1, int(src.nodes or 1))
     total = max(1, cfg.cards)
@@ -755,7 +812,11 @@ def build_catalog_entry(sources: list[VariantSource], opts: CatalogOptions) -> C
                 if old is None:
                     details.append(f"{doc['id']}: the published {was} could not be read to compare")
         errors += [f"{doc['id']}: {e}" for e in validate(doc, "variant")]
-        errors += [f"{doc['id']}: {e}" for e in variant_problems(doc)]
+        # Our own rules guard the conversion of a deprecated driver's config
+        # (no site path leaking into a variant). A recipe was not converted: it
+        # meets the catalog's own rules, the schema above, and nothing stricter.
+        if src.recipe is None:
+            errors += [f"{doc['id']}: {e}" for e in variant_problems(doc)]
         exported.append(
             ExportedVariant(
                 id=doc["id"],

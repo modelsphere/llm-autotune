@@ -13,6 +13,7 @@ import { CircleCheckFilled, CircleCloseFilled, Loading, WarningFilled } from '@e
 import { ElMessage } from 'element-plus'
 import { computed, ref, watch } from 'vue'
 import { api, type ReplayDataset, type ReplayDatasetForm } from '../api/client'
+import { useI18n } from '../i18n'
 import { apiErrorText } from '../utils/apiError'
 import InfoHint from './InfoHint.vue'
 
@@ -26,13 +27,14 @@ const emit = defineEmits<{ saved: [name: string] }>()
 interface Seen { value: string; count: number }
 interface Check { matched: number; hours: number; error?: string | null }
 
-const REFRESH = [
-  { value: 6, label: 'Every 6 hours' },
-  { value: 12, label: 'Every 12 hours' },
-  { value: 24, label: 'Every day' },
-  { value: 168, label: 'Every week' },
-  { value: 0, label: 'Only when asked' },
-]
+const { t } = useI18n()
+const REFRESH = computed(() => [
+  { value: 6, label: t('datasets.dialog.every6') },
+  { value: 12, label: t('datasets.dialog.every12') },
+  { value: 24, label: t('datasets.card.everyDay') },
+  { value: 168, label: t('datasets.card.everyWeek') },
+  { value: 0, label: t('datasets.card.onlyWhenAsked') },
+])
 
 function blank(): ReplayDatasetForm {
   return {
@@ -59,9 +61,9 @@ const checking = ref(false)
 
 const editing = computed(() => Boolean(props.dataset))
 const refreshOptions = computed(() =>
-  REFRESH.some((o) => o.value === form.value.refresh_hours)
-    ? REFRESH
-    : [...REFRESH, { value: form.value.refresh_hours, label: `Every ${form.value.refresh_hours} hours` }])
+  REFRESH.value.some((o) => o.value === form.value.refresh_hours)
+    ? REFRESH.value
+    : [...REFRESH.value, { value: form.value.refresh_hours, label: t('datasets.dialog.everyN', { n: form.value.refresh_hours }) }])
 const storeUrl = computed(() => form.value.source_url.trim() || defaultStore.value || '')
 const canSave = computed(() => Boolean(form.value.model.trim() && storeUrl.value))
 
@@ -117,7 +119,7 @@ async function loadModels() {
     models.value = data.values
     storeError.value = data.error && storeUrl.value ? data.error : ''
   } catch (error) {
-    storeError.value = apiErrorText(error, 'Could not read the log store')
+    storeError.value = apiErrorText(error, t('datasets.dialog.storeReadFailed'))
   } finally {
     loadingModels.value = false
   }
@@ -166,7 +168,7 @@ async function runCheck() {
     const { data } = await api.post('/datasets/check', form.value)
     if (mine === asked) check.value = data
   } catch (error) {
-    if (mine === asked) check.value = { matched: 0, hours: 24, error: apiErrorText(error, 'Check failed') }
+    if (mine === asked) check.value = { matched: 0, hours: 24, error: apiErrorText(error, t('datasets.dialog.checkFailed')) }
   } finally {
     if (mine === asked) checking.value = false
   }
@@ -177,20 +179,20 @@ async function save() {
   try {
     if (props.dataset) {
       await api.put(`/datasets/${props.dataset.name}`, form.value)
-      ElMessage.success('Saved. The next sample uses the new settings.')
+      ElMessage.success(t('datasets.dialog.saved'))
       emit('saved', props.dataset.name)
     } else {
       const { data } = await api.post('/datasets', form.value)
       if (data.collect_error) {
-        ElMessage.warning(`${data.display_name} is set up, but its first sample could not start: ${data.collect_error}`)
+        ElMessage.warning(t('datasets.dialog.firstFailed', { name: data.display_name, error: data.collect_error }))
       } else {
-        ElMessage.success(`Collecting the first sample of ${data.display_name}`)
+        ElMessage.success(t('datasets.dialog.firstCollecting', { name: data.display_name }))
       }
       emit('saved', data.name)
     }
     open.value = false
   } catch (error) {
-    ElMessage.error(apiErrorText(error, 'Save failed'))
+    ElMessage.error(apiErrorText(error, t('datasets.dialog.saveFailed')))
   } finally {
     busy.value = false
   }
@@ -198,15 +200,13 @@ async function save() {
 </script>
 
 <template>
-  <el-dialog v-model="open" :title="dataset ? `Edit ${dataset.display_name || dataset.name}` : 'New dataset'"
+  <el-dialog v-model="open" :title="dataset ? t('datasets.dialog.edit', { name: dataset.display_name || dataset.name }) : t('datasets.newDataset')"
     width="580px" append-to-body>
     <el-form label-position="top" @submit.prevent>
       <el-form-item v-if="defaultStore === ''" required>
         <template #label>
-          VictoriaLogs address
-          <InfoHint :width="340">The store of the gateway's request logs, as LLMBench reaches
-            it. An admin can set it once for every dataset with
-            <span class="mono">llmbench.victoriaLogsUrl</span>.</InfoHint>
+          {{ t('datasets.dialog.store') }}
+          <InfoHint :width="340"><span v-html="t('datasets.dialog.storeHint')" /></InfoHint>
         </template>
         <el-input v-model="form.source_url" class="mono" placeholder="http://victorialogs:9428"
           @change="loadModels" />
@@ -214,59 +214,55 @@ async function save() {
 
       <el-form-item required>
         <template #label>
-          Model
-          <InfoHint :width="320">The model name clients send, as the gateway logged it. The
-            list holds the models in the last day of traffic.</InfoHint>
+          {{ t('datasets.dialog.model') }}
+          <InfoHint :width="320">{{ t('datasets.dialog.modelHint') }}</InfoHint>
         </template>
         <el-select v-model="form.model" filterable allow-create default-first-option
-          :loading="loadingModels" placeholder="Choose or type a model" @change="onModel">
+          :loading="loadingModels" :placeholder="t('datasets.dialog.modelPlaceholder')" @change="onModel">
           <el-option v-for="m in models" :key="m.value" :value="m.value" :label="m.value">
             <span>{{ m.value }}</span>
-            <span class="muted opt-help">{{ fmt(m.count) }} requests / day</span>
+            <span class="muted opt-help">{{ t('datasets.dialog.perDay', { n: fmt(m.count) }) }}</span>
           </el-option>
         </el-select>
-        <div v-if="storeError" class="tiny error-text">Could not read the log store: {{ storeError }}</div>
+        <div v-if="storeError" class="tiny error-text">{{ t('datasets.dialog.storeError', { error: storeError }) }}</div>
       </el-form-item>
 
       <el-form-item>
         <template #label>
-          Nodes
-          <InfoHint :width="320">Only the requests these backends served: an IP (any port) or
-            IP:port. Empty takes the model's traffic from every node.</InfoHint>
+          {{ t('datasets.dialog.nodes') }}
+          <InfoHint :width="320">{{ t('datasets.dialog.nodesHint') }}</InfoHint>
         </template>
         <el-select v-model="form.forwarded_to" multiple filterable allow-create default-first-option
-          :loading="loadingNodes" :disabled="!form.model" placeholder="All nodes serving this model">
+          :loading="loadingNodes" :disabled="!form.model" :placeholder="t('datasets.dialog.nodesPlaceholder')">
           <el-option v-for="n in nodes" :key="n.value" :value="n.value" :label="n.value">
             <span class="mono">{{ n.value }}</span>
-            <span class="muted opt-help">{{ fmt(n.count) }} requests / day</span>
+            <span class="muted opt-help">{{ t('datasets.dialog.perDay', { n: fmt(n.count) }) }}</span>
           </el-option>
         </el-select>
       </el-form-item>
 
-      <el-form-item label="Sample">
+      <el-form-item :label="t('datasets.dialog.sample')">
         <div class="inline">
           <el-input-number v-model="form.sample_size" :min="1" :max="1000000" :step="500"
             controls-position="right" class="num" />
-          <span>requests from the last</span>
+          <span>{{ t('datasets.dialog.fromTheLast') }}</span>
           <el-input-number v-model="form.window_hours" :min="1" :max="720"
             controls-position="right" class="num-sm" />
-          <span>hours</span>
+          <span>{{ t('datasets.dialog.hours') }}</span>
         </div>
       </el-form-item>
 
       <div class="grid-2">
         <el-form-item>
           <template #label>
-            New sample
-            <InfoHint :width="340">How often to replace the sample with a fresh one. Not while a
-              campaign is measuring on the current sample: the new one waits until the campaign
-              finishes, so its results stay comparable.</InfoHint>
+            {{ t('datasets.dialog.newSample') }}
+            <InfoHint :width="340">{{ t('datasets.dialog.newSampleHint') }}</InfoHint>
           </template>
           <el-select v-model="form.refresh_hours">
             <el-option v-for="o in refreshOptions" :key="o.value" :value="o.value" :label="o.label" />
           </el-select>
         </el-form-item>
-        <el-form-item label="Name">
+        <el-form-item :label="t('datasets.dialog.name')">
           <el-input v-model="form.display_name" :placeholder="form.model || 'Qwen3-8B production'" />
         </el-form-item>
       </div>
@@ -276,114 +272,107 @@ async function save() {
         warn: check && !check.error && !check.matched,
         bad: check?.error }">
         <template v-if="checking || !check">
-          <el-icon class="is-loading"><Loading /></el-icon> Checking the log store…
+          <el-icon class="is-loading"><Loading /></el-icon> {{ t('datasets.dialog.checking') }}
         </template>
         <template v-else-if="check.error">
           <el-icon><CircleCloseFilled /></el-icon> {{ check.error }}
         </template>
         <template v-else-if="check.matched > 0">
           <el-icon><CircleCheckFilled /></el-icon>
-          {{ fmt(check.matched) }} requests in the last {{ check.hours }} h match.
+          {{ t('datasets.dialog.matched', { n: fmt(check.matched), h: check.hours }) }}
           <span v-if="expected !== null && expected < form.sample_size" class="muted">
-            A {{ form.window_hours }} h window holds about {{ fmt(expected) }}, so the sample
-            takes what there is.
+            {{ t('datasets.dialog.fewer', { w: form.window_hours, n: fmt(expected) }) }}
           </span>
         </template>
         <template v-else>
           <el-icon><WarningFilled /></el-icon>
-          No request in the last {{ check.hours }} h matches. Check the model name and the nodes.
+          {{ t('datasets.dialog.noMatch', { h: check.hours }) }}
         </template>
       </div>
 
       <el-collapse v-model="advanced" class="advanced">
-        <el-collapse-item name="advanced" title="Advanced">
+        <el-collapse-item name="advanced" :title="t('datasets.dialog.advanced')">
           <div class="grid-2">
             <el-form-item v-if="defaultStore" class="span-2">
               <template #label>
-                VictoriaLogs address
-                <InfoHint>Empty uses the install's, shown here.</InfoHint>
+                {{ t('datasets.dialog.store') }}
+                <InfoHint>{{ t('datasets.dialog.storeAdvHint') }}</InfoHint>
               </template>
               <el-input v-model="form.source_url" class="mono" :placeholder="defaultStore"
                 @change="loadModels" />
             </el-form-item>
             <el-form-item>
               <template #label>
-                Status codes
-                <InfoHint>Only requests that ended with these statuses.</InfoHint>
+                {{ t('datasets.dialog.statuses') }}
+                <InfoHint>{{ t('datasets.dialog.statusesHint') }}</InfoHint>
               </template>
               <el-select v-model="form.statuses" multiple filterable allow-create
-                default-first-option placeholder="Any" />
+                default-first-option :placeholder="t('datasets.dialog.any')" />
             </el-form-item>
             <el-form-item>
               <template #label>
-                Paths
-                <InfoHint>Only requests to these API paths.</InfoHint>
+                {{ t('datasets.dialog.paths') }}
+                <InfoHint>{{ t('datasets.dialog.pathsHint') }}</InfoHint>
               </template>
               <el-select v-model="form.uris" multiple filterable allow-create
-                default-first-option placeholder="Any" />
+                default-first-option :placeholder="t('datasets.dialog.any')" />
             </el-form-item>
             <el-form-item class="span-2">
               <template #label>
-                Extra LogsQL filter
-                <InfoHint :width="320">Any further VictoriaLogs filter, combined with the ones
-                  above, e.g. <span class="mono">req_headers.x-app:="chat"</span>.</InfoHint>
+                {{ t('datasets.dialog.logsql') }}
+                <InfoHint :width="320"><span v-html="t('datasets.dialog.logsqlHint')" /></InfoHint>
               </template>
-              <el-input v-model="form.extra_logsql" class="mono" placeholder="none" />
+              <el-input v-model="form.extra_logsql" class="mono" :placeholder="t('datasets.dialog.none')" />
             </el-form-item>
             <el-form-item>
               <template #label>
-                Longest prompt, tokens
-                <InfoHint :width="300">Longer requests are left out. Set it to the context
-                  length of the engines that will replay the sample.</InfoHint>
+                {{ t('datasets.dialog.maxLen') }}
+                <InfoHint :width="300">{{ t('datasets.dialog.maxLenHint') }}</InfoHint>
               </template>
               <el-input-number v-model="form.max_model_len" :min="2048" :step="8192"
                 controls-position="right" />
             </el-form-item>
             <el-form-item>
               <template #label>
-                Fewest requests
-                <InfoHint :width="300">A sample with fewer requests is not published; the
-                  previous one stays.</InfoHint>
+                {{ t('datasets.dialog.minRecords') }}
+                <InfoHint :width="300">{{ t('datasets.dialog.minRecordsHint') }}</InfoHint>
               </template>
               <el-input-number v-model="form.min_records" :min="1" controls-position="right" />
             </el-form-item>
             <el-form-item>
               <template #label>
-                Slice, minutes
-                <InfoHint :width="340">The window is cut into slices, and each keeps an even
-                  share of the sample, so every hour of the day is represented.</InfoHint>
+                {{ t('datasets.dialog.slice') }}
+                <InfoHint :width="340">{{ t('datasets.dialog.sliceHint') }}</InfoHint>
               </template>
               <el-input-number v-model="form.subwindow_minutes" :min="1" :max="1440"
                 controls-position="right" />
             </el-form-item>
             <el-form-item>
               <template #label>
-                Busy-slice cap
-                <InfoHint :width="340">A quiet slice's unused share carries to the next, up to
-                  this many times the even share. For traffic that comes in bursts, raise it or
-                  widen the slices.</InfoHint>
+                {{ t('datasets.dialog.carry') }}
+                <InfoHint :width="340">{{ t('datasets.dialog.carryHint') }}</InfoHint>
               </template>
               <el-input-number v-model="form.max_carry_multiple" :min="1" controls-position="right" />
             </el-form-item>
             <el-form-item>
               <template #label>
-                Samples kept
-                <InfoHint>Older samples are deleted from LLMBench's volume.</InfoHint>
+                {{ t('datasets.dialog.keep') }}
+                <InfoHint>{{ t('datasets.dialog.keepHint') }}</InfoHint>
               </template>
               <el-input-number v-model="form.keep_builds" :min="1" :max="100"
                 controls-position="right" />
             </el-form-item>
             <el-form-item>
               <template #label>
-                Timezone
-                <InfoHint>The clock slices line up with, for slices longer than an hour.</InfoHint>
+                {{ t('datasets.dialog.timezone') }}
+                <InfoHint>{{ t('datasets.dialog.timezoneHint') }}</InfoHint>
               </template>
               <el-input v-model="form.window_timezone" />
             </el-form-item>
             <el-form-item v-if="!editing" class="span-2">
               <template #label>
-                ID
-                <InfoHint>Its name on LLMBench, which cannot change later.</InfoHint>
+                {{ t('datasets.dialog.id') }}
+                <InfoHint>{{ t('datasets.dialog.idHint') }}</InfoHint>
               </template>
               <el-input v-model="form.name" class="mono" :placeholder="slug" />
             </el-form-item>
@@ -392,9 +381,9 @@ async function save() {
       </el-collapse>
     </el-form>
     <template #footer>
-      <el-button @click="open = false">Cancel</el-button>
+      <el-button @click="open = false">{{ t('datasets.dialog.cancel') }}</el-button>
       <el-button type="primary" :loading="busy" :disabled="!canSave" @click="save">
-        {{ editing ? 'Save' : 'Create and collect' }}
+        {{ editing ? t('datasets.dialog.save') : t('datasets.dialog.create') }}
       </el-button>
     </template>
   </el-dialog>

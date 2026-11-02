@@ -5,7 +5,7 @@
 A **baseline** is the config production runs today for one model, on one
 engine and one GPU type: the image, the weights path, the port, the engine
 settings, the environment and the mounts. Baselines are under
-**Automatic Tuning ▸ Baselines**.
+**Library ▸ Baselines**.
 
 Recording a baseline is optional, but it gives a campaign's numbers a
 reference: "+12% over production, measured the same way in the same window"

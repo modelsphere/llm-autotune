@@ -1,0 +1,63 @@
+apiVersion: catalog.swiss/v2
+kind: Variant
+model: mock-llm
+id: mock-cpu
+version: 1.0.0
+servedName: mock-llm
+link: https://github.com/modelsphere/mock-llmd
+engine: mock
+chart:
+  name: vllm
+  version: '>=0.7.6'
+image:
+  repository: ghcr.io/modelsphere/mock-llmd
+  tag: 0.1.0
+requires:
+  gpus: 0
+  topology: single-node
+values:
+  commandOverride: []
+  model:
+    localPath: ''
+  modelCheck:
+    enabled: false
+  hangWatcher:
+    enabled: false
+  lifecycle:
+    preStop:
+      enabled: false
+  shm:
+    enabled: false
+  service:
+    port: 8081
+  env:
+  - name: MOCK_MODEL_IDS
+    value: mock-llm
+  startupProbe:
+    httpGet:
+      path: /v1/models
+      port: http
+    periodSeconds: 2
+    timeoutSeconds: 2
+    failureThreshold: 30
+  readinessProbe:
+    httpGet:
+      path: /v1/models
+      port: http
+    periodSeconds: 5
+    timeoutSeconds: 2
+    failureThreshold: 3
+  livenessProbe:
+    httpGet:
+      path: /v1/models
+      port: http
+    periodSeconds: 10
+    timeoutSeconds: 2
+    failureThreshold: 3
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      memory: 512Mi
+  terminationGracePeriodSeconds: 30

@@ -8,7 +8,7 @@ This document is the narrative version: what the calls mean, and what each side
 guarantees. For the one-page summary see [policy-api.md](policy-api.md); the interactive reference that
 always matches the running build is **`/api/docs`**, section *policy sessions*.
 For real responses from a finished session see the
-Contract version: **1.3** (`/api/policy/v1`; see [Evolution](#evolution)).
+Contract version: **1.7** (`/api/policy/v1`; see [Evolution](#evolution)).
 
 ---
 
@@ -126,7 +126,10 @@ the response is always current.
   "space_policy": {"deviations": "allowed_if_declared",
                    "forbidden": ["quantization*", "kv_cache_dtype", "context_length", "…"]},
 
-  "production": {"engine_args": {}, "launch_command": "docker run …"},
+  "production": {"engine_args": {"tp": 8, "mem_fraction_static": 0.83, "…": "…"},
+                 "env": {"PYTORCH_ALLOC_CONF": "expandable_segments:True"},
+                 "image": "lmsysorg/sglang:v0.5.22",
+                 "config": {}, "source": "recipe", "launch_command": ""},
 
   "time": {
     "started_at": "2026-08-20T15:02:11Z",
@@ -148,7 +151,8 @@ the response is always current.
                                "reads_as": "Recorded production requests, replayed at one fixed concurrency: …"}]}
     },
     "state": true,
-    "diagnostics": true
+    "diagnostics": true,
+    "history": true
   },
 
   "prior": {"contenders": []},
@@ -186,8 +190,16 @@ Field notes:
 - **`objective`** — per suite: the metric the platform will reduce results to,
   its direction, and the redlines a config must hold. Your trials are scored
   with exactly this, so you never need to re-implement it.
-- **`production`** — what serves today, for parity checks and as a warm-start
-  hint.
+- **`production`** — what serves today, as the platform launches it when it
+  measures production next to the contenders (1.7). `engine_args`, `env` and
+  `image` are what it runs, read from the recipe the platform builds: every
+  flag, not a diff. `config` is what to send to launch exactly that — the keys
+  over the campaign's anchor, so `{}` when production is the recipe as written.
+  `source` says where it came from: `baselines` (a recorded reference, applied
+  over the recipe), `recipe` (none recorded, so the campaign's recipe as
+  written) or `campaign` (a campaign without a recipe: its fields and base).
+  Measure `config` first as your anchor; it is the same launch the platform
+  validates as production.
 - **`time`** — `search_deadline` is when exploration must stop (validation
   time is already reserved after it); `hard_deadline` is the end of the
   window, when anything still running is killed.
@@ -359,6 +371,57 @@ Both are refusals (`422`) at `POST /launches`, `POST /benchmarks` and
 `PUT /contenders` (where the entry is echoed in `rejected`), and both are
 reported without refusing by `POST /configs/check` below.
 
+**Environment variables (1.5).** Some engine switches exist only as
+environment variables (`SGLANG_*`, `VLLM_*`). A config sets one as an
+`env.<NAME>` key, still a flat scalar: `{"tp_size": 2,
+"env.SGLANG_ENABLE_OVERLAP_PLAN_STREAM": true}`. The platform keeps these keys off the
+command line and puts them into the engine container's environment, over the
+campaign's `extra_env`; a boolean becomes `1`/`0`, anything else its string. A
+search space can sweep them like any parameter, and they travel with a winner
+into its deployable config. Refused (`422`, and reported by
+`POST /configs/check` as `unknown_env`, `placement` or `bad_key`):
+
+- a name the campaign's image does not read, per its
+  [vocabulary](#engine-vocabulary-15). The engine would ignore it silently, and
+  the trial would measure the config without it. The message names the
+  nearest names it does read. With no vocabulary for the image yet, every env
+  key is refused, unless the campaign sets
+  `policy_settings.env_without_vocabulary: "warn"`;
+- placement and credentials: device visibility (`CUDA_VISIBLE_DEVICES`, …),
+  rendezvous (`MASTER_ADDR`, `RANK`, …), fabric (`NCCL_SOCKET_IFNAME`, …),
+  any `*_PORT` or `*_HOST_IP`, search paths, and tokens, keys and passwords;
+- a name that is not `A-Z`, `0-9` and `_`.
+
+**Recipes (1.6).** Every launch is a *recipe*: the engine chart's values
+(`{engine, chart, values}`), exactly as a [model-catalog](https://github.com/modelsphere/model-catalog)
+variant writes them. The manifest's `model.recipe` is the one every launch
+starts from, the space's `base` applied, and a config's keys are addresses
+into it:
+
+| key | address |
+| --- | --- |
+| `tp_size` | a flag in `values.extraArgs`, as before |
+| `env.SGLANG_X` | an entry of `values.env`, as before |
+| `prefill.mem_fraction_static`, `decode.max_running_requests` | a flag in a pd role's `values.pd.<role>.extraArgs` |
+| `values.pd.prefill.replicas`, `values.localKVOffload.hicache.ratio` | any chart value, by its dotted path (`values.resources.limits["rdma/hca_shared"]` for a segment with dots) |
+
+`null` removes: a flag, a variable, a value. A config without the new prefixes
+means what it always meant. Refused as `bad_key`: an address that does not
+parse, and `values.extraArgs` / `values.env` as a whole (set their entries by
+their own addresses). Refused as `placement`: what only the site or a run sets
+(scheduling, routing, scaling, naming, the Service type, the image). Refused as `substrate`: a pd role flag or chart value
+on a machine whose launches are not LLMServices, since its driver applies
+flags and env only.
+
+A policy sends configs only; the platform builds the recipe. `POST
+/configs/check` answers with the `recipe` a launch of the config runs, its
+`shape` (the pods and the cards each claims) and `commands` (each role's engine
+command as the chart builds it), so a policy can see exactly what would run
+without reading the chart. A recipe campaign also refuses what its chart would
+(`not_renderable`, `placement`): a flag the chart renders itself (`--port`,
+`--model-path`, …), an image without a tag. A winner is published as the
+recipe its config builds.
+
 ---
 
 ## Services
@@ -508,6 +571,107 @@ GET /api/policy/v1/state
 Per campaign, not per session: night 2 reads what night 1 wrote. The platform
 never looks inside.
 
+### History (1.4)
+
+When the manifest's `services.history` is true. State stays within one
+campaign; history is what other campaigns learned.
+
+```http
+PUT /api/policy/v1/session/digest
+{"summary": "Prefill CUDA graphs were the one large lever …",
+ "lessons": [{"text": "chunked_prefill_size above 16384 cannot launch at the default memory fraction", "scope": "model"}],
+ "constraints": ["enable_mixed_chunk wedges the scheduler under the replay"],
+ "open_questions": ["does lpm compose with breakable prefill graphs?"]}
+→ 204
+```
+
+Write the digest once your search is over (replacing an earlier one is
+fine). It is the night's findings in your own words, the way you would brief
+whoever tunes this model next. A lesson's `scope` says how far it reaches:
+`campaign` (this workload and objective), `model`, `engine` or `hardware`.
+Accepted until the session ends. Limits: a 20,000-character summary, 50
+lessons, 50 constraints and 20 open questions.
+
+```http
+GET /api/policy/v1/history?match=model&limit=10
+→ [{"campaign_id": 35, "campaign_name": "…", "session_id": 18,
+    "ended_at": "…", "end_reason": "explicit",
+    "conditions": {"engine": "sglang", "image": "…", "model_path": "…",
+                   "served_model_name": "…", "gpu_type": "H800", "cards": 8,
+                   "benchmark_slug": "…",
+                   "objective": {"target_metric": "output_tpm_per_gpu", "direction": "max", "redlines": […]},
+                   "forbidden": […]},
+    "verdicts": [{"config": {…}, "is_production": true, "value": 44774.2, "vs_production": null, "holds_redlines": true},
+                 {"config": {…}, "is_production": false, "value": 45933.8, "vs_production": 1.026, "holds_redlines": true}],
+    "digest": {…}}]
+```
+
+Other campaigns' nights, newest first, from campaigns of the same owner and
+the same engine. With `match=model` (the default) the model must match too.
+A night appears once it has a digest or a validation.
+
+- **`conditions`** are the platform's own record of what the night ran under,
+  not the policy's account of it.
+- **`verdicts`** are the platform's validation at the end of that night:
+  production and each finalist, measured again, with `vs_production` as a
+  multiple of production's value on the same night. A finalist with
+  `same_as_production` runs production's own config, so its `vs_production`
+  is the validation's noise, not an effect. On a short benchmark that noise
+  has been seen at several percent.
+
+Read another campaign's findings as hints, not facts. A different image,
+workload or objective can turn them over, so check them with this night's
+trials before relying on them.
+
+### Engine vocabulary (1.5)
+
+When the manifest's `services.vocabulary` is true. The flags and environment
+variables the campaign's engine image reads, read from that image (one dump
+per image digest), each with the engine's own description where the image or
+its docs have one, and the platform's recommendation:
+
+```http
+GET /api/policy/v1/engine/vocabulary?kind=env&level=mid&query=spec
+→ {"status": "ok", "engine": "sglang", "engine_version": "0.5.19", "total": 1,
+   "notes": [], "entries": [
+     {"kind": "env", "name": "SGLANG_ENABLE_OVERLAP_PLAN_STREAM", "type": "bool", "default": false,
+      "choices": [], "help": "…", "help_source": "docs", "where": "…",
+      "level": "high", "when": "speculative decoding on"}]}
+```
+
+- `level` is `high`, `mid`, `low` or `unknown`: a hand-written recommendation
+  of what is worth a trial, best first. Most entries are `unknown`: debug, CI
+  and switches for other hardware. An entry labeled only for other hardware
+  than the session's cards is left out.
+- `help_source` says whose words `help` is: `engine` (the image's own help or
+  comment), `docs` (the engine's docs at that version), or `source` (the code
+  that reads it, when nothing describes it).
+- Filters: `kind` (`flag` or `env`), `query` (a substring of the name or the
+  help), `level` (the lowest level wanted: `mid` returns high and mid),
+  `limit`.
+- `status` is `ok`, `partial` (some of it could not be read; `notes` says
+  what) or `none` (nothing has been read from this image yet).
+- `model_facts` and `model_config_json`: the model's facts and its whole
+  `config.json`, once read (the same facts as the manifest's `model.facts`;
+  here too because a policy reads the manifest once, and the platform may
+  finish reading after the session started).
+- The type, default and allowed values of a switch are the engine's own:
+  a flag's choices from its parser, a vllm env var's declared choices. A
+  string env var the engine declares no choices for carries `reads`: the
+  engine code that reads it, its own check of the value first.
+
+With a vocabulary for the image, a flag the config renders to that the
+image's parser does not accept is refused (`unknown_flag`, with the nearest
+spellings it does accept), instead of a launch that fails at start.
+
+**Model facts (1.5).** The manifest's `model.facts` is read from the model's
+own `config.json`, where the campaign's runs mount the weights: `layers`,
+`kv_heads`, `head_dim`, `max_context`, `experts` and `experts_per_token`,
+`shared_experts`, `draft_layers` (built-in MTP/NEXTN layers a speculative
+decoder can draft with), `layer_types` (e.g. linear vs full attention),
+`kv_lora_rank` (MLA), `dtype`, `quantization`, `rope_scaling`, `multimodal`.
+A field the config does not have is absent, never guessed. Empty until read.
+
 ### Diagnostics (1.3)
 
 When the manifest's `services.diagnostics` is true. Everything the platform
@@ -523,9 +687,10 @@ POST /api/policy/v1/configs/check
    "warnings": [], "deviations": [{"param": "quantization", "kind": "unknown", …}]}
 ```
 
-A dry run: the canonical echo, the engine arguments it renders to, and
-everything a launch would refuse (`problems`: `placement`, `forbidden`,
-`not_renderable`, `round_trip`, `bad_key`, `safety`), without spending one.
+A dry run: the canonical echo, the engine arguments it renders to, the
+environment it sets (`env`, 1.5), and everything a launch would refuse
+(`problems`: `placement`, `forbidden`, `not_renderable`, `round_trip`,
+`bad_key`, `unknown_env`, `unknown_flag`, `safety`), without spending one.
 Never `422`s. `warnings` refuse nothing: flags the platform's catalog does not
 know (the engine may still accept them; a typo only fails at launch).
 
@@ -623,6 +788,25 @@ from their specs, time permitting. Either way the machine's own guarantees
   `search_idle_strikes`) and a recorded `search_end_reason`. A 1.0 image keeps
   working unchanged — it simply never sends the new fields, and the deadline
   plus the watchdog govern it exactly as before.
+- **1.7** (additive): `production` is the platform's production config —
+  built from the Baselines record or, with none, from the campaign's recipe —
+  with `env`, `image`, `config` and `source` beside `engine_args`, and
+  `services.production_config` on the menu. `engine_args` now lists every
+  flag production runs, not only the recorded ones. A forbidden parameter at
+  the value the campaign's recipe sets counts as unchanged, like one at the
+  space's base. A 1.6 policy runs unchanged.
+- **1.6** (additive): [recipes](#config-format). `model.recipe` in the
+  manifest and `services.recipes` on the menu; `prefill.`, `decode.` and
+  `values.` config addresses; `recipe`, `shape` (pods and cards) and `commands` (each
+  role's engine argv as the chart builds it) on the `/configs/check` answer.
+  New refusals only for the new addresses. A 1.5 policy runs unchanged.
+- **1.5** (additive): `env.<NAME>` config keys and `GET /engine/vocabulary`,
+  with `services.env_keys` and `services.vocabulary` on the menu, `env` on
+  the `/configs/check` answer, and `model.facts` in the manifest. One new
+  refusal: with a vocabulary for the image, a flag its parser does not take
+  (`unknown_flag`), which would have failed the launch anyway.
+- **1.4** (additive): `PUT /session/digest` and `GET /history`, and
+  `services.history` on the menu. A 1.3 policy runs unchanged.
 - **1.3** (additive): diagnostics (`POST /configs/check`, launch logs and
   environments, full benchmark results), [measures](measures.md) on every
   benchmark plus the catalogue and each suite's workload in the manifest,

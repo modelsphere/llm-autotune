@@ -21,8 +21,11 @@ export interface NavItem {
   path: string
   /** An i18n key (the plugin's `messages` define it). */
   label: string
-  /** Under the Tuning menu, or on the top row. */
-  group: 'tuning' | 'top'
+  /** On the top row, or in the Library menu (what campaigns are built from).
+   *  'tuning' is the Library's old name and still lands there. */
+  group: 'top' | 'library' | 'tuning'
+  /** An i18n key: one line under the label in the Library menu. */
+  hint?: string
   /** Position among the entries of its group; the app's own are 10, 20, 30… */
   order: number
 }
@@ -56,7 +59,8 @@ export function pluginRoutes(): RouteRecordRaw[] {
 }
 
 export function pluginNav(group: NavItem['group']): NavItem[] {
-  return plugins.flatMap((p) => (p.nav ?? []).filter((n) => n.group === group))
+  const of = (n: NavItem) => (n.group === 'tuning' ? 'library' : n.group)
+  return plugins.flatMap((p) => (p.nav ?? []).filter((n) => of(n) === group))
 }
 
 export function slotComponents(name: string): Component[] {

@@ -108,7 +108,7 @@ onMounted(first.run)
           </div>
         </template>
       </el-table-column>
-      <el-table-column :label="t('common.model')" min-width="150">
+      <el-table-column :label="t('common.model')" min-width="210">
         <template #default="{ row }">
           {{ row.served_model_name }}
           <span class="muted tiny">{{ row.engine }}</span>
@@ -132,7 +132,7 @@ onMounted(first.run)
       </el-table-column>
       <el-table-column :label="t('campaigns.search')" width="160">
         <template #default="{ row }">
-          <span v-if="row.policy_id != null" class="mono">{{ policyName(row.policy_id) }}</span>
+          <span v-if="row.policy_id != null">{{ policyName(row.policy_id) }}</span>
           <span v-else class="muted" :title="t('campaign.enumerates')">{{ t('campaigns.gridAll') }}</span>
         </template>
       </el-table-column>

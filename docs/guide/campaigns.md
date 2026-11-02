@@ -4,7 +4,7 @@
 
 A **campaign** is one search: the model and engine image, the machines, the
 search space, the workload, the objective, and the schedule. Press **New
-campaign** on **Automatic Tuning ▸ Campaigns**.
+campaign** on **Campaigns**.
 
 Fill in the wizard step by step (below), or start from something that
 exists with **Start from**:

@@ -4,6 +4,14 @@
  *  the only question you actually have: how long ago, and how long did it take.
  */
 
+import { locale } from '../i18n'
+
+/** The app's language, not the browser's: an English page read "10月22日"
+ *  on a Chinese-locale machine. */
+const tag = () => (locale.value === 'zh' ? 'zh-CN' : 'en-US')
+const rel = (n: number, unit: Intl.RelativeTimeFormatUnit) =>
+  new Intl.RelativeTimeFormat(tag(), { numeric: 'auto' }).format(n, unit)
+
 const MINUTE = 60_000
 const HOUR = 60 * MINUTE
 const DAY = 24 * HOUR
@@ -22,7 +30,7 @@ export function absoluteTime(value: string | null | undefined): string {
   const date = parse(value)
   if (!date) return '—'
   const sameYear = date.getFullYear() === new Date().getFullYear()
-  return date.toLocaleString(undefined, {
+  return date.toLocaleString(tag(), {
     year: sameYear ? undefined : 'numeric',
     month: 'short',
     day: 'numeric',
@@ -39,20 +47,17 @@ export function relativeTime(value: string | null | undefined): string {
   if (!date) return '—'
   const delta = Date.now() - date.getTime()
   if (delta < 0) return untilTime(-delta, value) // scheduled in the future
-  if (delta < MINUTE) return 'just now'
-  if (delta < HOUR) return `${Math.floor(delta / MINUTE)} min ago`
-  if (delta < DAY) {
-    const hours = Math.floor(delta / HOUR)
-    return `${hours} h ago`
-  }
+  if (delta < MINUTE) return rel(0, 'second')
+  if (delta < HOUR) return rel(-Math.floor(delta / MINUTE), 'minute')
+  if (delta < DAY) return rel(-Math.floor(delta / HOUR), 'hour')
   return absoluteTime(value)
 }
 
 function untilTime(ahead: number, value: string | null | undefined): string {
-  if (ahead < MINUTE) return 'in a moment'
-  if (ahead < HOUR) return `in ${Math.round(ahead / MINUTE)} min`
-  if (ahead < DAY) return `in ${Math.round(ahead / HOUR)} h`
-  if (ahead < 7 * DAY) return `in ${Math.round(ahead / DAY)} days`
+  if (ahead < MINUTE) return rel(0, 'second')
+  if (ahead < HOUR) return rel(Math.round(ahead / MINUTE), 'minute')
+  if (ahead < DAY) return rel(Math.round(ahead / HOUR), 'hour')
+  if (ahead < 7 * DAY) return rel(Math.round(ahead / DAY), 'day')
   return absoluteTime(value)
 }
 
@@ -60,13 +65,13 @@ function untilTime(ahead: number, value: string | null | undefined): string {
 export function clockTime(value: string | null | undefined): string {
   const date = parse(value)
   if (!date) return '—'
-  return date.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hour12: false })
+  return date.toLocaleTimeString(tag(), { hour: '2-digit', minute: '2-digit', hour12: false })
 }
 
 /** Full timestamp for a tooltip — the precise value is still one hover away. */
 export function exactTime(value: string | null | undefined): string {
   const date = parse(value)
-  return date ? date.toString() : ''
+  return date ? date.toLocaleString(tag(), { dateStyle: 'full', timeStyle: 'long' }) : ''
 }
 
 /** "17m 23s" between two instants; the number people actually want from a run. */

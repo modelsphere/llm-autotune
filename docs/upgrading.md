@@ -21,8 +21,9 @@ actually old, reconcile it by hand before trusting the stamp.
 
 Then, on every install and upgrade, it adds what is missing and never changes
 what exists: the first admin (only while there are no users), the built-in
-objectives, the `local-cluster` machine (only while there are no machines), and
-the screen benchmark on LLMBench.
+objectives, the `defaultPolicies` (each only while no policy has its name),
+the platform's own cluster and its `local-cluster` machine (only while there
+are no clusters and no machines), and the screen benchmark on LLMBench.
 
 ## Migrations
 

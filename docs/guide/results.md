@@ -194,11 +194,22 @@ and the model's `metadata.yaml`.
   for this export or, with **Remember**, for every export.
 
 Every file is checked against the catalog's schemas and the rules its own
-validator adds, as you go; the export can be downloaded once it passes.
-Nothing is pushed: **Download** gives a zip laid out as the catalog is.
-Unpack it at the root of a model-catalog checkout and open a pull request. The
-provenance lines (which campaign and run measured each variant) are for the
-pull request description. To run the catalog's own checks on it first:
+validator adds, as you go. Once it passes there are two ways to publish it:
+
+- **Publish to catalog**, when an admin has set a catalog server and its write
+  key in [Settings](../after-installing.md#settings). The export is written
+  through the server's API. First comes a check of every write, which commits
+  nothing and shows what would change. **Commit** then makes the writes: a new
+  model is added in one commit; for a model the server has, each new or
+  changed variant is added or replaced, then its `metadata.yaml`. A write the
+  server refuses stops the publish before anything is committed. If the
+  catalog changed after the export read it, publish again from a fresh
+  preview. The server takes no report, so a publish records no `tuning` entry;
+  download the zip to ship the result with its report.
+- **Download** gives a zip laid out as the catalog is. Unpack it at the root of
+  a model-catalog checkout and open a pull request. The provenance lines (which
+  campaign and run measured each variant) are for the pull request
+  description. To run the catalog's own checks on it first:
 
 ```bash
 deploy/dev/check-catalog-export.sh <export.zip> <model-catalog checkout>

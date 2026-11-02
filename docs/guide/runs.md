@@ -39,7 +39,8 @@ the configs it interrupts are queued again.)
 | **stopped** | stopped by a user, a lease ending or the window closing |
 
 Model loading usually takes longest. A run that does not become ready within
-the limit fails as `ready_timeout`.
+the campaign's model load limit (2 hours unless the campaign sets another)
+fails as `ready_timeout`.
 
 ## Kinds of failure
 

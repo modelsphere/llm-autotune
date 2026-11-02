@@ -41,6 +41,11 @@ _OVERRIDABLE: tuple[str, ...] = (
     "k8s_kubeconfig",
     "k8s_in_cluster",
     "k8s_workload_kind",
+    "k8s_chart_repo",
+    "k8s_chart_credentials_secret",
+    "k8s_endpoint",
+    "k8s_image_mirror",
+    "k8s_site_values",
     "k8s_cr_group",
     "k8s_cr_version",
     "k8s_cr_kind",
@@ -50,6 +55,7 @@ _OVERRIDABLE: tuple[str, ...] = (
     "k8s_node_host",
     "k8s_service_nodeport",
     "k8s_gpu_resource",
+    "k8s_gpu_product_label",
     "k8s_runtime_class",
     "k8s_engine_cpu_request",
     "k8s_engine_memory_request",
@@ -68,6 +74,7 @@ _OVERRIDABLE: tuple[str, ...] = (
     "k8s_policy_ttl_after_finished",
     "k8s_policy_deadline_seconds",
     "k8s_policy_priority_class",
+    "k8s_policy_node_selector",
 )
 
 # Cluster-row column -> the `k8s_*` name it overrides. Fields absent here (the
@@ -77,8 +84,13 @@ _ROW_MAP: dict[str, str] = {
     "context": "k8s_context",
     "namespace": "k8s_namespace",
     "workload_kind": "k8s_workload_kind",
+    "chart_credentials_secret": "k8s_chart_credentials_secret",
+    "endpoint": "k8s_endpoint",
+    "image_mirror": "k8s_image_mirror",
+    "site_values": "k8s_site_values",
     "node_host": "k8s_node_host",
     "gpu_resource": "k8s_gpu_resource",
+    "gpu_product_label": "k8s_gpu_product_label",
     "runtime_class": "k8s_runtime_class",
     "tolerate_gpu_taint": "k8s_tolerate_gpu_taint",
     "tolerations": "k8s_tolerations",
@@ -123,7 +135,12 @@ class K8sClusterSettings:
     k8s_context: str = ""
     k8s_kubeconfig: str = ""
     k8s_in_cluster: bool = False
-    k8s_workload_kind: str = "deployment"
+    k8s_workload_kind: str = "llmservice"
+    k8s_chart_repo: str = "https://modelsphere.github.io/helm-charts"
+    k8s_chart_credentials_secret: str = ""
+    k8s_endpoint: str = "dns"
+    k8s_image_mirror: str = ""
+    k8s_site_values: str = ""
     k8s_cr_group: str = "tuning.modelsphere.dev"
     k8s_cr_version: str = "v1alpha1"
     k8s_cr_kind: str = "TuningRun"
@@ -133,6 +150,7 @@ class K8sClusterSettings:
     k8s_node_host: str = ""
     k8s_service_nodeport: int = 0
     k8s_gpu_resource: str = "nvidia.com/gpu"
+    k8s_gpu_product_label: str = "nvidia.com/gpu.product"
     k8s_runtime_class: str = "nvidia"
     k8s_engine_cpu_request: str = ""
     k8s_engine_memory_request: str = ""
@@ -151,6 +169,7 @@ class K8sClusterSettings:
     k8s_policy_ttl_after_finished: int = 86400
     k8s_policy_deadline_seconds: int = 0
     k8s_policy_priority_class: str = ""
+    k8s_policy_node_selector: str = ""
 
     @property
     def cache_key(self) -> str:
@@ -179,7 +198,15 @@ class K8sClusterSettings:
 
         values = _copyable(settings)
         for column, attr in _ROW_MAP.items():
-            values[attr] = getattr(row, column)
+            # A row from before a column existed (a stand-in, a half-migrated
+            # read) keeps the install's value for it.
+            values[attr] = getattr(row, column, values.get(attr))
+        # Unlike the columns above, an empty one keeps the install's value: the
+        # install-wide pin is what a cluster without its own still relies on.
+        if (repo := (getattr(row, "chart_repo", "") or "").strip()):
+            values["k8s_chart_repo"] = repo
+        if (policy := (getattr(row, "policy_node_selector", "") or "").strip()):
+            values["k8s_policy_node_selector"] = policy
         values["k8s_api_mode"] = "unavailable" if not row.api_mode else row.api_mode
         return cls(
             cluster_id=row.id,
@@ -232,9 +259,8 @@ def as_cluster(source: Any) -> K8sClusterSettings:
 
 # Cluster rows change rarely (an admin edits one) and are read on every driver
 # construction, so a short TTL keeps a probe from hitting the DB per call while
-# still letting an edit land without a restart. The supervisor's long-lived
-# drivers are a known exception — see the design doc: a cluster edit reaches a
-# running worker on its next restart.
+# still letting an edit land without a restart. The supervisor checks these
+# resolved settings before reusing a cached driver and rebuilds it on changes.
 _TTL_SECONDS = 15.0
 _cache: dict[int, tuple[float, K8sClusterSettings]] = {}
 

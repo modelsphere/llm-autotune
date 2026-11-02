@@ -26,6 +26,7 @@ from datetime import timedelta
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.control.baseline import production_for
 from app.control.launch.base import (
     DeploymentHandle,
     LaunchDeferred,
@@ -41,11 +42,14 @@ from app.control.orchestrator.policy_lifecycle import (
     heartbeat_silence,
     heartbeat_timeout_seconds,
     settings_of,
+    token_expiry,
 )
 from app.control.orchestrator.schedule import from_campaign as schedule_of
+from app.control.orchestrator.timing import ready_timeout_minutes
+from app.control.recipe.campaign import config_cards
+from app.control.recipe.campaign import widest_cards as campaign_widest_cards
 from app.control.search.base import CandidateConfig
-from app.control.search.space import prune_inactive
-from app.control.search.validation import cards_used, widest_cards
+from app.control.search.validation import cards_used
 from app.core import apikeys
 from app.db.models import (
     TERMINAL_RUN_STATES,
@@ -57,6 +61,7 @@ from app.db.models import (
     CandidateKind,
     CandidateStatus,
     ContenderStatus,
+    LlmEndpoint,
     Machine,
     MachineState,
     Policy,
@@ -108,6 +113,21 @@ def redact_secrets(command: str, token: str, secrets: dict[str, str]) -> str:
     return out
 
 
+def llm_endpoint_env(db, policy, *, secret: bool) -> dict[str, str]:
+    """The env the policy's LLM endpoint sets: its address and model
+    (secret=False), or its key (secret=True, redacted like the policy's own
+    secret env). {} when the policy names no endpoint, or it was deleted."""
+    if policy.llm_endpoint_id is None:
+        return {}
+    endpoint = db.get(LlmEndpoint, policy.llm_endpoint_id)
+    if endpoint is None:
+        return {}
+    if secret:
+        key = endpoint.api_key_value()
+        return {"LLM_API_KEY": key} if key else {}
+    return {"LLM_BASE_URL": endpoint.base_url.strip().rstrip("/"), "LLM_MODEL": endpoint.model}
+
+
 def policy_log_path(run_log_dir: str, session_id: int) -> str:
     """Where a policy container's captured stdout+stderr lives — one file per
     session, so the capture (worker) and the reader (API) agree without a DB
@@ -115,8 +135,24 @@ def policy_log_path(run_log_dir: str, session_id: int) -> str:
     return os.path.join(run_log_dir, f"policy-session-{session_id}.log")
 
 
+def api_url_for(settings, machine) -> str:
+    """How a policy on this machine calls home. The API's Service name resolves
+    only inside AutoTune's own cluster, so it goes to a policy there; anywhere
+    else (another cluster, an ssh machine) gets `public_api_url`. "" = none
+    that machine can use."""
+    if settings.internal_api_url and machine.driver == "k8s":
+        from app.control.launch.clusters import resolve_cluster
+        from app.control.launch.locality import same_cluster
 
-def _validation_cards(session: PolicySession, config: dict, blockers: list) -> list[int] | None:
+        if same_cluster(resolve_cluster(machine.cluster_id)) is True:
+            return settings.internal_api_url
+    return settings.public_api_url
+
+
+
+def _validation_cards(
+    session: PolicySession, config: dict, blockers: list, campaign: Campaign | None = None
+) -> list[int] | None:
     """The cards a validation run takes: as many as its config uses
     (tp × dp × pp), all of them free within the session's block — or None
     when not enough are free yet. Validation launches run side by side, so
@@ -127,7 +163,7 @@ def _validation_cards(session: PolicySession, config: dict, blockers: list) -> l
     block = list(session.gpu_indices or [])
     if not block:
         return []
-    needed = max(cards_used(config), 1)
+    needed = max(config_cards(campaign, config) if campaign is not None else cards_used(config), 1)
     if needed > len(block):
         needed = len(block)
     held = {i for r in blockers for i in (r.gpu_indices or [])}
@@ -235,6 +271,7 @@ class PolicySessionEngine:
             )
             self._terminate(db, session, final, session.error or "window cutoff")
             return
+        self._follow_window(db, session, hard)
 
         handler = {
             PolicySessionStatus.PENDING.value: self._advance_pending,
@@ -248,11 +285,28 @@ class PolicySessionEngine:
 
     # -- machine allocation ------------------------------------------------------
 
+    def _follow_window(self, db: Session, session: PolicySession, hard) -> None:
+        """A live session's token lasts as long as its window: a window moved
+        later (a force start, a schedule edit) takes the token with it."""
+        if session.status == PolicySessionStatus.PENDING.value or session.status in {
+            s.value for s in TERMINAL_SESSION_STATES
+        }:
+            return
+        key = db.scalars(
+            select(ApiKey).where(ApiKey.policy_session_id == session.id)
+        ).first()
+        if key is None:
+            return
+        want = token_expiry(hard, self.sup.settings)
+        if as_utc(key.expires_at) != want:
+            key.expires_at = want
+
     def waiting(self, db: Session) -> list[PolicySession]:
         """Pending sessions with no machine yet — waiters in the machine queue.
         One the pending step is about to fail (no API URL, no policy row) or a
         human is aborting is not waiting for hardware."""
-        if not self.sup.settings.public_api_url:
+        settings = self.sup.settings
+        if not (settings.public_api_url or settings.internal_api_url):
             return []
         out = []
         for row in db.scalars(
@@ -399,7 +453,7 @@ class PolicySessionEngine:
         held_ports |= {r.service_port for r in live_runs + dying if r.service_port}
 
         total = machine.gpu_count or 0
-        needed = settings_of(campaign).cards or widest_cards(campaign.search_space) or 1
+        needed = settings_of(campaign).cards or campaign_widest_cards(campaign) or 1
         free = [i for i in range(total) if i not in held_cards]
         if total and len(free) < needed:
             return None
@@ -445,7 +499,7 @@ class PolicySessionEngine:
         self, db: Session, session: PolicySession, campaign: Campaign, machine
     ) -> None:
         settings = self.sup.settings
-        if not settings.public_api_url:
+        if not (settings.public_api_url or settings.internal_api_url):
             self._terminate(
                 db, session, PolicySessionStatus.FAILED,
                 "AUTOTUNE_PUBLIC_API_URL is not set — a policy container cannot call home",
@@ -472,6 +526,16 @@ class PolicySessionEngine:
             self._terminate(
                 db, session, PolicySessionStatus.FAILED,
                 "reserved machine vanished before launch", failure_class="launch",
+            )
+            return
+        api_url = api_url_for(settings, self.sup._machine_info(target))
+        if not api_url:
+            self._terminate(
+                db, session, PolicySessionStatus.FAILED,
+                f"machine {target.name} is not on AutoTune's own cluster, and "
+                "AUTOTUNE_PUBLIC_API_URL (publicApiUrl) is not set: a policy there "
+                "cannot call home. Set it to an address that machine reaches.",
+                failure_class="config",
             )
             return
 
@@ -507,12 +571,12 @@ class PolicySessionEngine:
                 key_hash=key_hash,
                 owner_id=campaign.owner_id,
                 policy_session_id=session.id,
-                expires_at=now() + timedelta(hours=settings.policy_token_max_hours),
+                expires_at=token_expiry(deadlines(campaign, target)[1], settings),
             )
         )
 
         volumes = policy_volumes(campaign, policy)
-        secrets = policy.secret_env_values()
+        secrets = {**policy.secret_env_values(), **llm_endpoint_env(db, policy, secret=True)}
         spec = WorkloadSpec(
             name=session.container_name,
             machine=self.sup._machine_info(target),
@@ -524,8 +588,9 @@ class PolicySessionEngine:
                 # before it exits. The policy's own env can still set it.
                 "PYTHONUNBUFFERED": "1",
                 **(policy.env or {}),
+                **llm_endpoint_env(db, policy, secret=False),
                 **secrets,
-                "AUTOTUNE_API_URL": settings.public_api_url,
+                "AUTOTUNE_API_URL": api_url,
                 "AUTOTUNE_API_KEY": token,
                 "AUTOTUNE_SESSION_ID": str(session.id),
             },
@@ -570,6 +635,45 @@ class PolicySessionEngine:
         logger.info(
             "policy session %d launched %s on %s", session.id, policy.image, target.name
         )
+        self._read_vocabulary(db, campaign, target)
+
+    def _read_vocabulary(self, db: Session, campaign: Campaign, target) -> None:
+        """Read, in the background, what the platform does not know yet: the
+        engine image's flags and env vars (what env keys and flags are checked
+        against, GET /engine/vocabulary) and the model's own config (the
+        manifest's model facts)."""
+        from app.control.engines import model_facts, vocabulary_store
+        from app.control.launch.base import DeploymentDriver
+        from app.db.models import EngineVocabulary, ModelConfig
+
+        try:
+            if not campaign.image:
+                return
+            info = self.sup._machine_info(target)
+            driver = self.sup._driver_for(info)
+            # A substrate that cannot run a command in an image has nothing to read.
+            if getattr(type(driver), "run_in_image", None) in (
+                None, DeploymentDriver.run_in_image
+            ):
+                return
+            settings = self.sup.settings
+            if vocabulary_store.needs_reading(db, campaign.engine, campaign.image):
+                vocabulary_store.in_background(
+                    self.sup.session_factory, ("image", campaign.image),
+                    lambda: EngineVocabulary(**vocabulary_store.read_image(
+                        driver, info, campaign.engine, campaign.image)),
+                )
+            if campaign.model_path and vocabulary_store.needs_model_reading(
+                db, campaign.model_path
+            ):
+                vocabulary_store.in_background(
+                    self.sup.session_factory, ("model", campaign.model_path),
+                    lambda: ModelConfig(**model_facts.read_model(
+                        driver, info, campaign.image, campaign.model_path,
+                        settings.engine_vocab_timeout_seconds)),
+                )
+        except Exception:  # noqa: BLE001 — an extra, never a reason to fail a launch
+            logger.exception("could not start reading %s", campaign.image)
 
     # -- STARTING: wait for the first heartbeat --------------------------------
 
@@ -601,10 +705,10 @@ class PolicySessionEngine:
             self._fail_toward_validation(
                 db, session, failure[0], f"policy container cannot start: {failure[1]}"
             )
-        elif waited > self.sup.settings.ready_timeout_minutes * 60:
+        elif waited > self.sup.settings.policy_start_timeout_minutes * 60:
             self._fail_toward_validation(
                 db, session, "ready_timeout",
-                f"no heartbeat after {self.sup.settings.ready_timeout_minutes} min — "
+                f"no heartbeat after {self.sup.settings.policy_start_timeout_minutes} min — "
                 "is AUTOTUNE_API_URL reachable from the machine?",
             )
 
@@ -776,7 +880,7 @@ class PolicySessionEngine:
                     commanded = as_utc(contender.serve_commanded_at) or now()
                     budget = (
                         self.sup.settings.policy_finalize_grace_seconds
-                        + self.sup.settings.ready_timeout_minutes * 60
+                        + ready_timeout_minutes(campaign) * 60
                     )
                     if (now() - commanded).total_seconds() > budget:
                         contender.status = ContenderStatus.SKIPPED.value
@@ -898,13 +1002,10 @@ class PolicySessionEngine:
         ).first()
 
     def _production_config(self, db: Session, campaign: Campaign, machine) -> dict:
-        """Production as the night's reference: the recorded baseline's engine
-        args for this model, engine and card type, over the campaign's base —
-        the same canonical form the policy's own anchor used."""
-        recorded = self.sup._campaign_baseline(db, campaign, machine)
-        space = campaign.search_space or {}
-        merged = {**(space.get("base") or {}), **dict(getattr(recorded, "engine_args", None) or {})}
-        return prune_inactive(merged, space)
+        """Production as the night's reference: the config the policy's
+        manifest names as production (app/control/baseline.production_for)."""
+        card = self.sup._campaign_card_type(db, campaign, machine)
+        return production_for(db, campaign, card).config
 
     def _platform_launchable(self, campaign: Campaign, contender) -> bool:
         """Whether the platform can bring this contender up itself — the norm.
@@ -937,7 +1038,7 @@ class PolicySessionEngine:
             if machine is not None
             else []
         )
-        cards = _validation_cards(session, config, blockers)
+        cards = _validation_cards(session, config, blockers, db.get(Campaign, session.campaign_id))
         if cards is None:
             return False
         # A container holds its port for seconds after teardown is requested,

@@ -183,6 +183,7 @@ def _seed(engine) -> None:
     """
     _seed_admin(engine)
     _seed_objectives(engine)
+    _seed_policies(engine)
     _register_local_cluster(engine)
     _ensure_screen_benchmark()
 
@@ -251,6 +252,57 @@ def _seed_objectives(engine) -> None:
         logger.exception("could not seed the built-in objectives")
 
 
+def _seed_policies(engine) -> None:
+    """The search policies an install comes with (AUTOTUNE_DEFAULT_POLICIES, a
+    JSON list the chart's `defaultPolicies` writes), each added only while no
+    policy has its name: one an admin re-pointed at another image, or deleted
+    and re-added, is theirs. Owned by the first admin."""
+    import json
+
+    from sqlalchemy.orm import Session
+
+    from app.db.models import Policy, User, UserRole
+
+    raw = get_settings().default_policies.strip()
+    if not raw:
+        return
+    try:
+        wanted = json.loads(raw)
+        if not isinstance(wanted, list):
+            raise ValueError("not a list")
+    except ValueError as exc:
+        logger.error("AUTOTUNE_DEFAULT_POLICIES is not a JSON list (%s); no policy seeded", exc)
+        return
+    try:
+        with Session(engine) as session:
+            admin = (session.query(User).filter(User.role == UserRole.ADMIN.value)
+                     .order_by(User.id).first())
+            if admin is None:
+                logger.info("no admin yet; default policies wait for one")
+                return
+            for entry in wanted:
+                name = str(entry.get("name", "")).strip()
+                image = str(entry.get("image", "")).strip()
+                if not name or not image:
+                    logger.error("default policy %r needs a name and an image; skipped", entry)
+                    continue
+                if session.query(Policy.id).filter(Policy.name == name).first() is not None:
+                    continue
+                session.add(Policy(
+                    owner_id=admin.id, name=name, image=image,
+                    version=str(entry.get("version") or image.rsplit(":", 1)[-1]),
+                    description=str(entry.get("description", "")),
+                    repo_url=str(entry.get("repoUrl", entry.get("repo_url", ""))),
+                    gpus_in_container=bool(entry.get("gpusInContainer", False)),
+                    needs_model=bool(entry.get("needsModel", False)),
+                    env={},
+                ))
+                logger.info("registered the default policy %r (%s)", name, image)
+            session.commit()
+    except Exception:  # noqa: BLE001 — a seed must never block a deploy
+        logger.exception("default policy seeding failed")
+
+
 def _ensure_screen_benchmark() -> None:
     """Create and lock AutoTune's screening benchmark on LLMBench, if it can be
     reached. Never fatal: LLMBench is a separate install that may come up after
@@ -268,45 +320,78 @@ def _ensure_screen_benchmark() -> None:
 
 
 def _register_local_cluster(engine) -> None:
-    """Offer the cluster this pod runs in as a machine pool, once.
+    """Offer the cluster this pod runs in, once.
 
     A fresh install otherwise lands on an empty Resources page, and the first
     thing anyone has to do is describe the cluster the platform is already
-    running inside. Only when the fleet is EMPTY: the moment someone has added
-    a machine of their own, this stays out of the way for good.
+    running inside. Only when there is NO cluster and NO machine: the moment
+    someone has described a fleet of their own, this stays out of the way for
+    good.
 
-    The row points at the default cluster (no `cluster_id`), which reads the
-    AUTOTUNE_K8S_* settings the chart writes — so there is one description of
-    the cluster, not two that can disagree. Card count and card type are left
-    at zero for the capacity probe to fill from the nodes themselves.
+    The cluster row takes the AUTOTUNE_K8S_* settings the chart writes: they
+    describe this cluster (in-cluster access, Service-name endpoints, the
+    site's chart repository and image mirror), so they are pinned to its row
+    and not to the clusters added later, which carry their own. With
+    auto_register_machine it also gets one machine over all of its nodes, the
+    scheduler placing each pod; card count and type are left at zero for the
+    capacity probe to fill from the nodes themselves.
     """
     from sqlalchemy.orm import Session
 
-    from app.db.models import Machine, MachineState
+    from app.db.models import Cluster, Machine, MachineState
 
     settings = get_settings()
     if not (settings.auto_register_cluster and settings.k8s_in_cluster):
         return
     try:
         with Session(engine) as session:
-            if session.query(Machine.id).first() is not None:
+            if (session.query(Machine.id).first() is not None
+                    or session.query(Cluster.id).first() is not None):
                 return
-            session.add(
-                Machine(
-                    name="local-cluster",
-                    host="",  # k8s placement is by selector, never by address
-                    driver="k8s",
-                    gpu_count=0,  # filled by the capacity probe
-                    state=MachineState.AWAY.value,
-                    notes=(
-                        "The cluster this release runs in, registered automatically on "
-                        "an empty install. Probe it from the Resources page to fill in "
-                        "its GPUs, then mark it available."
-                    ),
-                )
+            cluster = Cluster(
+                name=settings.local_cluster_name,
+                notes="The cluster AutoTune runs in, registered automatically on an empty install.",
+                api_mode="client",
+                in_cluster=True,
+                namespace=settings.k8s_namespace,
+                workload_kind=settings.k8s_workload_kind,
+                chart_repo=settings.k8s_chart_repo,
+                chart_credentials_secret=settings.k8s_chart_credentials_secret,
+                endpoint=settings.k8s_endpoint or "dns",
+                image_mirror=settings.k8s_image_mirror,
+                site_values=settings.k8s_site_values,
+                gpu_resource=settings.k8s_gpu_resource,
+                gpu_product_label=settings.k8s_gpu_product_label,
+                runtime_class=settings.k8s_runtime_class,
+                tolerate_gpu_taint=settings.k8s_tolerate_gpu_taint,
+                tolerations=settings.k8s_tolerations,
+                image_pull_secrets=settings.k8s_image_pull_secrets,
+                model_pvc=settings.k8s_model_pvc,
+                model_pvc_root=settings.k8s_model_pvc_root,
+                shm_size_mb=settings.k8s_shm_size_mb,
+                node_selector=settings.k8s_node_selector,
             )
+            session.add(cluster)
+            session.flush()
+            if settings.auto_register_machine:
+                session.add(
+                    Machine(
+                        name="local-cluster",
+                        host="",  # k8s placement is by selector, never by address
+                        driver="k8s",
+                        cluster_id=cluster.id,
+                        gpu_count=0,  # filled by the capacity probe
+                        state=MachineState.AWAY.value,
+                        notes=(
+                            "Every node of the cluster this release runs in, registered "
+                            "automatically on an empty install. Probe it from the Resources "
+                            "page to fill in its GPUs, then mark it available."
+                        ),
+                    )
+                )
             session.commit()
-        logger.info("registered the local cluster as machine 'local-cluster'")
+        logger.info("registered the local cluster as %r%s", settings.local_cluster_name,
+                    " with machine 'local-cluster'" if settings.auto_register_machine else "")
     except Exception:  # noqa: BLE001 — never block a deploy
         logger.exception("could not register the local cluster")
 

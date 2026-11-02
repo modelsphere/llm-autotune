@@ -14,15 +14,18 @@ from datetime import UTC, datetime, timedelta
 from itertools import count
 
 import httpx
+import pytest
 import pytest_asyncio
 from sqlalchemy import create_engine, func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.control.launch.base import WorkloadState
+from app.control.orchestrator import timing
 from app.control.orchestrator.supervisor import Supervisor
 from app.control.search.space import deviations
 from app.core import apikeys
+from app.core.auth import create_token
 from app.db.base import Base, get_async_session
 from app.db.models import (
     ApiKey,
@@ -285,6 +288,24 @@ def test_how_an_engine_came_back_is_read_from_its_incarnations():
     assert restart_kind("a:0", "b:0") == "replaced"
     assert restart_kind("a:0", "a:0,b:0") == "replaced"  # a second pod beside it
     assert restart_kind("a:2", "a:3,b:0") == "crashed"
+
+
+async def test_force_stop_with_a_benchmark_running_on_a_launch_ends_both(night):
+    """Stopping the launch stops its benchmark, which has a stop request of its
+    own: the second stop must find it already ended, not wedge every tick."""
+    from app.db.models import Run, RunStatus
+
+    supervisor, driver, http = night
+    policy, run_id, bench_id = await _benching_launch(supervisor, driver, http)
+    for _ in range(2):  # the first press finalizes, the second aborts
+        await _force_stop(http)
+    supervisor.tick()
+    supervisor.tick()  # a second tick must not trip over the first one's work
+    async with http.db() as session:
+        launch = await session.get(Run, run_id)
+        bench = await session.get(Run, bench_id)
+        assert launch.status == RunStatus.KILLED.value
+        assert bench.status in (RunStatus.KILLED.value, RunStatus.FAILED.value)
 
 
 async def test_releasing_an_engine_mid_benchmark_stops_its_benchmark(night):
@@ -1111,3 +1132,158 @@ async def test_re_declaring_the_same_contender_refreshes_its_evidence(night):
         rows = (await session.execute(select(PolicyContender))).scalars().all()
     assert len(rows) == 1
     assert rows[0].evidence == {"values": [100.0, 96.0], "measurements": 2}
+
+
+# -- history (1.4) ------------------------------------------------------------
+
+
+async def _seed_an_earlier_campaign(http) -> None:
+    """Campaign 2: same owner, model and engine, one finished night with a
+    digest and the platform's validation of production and one finalist.
+    Campaign 3: another owner's, which no one else's policy may read."""
+    from app.db.models import CandidateKind, Result
+
+    now = datetime.now(UTC)
+    async with http.db() as session:
+        session.add(User(id=2, username="other", password_hash="x"))
+        for cid, owner in ((2, 1), (3, 2)):
+            session.add(Campaign(
+                id=cid, owner_id=owner, name=f"earlier {cid}", engine="sglang",
+                image="sglang:test", model_path="/models/m", served_model_name="m",
+                search_space=SPACE, objective={"target_metric": "score_total"},
+                status=CampaignStatus.DONE.value, machine_names=["gpu-1"], policy_id=1,
+            ))
+            session.add(PolicySession(
+                id=100 + cid, campaign_id=cid, policy_id=1, machine_id=1,
+                status=PolicySessionStatus.DONE.value, finalized_at=now,
+                search_end_reason="deadline",
+                digest={"summary": f"night of campaign {cid}",
+                        "lessons": [{"text": "chunk 8192 is the default", "scope": "engine"}],
+                        "constraints": ["chunked_prefill_size 65536 OOMs at launch"],
+                        "open_questions": []},
+            ))
+        await session.flush()
+        for n, (config, baseline, value) in enumerate((
+            ({"tp_size": 2}, True, 100.0),
+            ({"tp_size": 2, "page_size": 128}, False, 103.0),
+            ({"tp_size": 2}, False, 108.0),  # production's own config, measured again
+        )):
+            candidate = Candidate(
+                id=200 + n, campaign_id=2, config=config, config_hash=f"v{n}",
+                kind=CandidateKind.VERIFICATION.value, is_baseline=baseline,
+            )
+            run = Run(
+                id=300 + n, campaign_id=2, candidate_id=200 + n, machine_id=1,
+                kind=RunKind.EXPERIMENT.value, status=RunStatus.SUCCEEDED.value,
+                policy_session_id=102,
+            )
+            session.add_all([candidate, run])
+            await session.flush()
+            session.add(Result(
+                run_id=300 + n, source="llmbench", passed=True, score=value,
+                metrics={"score_total": value}, raw={}, objective_value=value, feasible=True,
+            ))
+        await session.commit()
+
+
+async def test_history_serves_other_campaigns_findings_with_their_conditions(night):
+    supervisor, driver, http = night
+    policy = await _boot(supervisor, driver, http)
+    await _seed_an_earlier_campaign(http)
+    assert (await policy.get("/session")).json()["services"]["history"] is True
+
+    (entry,) = (await policy.get("/history")).json()  # never campaign 1, never campaign 3
+    assert entry["campaign_id"] == 2 and entry["session_id"] == 102
+    assert entry["digest"]["lessons"][0]["scope"] == "engine"
+    assert entry["conditions"]["gpu_type"] == "H100"
+    assert entry["conditions"]["objective"]["target_metric"] == "score_total"
+    production = next(v for v in entry["verdicts"] if v["is_production"])
+    assert production["value"] == 100.0
+    finalist = next(v for v in entry["verdicts"] if v["config"].get("page_size") == 128)
+    assert finalist["vs_production"] == pytest.approx(1.03) and not finalist["same_as_production"]
+    # Production's config as a finalist: its ratio is the validation's noise.
+    again = next(v for v in entry["verdicts"] if v["value"] == 108.0)
+    assert again["same_as_production"]
+    assert (await policy.get("/history?match=anything")).status_code == 422
+
+
+async def test_a_night_files_its_digest_for_others(night):
+    supervisor, driver, http = night
+    policy = await _boot(supervisor, driver, http)
+    digest = {"summary": "lpm helps a little", "lessons": [{"text": "x", "scope": "model"}],
+              "constraints": [], "open_questions": ["does lpm compose?"]}
+    assert (await policy.put("/session/digest", digest)).status_code == 204
+    row = await _session_row(http)
+    assert row.digest["open_questions"] == ["does lpm compose?"] and row.digest_at
+    too_long = {**digest, "summary": "x" * 20001}
+    assert (await policy.put("/session/digest", too_long)).status_code == 422
+
+
+async def _force_start(http, hours):
+    async with http.db() as session:
+        token = create_token(await session.get(User, 1))
+    return await http.post("/api/campaigns/1/force-start", json={"hours": hours},
+                           headers={"Authorization": f"Bearer {token}"})
+
+
+async def test_force_start_refuses_a_window_validation_would_fill(night):
+    """Before any run has come up, each validation launch is budgeted the whole
+    model load limit (2 h), so a 4 h start held back more than it had: the
+    policy was finalized as it started and the campaign ended done, with
+    nothing run. Refused now, with what the hold-back is made of."""
+    _, _, http = night
+    async with http.db() as session:
+        campaign = await session.get(Campaign, 1)
+        campaign.status = CampaignStatus.DRAFT.value
+        campaign.policy_settings = {"max_contenders": 1}
+        timing.set_priors(campaign, {"screen": 30})
+        await session.commit()
+
+    refused = await _force_start(http, 4)
+    assert refused.status_code == 409, refused.text
+    detail = refused.json()["detail"]
+    assert "a 4 h window leaves no time to search" in detail
+    assert "the model load limit" in detail and "at least 7 h" in detail
+    async with http.db() as session:
+        assert (await session.get(Campaign, 1)).status == CampaignStatus.DRAFT.value
+
+    assert (await _force_start(http, 7)).status_code == 200
+
+
+async def test_force_start_takes_a_startup_the_campaign_states(night):
+    _, _, http = night
+    async with http.db() as session:
+        campaign = await session.get(Campaign, 1)
+        campaign.policy_settings = {"max_contenders": 1, "model_startup_minutes": 45}
+        timing.set_priors(campaign, {"screen": 30})
+        await session.commit()
+    assert (await _force_start(http, 4)).status_code == 200
+
+
+async def test_the_token_lasts_as_long_as_the_window(night):
+    """A 63-hour window under a flat 48-hour token lost its policy 15 hours
+    early, mid-search, to 401s. The token ends an hour after the window, and
+    follows the window when it moves."""
+    from app.control.orchestrator.lifecycle import as_utc
+
+    supervisor, driver, http = night
+    end = datetime.now(UTC) + timedelta(hours=60)
+    async with http.db() as session:
+        campaign = await session.get(Campaign, 1)
+        campaign.window_end = end
+        await session.commit()
+    policy = await _boot(supervisor, driver, http)
+    async with http.db() as session:
+        key = (await session.execute(select(ApiKey))).scalars().one()
+        assert as_utc(key.expires_at) == end + timedelta(hours=1)
+
+    later = end + timedelta(hours=10)
+    async with http.db() as session:
+        campaign = await session.get(Campaign, 1)
+        campaign.window_end = later
+        await session.commit()
+    supervisor.tick()
+    async with http.db() as session:
+        key = (await session.execute(select(ApiKey))).scalars().one()
+        assert as_utc(key.expires_at) == later + timedelta(hours=1)
+    assert (await policy.get("/session")).status_code == 200

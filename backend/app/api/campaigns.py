@@ -14,14 +14,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app import plugins
-from app.campaign_rules import ALLOWED_ENGINES, campaign_errors
+from app.campaign_rules import ALLOWED_ENGINES, campaign_errors, read_recipe
 from app.campaign_spec import SPEC_KEYS, DraftRequest, draft_campaign, spec_of
 from app.control import managed
 from app.control.baseline import resolve_baseline
 from app.control.launch import MachineInfo, get_driver
 from app.control.launch import preflight as pf
-from app.control.orchestrator import lifecycle, timing
+from app.control.orchestrator import lifecycle, policy_lifecycle, timing
 from app.control.orchestrator import schedule as sched
+from app.control.recipe.campaign import config_cards
 from app.control.search.parity import missing_flags
 from app.control.search.space import candidate_count, space_errors, swept_keys
 from app.control.search.validation import cards_used
@@ -36,10 +37,12 @@ from app.db.models import (
     CampaignOwner,
     CampaignStatus,
     Candidate,
+    EngineVocabulary,
     Event,
     Machine,
     MachineGroup,
     MachineGroupMember,
+    ModelConfig,
     Policy,
     PolicySession,
     PolicySessionStatus,
@@ -165,6 +168,43 @@ class DraftOut(BaseModel):
     campaign: dict[str, Any]
     provenance: dict[str, str]
     warnings: list[str]
+
+
+class RecipeReadIn(BaseModel):
+    # A model-catalog variant or an LLMService (YAML), a recipe, or a command line.
+    text: str
+
+
+@router.post("/recipe", summary="Read a recipe from a variant, an LLMService or a command line")
+async def read_recipe_text(body: RecipeReadIn, _: User = Depends(get_current_user)):
+    """What a campaign started from this text would launch: the recipe, as
+    YAML too, what the reading noticed, what would refuse it, and the pods it
+    makes. Never saves anything."""
+    import yaml as _yaml
+
+    from app.control.recipe import importer
+    from app.control.recipe import shape as recipe_shape
+    from app.control.recipe.check import recipe_problems, recipe_warnings
+    from app.control.recipe.render import chart_commands
+
+    try:
+        imported = importer.parse(body.text)
+    except importer.NotARecipe as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+    recipe = imported.recipe
+    return {
+        "source": imported.source,
+        "recipe": recipe.model_dump(),
+        "yaml": _yaml.safe_dump(recipe.model_dump(), sort_keys=False, width=1000),
+        "engine": recipe.engine,
+        "image": recipe.image,
+        "served_model_name": recipe.served_name,
+        "notes": imported.notes,
+        "problems": recipe_problems(recipe),
+        "warnings": recipe_warnings(recipe),
+        "shape": recipe_shape(recipe).payload(),
+        "commands": chart_commands(recipe),
+    }
 
 
 @router.post(
@@ -299,10 +339,17 @@ async def _benchmark_estimates(body: CampaignCreate) -> dict[str, float | None]:
         return {}
 
 
+def _read_recipe(body: CampaignCreate) -> None:
+    problem = read_recipe(body)
+    if problem:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, problem)
+
+
 async def _create(session: AsyncSession, user: User, body: CampaignCreate) -> Campaign:
     """Validate and save a campaign. The one path every way of making one takes
     — the form, an imported spec, a clone, a posted draft — so a rule added here
     holds for all of them."""
+    _read_recipe(body)
     # The cheap refusal first, before a workload is created on LLMBench.
     if body.engine not in ALLOWED_ENGINES:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "engine must be sglang|vllm")
@@ -311,7 +358,7 @@ async def _create(session: AsyncSession, user: User, body: CampaignCreate) -> Ca
     if errors:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, errors[0])
     campaign = Campaign(owner_id=user.id, **body.model_dump(
-        exclude={"extensions", "benchmark_spec", "verify_benchmark_spec"}))
+        exclude={"extensions", "benchmark_spec", "verify_benchmark_spec", "recipe_text"}))
     timing.set_priors(campaign, await _benchmark_estimates(body))
     # A campaign that carries a clock starts under it, not in draft: leaving it
     # DRAFT would mean someone still has to press Start, which is exactly the
@@ -591,6 +638,8 @@ class PreflightRequest(BaseModel):
     service_port: int = 28200
     extra_volumes: dict[str, str] = Field(default_factory=dict)
     search_space: dict = Field(default_factory=dict)
+    # The campaign's recipe, when it has one: cards are counted on it.
+    recipe: dict = Field(default_factory=dict)
     # The two benchmarks and the two objectives, so the check can say whether
     # each one can actually report what its objective ranks on.
     benchmark_slug: str = ""
@@ -668,7 +717,7 @@ def _run_preflight(
     Runs in a worker thread: it is ssh, and a form that blocks the event loop
     for two seconds per machine is a form nobody waits for.
     """
-    widest = pf.widest_candidate(body.search_space)
+    widest = pf.widest_candidate(body.search_space, body.recipe)
     space_check = pf.space_check(
         candidate_count(body.search_space or {}), space_errors(body.search_space or {})
     )
@@ -838,6 +887,61 @@ async def campaign_preflight(
     return await preflight(body, _, session)
 
 
+@router.post(
+    "/{campaign_id}/engine-vocabulary",
+    summary="Read the engine image's flags and environment variables now",
+    description="Runs the vocabulary probe in the campaign's image on its first machine "
+    "(a throwaway container, no cards) and stores what it read. A policy session reads "
+    "it by itself when the image has none; this re-reads on demand, e.g. after the "
+    "image's tag moved. Takes a minute or more: the engine is imported.",
+)
+async def read_engine_vocabulary(
+    campaign_id: int,
+    _: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_async_session),
+):
+    from app.control.engines import model_facts, vocabulary_store
+    from app.control.launch.base import LaunchDeferred
+
+    campaign = await session.get(Campaign, campaign_id)
+    if campaign is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "no such campaign")
+    names = list(campaign.machine_names or [])
+    machine = (
+        await session.execute(select(Machine).where(Machine.name.in_(names)))
+    ).scalars().first() if names else None
+    if machine is None:
+        raise HTTPException(status.HTTP_409_CONFLICT, "the campaign names no machine to read on")
+    info = MachineInfo.of(machine)
+    driver = get_driver(machine.driver or "ssh_docker", cluster_id=machine.cluster_id)
+    try:
+        fields = await anyio.to_thread.run_sync(
+            vocabulary_store.read_image, driver, info, campaign.engine, campaign.image
+        )
+        model = (
+            await anyio.to_thread.run_sync(
+                model_facts.read_model, driver, info, campaign.image, campaign.model_path,
+                get_settings().engine_vocab_timeout_seconds,
+            )
+            if campaign.model_path else None
+        )
+    except LaunchDeferred as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+    row = EngineVocabulary(**fields)
+    session.add(row)
+    if model is not None:
+        session.add(ModelConfig(**model))
+    await session.commit()
+    kinds = [e.get("kind") for e in fields["entries"]]
+    return {
+        "id": row.id, "status": row.status, "engine_version": row.engine_version,
+        "image_digest": row.image_digest, "flags": kinds.count("flag"),
+        "env": kinds.count("env"), "notes": row.notes,
+        "model": {"status": model["status"], "facts": model["facts"], "notes": model["notes"]}
+        if model is not None else None,
+    }
+
+
 @router.get(
     "/{campaign_id}/schedule",
     summary="When this campaign is awake",
@@ -939,6 +1043,40 @@ class ForceStartRequest(BaseModel):
     )
 
 
+def _require_search_time(campaign: Campaign, hours: int) -> None:
+    """409 when a policy night of `hours` would have no time to search.
+
+    The end of the window is held back to validate the contenders; a window
+    no longer than that, plus one launch, finalizes the policy the moment it
+    starts, and the campaign ends "done" with nothing run. Before any run has
+    come up, each launch is budgeted the whole model load limit, which is
+    what makes the hold-back long.
+    """
+    reserve = policy_lifecycle.reserve_minutes(campaign, None)
+    per_launch = policy_lifecycle.contender_minutes(campaign)
+    if hours * 60 >= reserve + per_launch:
+        return
+    _, startup = policy_lifecycle.contender_parts(campaign)
+    knobs = policy_lifecycle.settings_of(campaign)
+    if knobs.validation_reserve_minutes is not None:
+        made_of = "policy_settings.validation_reserve_minutes"
+    else:
+        made_of = (
+            f"{policy_lifecycle.validation_rounds(campaign, None)} validation launch(es) "
+            f"of about {per_launch} min, {startup} min of each loading the model"
+        )
+        if knobs.model_startup_minutes is None and timing.startup_minutes(campaign) is None:
+            made_of += " (the model load limit, until a run of this campaign has come up)"
+    need = -(-(reserve + per_launch) // 60)
+    raise HTTPException(
+        status.HTTP_409_CONFLICT,
+        f"a {hours} h window leaves no time to search: its last {reserve} min are held "
+        f"back for validation ({made_of}). Start it for at least {need} h, or set "
+        "policy_settings.model_startup_minutes or validation_reserve_minutes to what "
+        "this model needs.",
+    )
+
+
 @router.post(
     "/{campaign_id}/force-start",
     response_model=CampaignOut,
@@ -960,6 +1098,8 @@ async def force_start(
 
     now = datetime.now(UTC)
     until = now + timedelta(hours=body.hours or _FORCE_START_MAX_HOURS)
+    if campaign.policy_id:
+        _require_search_time(campaign, body.hours or _FORCE_START_MAX_HOURS)
     campaign.status = CampaignStatus.ACTIVE.value
     campaign.override_until = until
     # The window the rest of the loop reads. Writing it here is what makes the
@@ -1148,6 +1288,7 @@ async def list_candidates(
     _: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_async_session),
 ):
+    campaign = await session.get(Campaign, campaign_id)
     candidates = (
         (
             await session.execute(
@@ -1161,7 +1302,8 @@ async def list_candidates(
     # is what the UI shows, rather than a second tp×dp×pp implementation.
     return [
         CandidateOut.model_validate(c).model_copy(
-            update={"cards": 0 if is_in_place_baseline(c) else cards_used(c.config),
+            update={"cards": 0 if is_in_place_baseline(c) else (
+                        config_cards(campaign, c.config) if campaign else cards_used(c.config)),
                     "is_baseline": is_baseline_candidate(c)}
         )
         for c in candidates

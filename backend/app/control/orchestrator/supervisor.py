@@ -21,6 +21,7 @@ from sqlalchemy.orm import Session
 
 from app import plugins
 from app.control.baseline import resolve_baseline
+from app.control.engines.env_keys import split_env
 from app.control.launch import (
     DeploymentDriver,
     DeploymentState,
@@ -31,17 +32,27 @@ from app.control.launch import (
     get_driver,
     merge_volumes,
 )
+from app.control.launch.clusters import resolve_cluster
 from app.control.launch.failures import (
     RELEASED,
     classify_exit,
     classify_failure,
+    first_exception,
     is_infrastructure,
     is_transient_placement,
     restart_kind,
 )
+from app.control.managed import stop_reason
 from app.control.orchestrator import schedule as sched
 from app.control.orchestrator import timing
-from app.control.orchestrator.container_logs import Snapshots, clip, read_text, with_head
+from app.control.orchestrator.container_logs import (
+    Snapshots,
+    clip,
+    collapse_progress,
+    read_text,
+    tail_by_section,
+    with_head,
+)
 from app.control.orchestrator.groups import members_by_rank
 from app.control.orchestrator.lifecycle import (
     USER_STOP_ERROR,
@@ -68,6 +79,7 @@ from app.control.orchestrator.machine_queue import campaign_key, session_key, wa
 from app.control.orchestrator.occupancy import holds, reservations_on
 from app.control.orchestrator.packing import Placement, choose_next, free_indices
 from app.control.orchestrator.states import can_transition
+from app.control.recipe.campaign import base_recipe, config_cards, recipe_for, split_flat
 from app.control.run_nodes import machine_hosts_live_gang, nodes_of, run_ids_on_machine
 from app.control.search import CandidateConfig
 from app.control.search.space import expand
@@ -114,6 +126,7 @@ from app.db.models import (
     is_in_place_baseline,
 )
 from app.evaluation import (
+    EvalOutcome,
     EvalStatus,
     Evaluator,
     EvaluatorBusy,
@@ -170,6 +183,7 @@ MAX_ATTEMPTS_PER_CANDIDATE = 3
 # How much of a captured log is kept in the database: the end, where a crash
 # explains itself. Enough for a Python traceback and the lines before it.
 LOG_TAIL_CHARS = 64_000
+CRASHED = "container crashed; see log"
 
 # Where a multi-node run's rendezvous port is searched from, on the master. Above
 # the usual service ports and outside the k8s NodePort range; the allocator walks
@@ -267,6 +281,9 @@ class Supervisor:
         # Runs whose final log was read on the way to _finish (a crash, a failed
         # benchmark), so _finish does not read it a second time.
         self._final_logs: set[int] = set()
+        # Health checks in flight, by run: the check runs in the background
+        # and is polled on later ticks (_health_outcome).
+        self._health_refs: dict[int, str] = {}
 
     @property
     def datasets(self) -> DatasetProfileClient:
@@ -884,6 +901,11 @@ class Supervisor:
             return self.driver
         key = (wanted, cluster_id)
         cached = self._drivers.get(key)
+        if wanted == "k8s" and cluster_id and cached is not None:
+            # The resolver refreshes DB settings on its TTL. A long-lived
+            # worker must adopt edits to the public endpoint without restart.
+            if cached.settings != resolve_cluster(cluster_id):
+                cached = None
         if cached is None:
             cached = get_driver(wanted, cluster_id=cluster_id)
             self._drivers[key] = cached
@@ -907,7 +929,9 @@ class Supervisor:
         ).all()
         for event in stop_events:
             run = live_runs.pop(event.run_id, None)
-            if run is None:
+            # Already ended earlier in this loop: stopping a policy's launch
+            # stops the benchmarks on it, which have stop requests of their own.
+            if run is None or run.status in {s.value for s in TERMINAL_RUN_STATES}:
                 continue
             if run.llmbench_submission_id:
                 self.bench.cancel(run.llmbench_submission_id)
@@ -1174,7 +1198,7 @@ class Supervisor:
             self._maybe_finish_campaign(session, campaign)
             return False
         by_id = {c.id: c for c in pending}
-        placements = [Placement(c.id, _cards_used(c.config)) for c in pending]
+        placements = [Placement(c.id, config_cards(campaign, c.config)) for c in pending]
 
         # A group campaign places a GANG, not a run on one machine: the group is
         # the unit, and the single-machine packer below would put a 2-node config
@@ -1643,16 +1667,21 @@ class Supervisor:
         self, session: Session, campaign: Campaign, machine: Machine | None = None
     ) -> Baseline | None:
         """The production reference for what this campaign tunes, resolved by
-        card type. A machine pins the card type; without one, the first usable
-        machine's does — a campaign's machines are one card type in practice."""
-        card_type = machine.gpu_type if machine is not None else ""
-        if not card_type:
-            card_type = next(
-                (m.gpu_type for m in self._usable_machines(session, campaign) if m.gpu_type),
-                "",
-            )
+        card type."""
         return resolve_baseline(
-            session, campaign.served_model_name, campaign.engine, card_type or ""
+            session, campaign.served_model_name, campaign.engine,
+            self._campaign_card_type(session, campaign, machine),
+        )
+
+    def _campaign_card_type(
+        self, session: Session, campaign: Campaign, machine: Machine | None = None
+    ) -> str:
+        """A machine pins the card type; without one, the first usable
+        machine's does — a campaign's machines are one card type in practice."""
+        if machine is not None and machine.gpu_type:
+            return machine.gpu_type
+        return next(
+            (m.gpu_type for m in self._usable_machines(session, campaign) if m.gpu_type), ""
         )
 
     def _has_baseline_candidate(
@@ -1800,8 +1829,9 @@ class Supervisor:
 
         elif run.status == RunStatus.HEALTH_CHECK.value:
             campaign = run.campaign
-            ref = self.health.start(run.endpoint_url, campaign.served_model_name, {})
-            outcome = self.health.poll(ref)
+            outcome = self._health_outcome(run, campaign.served_model_name)
+            if outcome is None:
+                return
             self._record_result(session, run, "health", outcome)
             if outcome.status != EvalStatus.PASSED:
                 self._fail(session, run, "health_check", outcome.error)
@@ -1867,6 +1897,20 @@ class Supervisor:
                 if now is not None and now != run.engine_incarnation:
                     self._fail_restarted(session, run, driver, handle, now)
 
+    def _health_outcome(self, run: Run, served_model: str) -> EvalOutcome | None:
+        """The run's health check: started on the first tick that asks, its
+        outcome on the tick it is done, None in between. Up to
+        health_probe_timeout_seconds pass in between; the ticks go on."""
+        ref = self._health_refs.get(run.id)
+        if ref is None:
+            ref = self.health.start(run.endpoint_url, served_model, {"run_id": run.id})
+            self._health_refs[run.id] = ref
+        outcome = self.health.poll(ref)
+        if outcome.status == EvalStatus.RUNNING:
+            return None
+        del self._health_refs[run.id]
+        return outcome
+
     def _fail_restarted(self, session: Session, run: Run, driver, handle, now: str) -> None:
         """A serving engine came back as a new process. Which way decides
         whose fault it was: a process that exited and was restarted in its pod
@@ -1903,8 +1947,9 @@ class Supervisor:
         served_model = campaign.served_model_name
 
         if run.status == RunStatus.HEALTH_CHECK.value:
-            ref = self.health.start(run.endpoint_url, served_model, {})
-            outcome = self.health.poll(ref)
+            outcome = self._health_outcome(run, served_model)
+            if outcome is None:
+                return
             if outcome.status != EvalStatus.PASSED and _looks_unreachable(outcome.error):
                 # Nothing is listening yet — an engine that has just come up
                 # loads its weights for minutes. Wait, as an experiment waiting
@@ -1919,7 +1964,7 @@ class Supervisor:
                 self._fail(
                     session, run, "endpoint_unreachable",
                     f"nothing answering at {run.endpoint_url} after "
-                    f"{self.settings.ready_timeout_minutes} min: {outcome.error}",
+                    f"{self._ready_minutes(run)} min: {outcome.error}",
                 )
                 return
             self._record_result(session, run, "health", outcome)
@@ -1957,13 +2002,20 @@ class Supervisor:
         live_runs = session.scalars(
             select(Run).where(Run.status.not_in([s.value for s in TERMINAL_RUN_STATES]))
         ).all()
+        why: dict[int, str] = {}
         for run in live_runs:
             window_end = _as_utc(run.campaign.window_end)
             if window_end is not None and _now() >= window_end:
                 if run.llmbench_submission_id:
                     self.bench.cancel(run.llmbench_submission_id)
                 timing.record_cut(session, run, stage_of_run(run), _now())
-                self._finish(session, run, RunStatus.KILLED, error="window cutoff")
+                # A window a plugin shut to stop the campaign (a Hub abort) is
+                # a stop, not the clock: say which.
+                if run.campaign_id not in why:
+                    why[run.campaign_id] = (
+                        stop_reason(session, run.campaign) or "window cutoff"
+                    )
+                self._finish(session, run, RunStatus.KILLED, error=why[run.campaign_id])
 
     # --------------------------------------------------------------- helpers
 
@@ -1998,7 +2050,7 @@ class Supervisor:
             # variants if each is credited with the GPUs it occupies. A baseline
             # now carries production's real engine args, so it is counted the
             # same way as any candidate — no special case.
-            cards = _cards_used(config)
+            cards = config_cards(campaign, config)
             # `cards` is the config's WORLD size (tp×dp×pp), which is the whole
             # deployment for a single node and the total across the gang for a
             # multi-node one. LLMBench card-normalizes per machine, so the two
@@ -2097,7 +2149,19 @@ class Supervisor:
         # The group is the fabric authority: its env and mounts apply to every
         # rank, and its NCCL settings win over a campaign's because they describe
         # the interconnect the boxes are actually wired with.
-        env = dict(campaign.extra_env or {})
+        # The config's own `env.<NAME>` keys go over the campaign's env; the
+        # group's fabric settings still win over both.
+        stored = base_recipe(campaign)
+        # Every run carries its recipe: the LLMService driver launches it as
+        # is. The flat fields below are for the drivers that take them
+        # (ssh_docker, the Deployment kind), which apply flags and env only.
+        recipe = recipe_for(campaign, run.candidate.config or {})
+        if stored is not None:
+            engine_args, config_env = dict(recipe.flags()), dict(recipe.env())
+        else:
+            flat, _ = split_flat(run.candidate.config or {})
+            engine_args, config_env = split_env(flat)
+        env = {**(campaign.extra_env or {}), **config_env}
         volumes = dict(campaign.extra_volumes or {})
         group = self._group_for_run(session, run)
         if group is not None:
@@ -2120,11 +2184,15 @@ class Supervisor:
         return LaunchSpec(
             run_id=run.id,
             machine=master_info,
-            engine=campaign.engine,
-            image=campaign.image,
+            engine=recipe.engine if stored is not None else campaign.engine,
+            image=recipe.image if stored is not None else campaign.image,
             model_path=campaign.model_path,
-            served_model_name=campaign.served_model_name,
-            engine_args=run.candidate.config,
+            served_model_name=(
+                recipe.served_name if stored is not None else campaign.served_model_name
+            ),
+            recipe=recipe.model_dump(),
+            chart_version=(campaign.chart_version or "") if stored is not None else "",
+            engine_args=engine_args,
             gpu_indices=list(nodes[0].gpu_indices) if nodes else list(run.gpu_indices or []),
             port=run.service_port or campaign.service_port,
             env=env,
@@ -2225,6 +2293,9 @@ class Supervisor:
             self._capture_engine_log(session, run)
             cleaned = self._begin_teardown(session, run)
         self._final_logs.discard(run.id)
+        ref = self._health_refs.pop(run.id, None)
+        if ref is not None:
+            self.health.cancel(ref)
         if error:
             run.error = error
         run.finished_at = _now()
@@ -2361,7 +2432,7 @@ class Supervisor:
         run: Run,
         handle,
         failure_class: str | None = None,
-        error: str = "container crashed; see log",
+        error: str = CRASHED,
     ) -> None:
         driver = self._driver_for(handle.machine) if handle is not None else self.driver
         log_text = ""
@@ -2372,6 +2443,12 @@ class Supervisor:
         self._save_run_log(run, log_text)
         self._final_logs.add(run.id)
         resolved_class = failure_class or classify_failure(log_text)
+        if error == CRASHED:
+            # Say what the engine raised, so the run reads as its reason rather
+            # than as a pointer to a log of several pods.
+            raised = first_exception(log_text)
+            if raised:
+                error = f"container crashed: {raised}"
         # A container that never started leaves no log to classify (a bad model
         # mount, an unpullable image, an unschedulable pod). The substrate still
         # knows why, so ask it and surface that real reason instead of the
@@ -2473,12 +2550,15 @@ class Supervisor:
             return
         log_path = os.path.join(self.settings.run_log_dir, f"run-{run.id}.log")
         log_text = clip(
-            with_head(read_text(run.log_path or log_path) or (run.log_tail or ""), log_text),
+            with_head(
+                read_text(run.log_path or log_path) or (run.log_tail or ""),
+                collapse_progress(log_text),
+            ),
             self.settings.log_file_max_bytes,
         )
         # In the row first: the file below is on this worker's disk, which the
         # API can read only when the two share a volume.
-        run.log_tail = log_text[-LOG_TAIL_CHARS:]
+        run.log_tail = tail_by_section(log_text, LOG_TAIL_CHARS)
         try:
             os.makedirs(self.settings.run_log_dir, exist_ok=True)
             with open(log_path, "w", encoding="utf-8") as f:
@@ -2516,12 +2596,24 @@ class Supervisor:
             snapshot["card_type"] = card_type
         snapshot["gpu_indices"] = list(run.gpu_indices or [])
         run.env_snapshot = snapshot
+        # The first run of a recipe campaign whose recipe names a range pins
+        # the version the operator installed: every later trial renders it.
+        campaign = run.campaign
+        resolved = str(snapshot.get("chart_version") or "")
+        if resolved and campaign is not None and campaign.recipe and not campaign.chart_version:
+            campaign.chart_version = resolved
+            logger.info("campaign %d pinned chart version %s", campaign.id, resolved)
+
+    def _ready_minutes(self, run: Run) -> int:
+        """How long this run's engine may take to answer once it is up: its
+        campaign's ready timeout."""
+        return timing.ready_timeout_minutes(run.campaign)
 
     def _ready_timed_out(self, run: Run) -> bool:
         if run.started_at is None:
             return False
         started = _as_utc(run.started_at)
-        return _now() - started > timedelta(minutes=self.settings.ready_timeout_minutes)
+        return _now() - started > timedelta(minutes=self._ready_minutes(run))
 
     def _startup_timed_out(self, run: Run, driver, handle) -> tuple[bool, str, str]:
         """Has a coming-up run overrun its budget — and if so, which one.
@@ -2543,13 +2635,14 @@ class Supervisor:
             status = driver.startup_status(handle)
         except Exception:
             status = {"phase": "unknown", "running_since": None}
-        ready_limit = timedelta(minutes=self.settings.ready_timeout_minutes)
+        ready_minutes = self._ready_minutes(run)
+        ready_limit = timedelta(minutes=ready_minutes)
         pull_limit = timedelta(minutes=self.settings.image_pull_timeout_minutes)
 
         running_since = _parse_rfc3339(status.get("running_since"))
         if status.get("phase") == "running" and running_since is not None:
             if now - running_since > ready_limit:
-                return (True, f"engine not ready {self.settings.ready_timeout_minutes} "
+                return (True, f"engine not ready {ready_minutes} "
                               "min after its container started", "")
             return (False, "", "")
         if status.get("phase") == "pulling":
@@ -2593,7 +2686,7 @@ class Supervisor:
             return (False, "", "")
         # Unknown substrate: the original single-timeout behaviour, unchanged.
         if now - started > ready_limit:
-            return (True, f"not ready after {self.settings.ready_timeout_minutes} min", "")
+            return (True, f"not ready after {ready_minutes} min", "")
         return (False, "", "")
 
     def _record_result(self, session: Session, run: Run, source: str, outcome) -> None:

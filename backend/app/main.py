@@ -13,6 +13,7 @@ from app.api import (
     baselines,
     benchmarks,
     campaigns,
+    catalog,
     catalog_export,
     clusters,
     datasets,
@@ -24,6 +25,7 @@ from app.api import (
     policy_sessions,
     runs,
     search_spaces,
+    settings,
 )
 from app.core.config import get_settings
 
@@ -153,10 +155,12 @@ app.include_router(objectives.router, prefix=api_prefix)
 app.include_router(datasets.router, prefix=api_prefix)
 app.include_router(benchmarks.router, prefix=api_prefix)
 app.include_router(baselines.router, prefix=api_prefix)
+app.include_router(catalog.router, prefix=api_prefix)
 app.include_router(catalog_export.router, prefix=api_prefix)
 app.include_router(policies.router, prefix=api_prefix)
 app.include_router(policy_sessions.router, prefix=api_prefix)
 app.include_router(agent.router, prefix=api_prefix)
+app.include_router(settings.router, prefix=api_prefix)
 # After the platform's own, so a plugin cannot shadow a platform route.
 plugins.mount(app, plugins.enabled(), api_prefix)
 

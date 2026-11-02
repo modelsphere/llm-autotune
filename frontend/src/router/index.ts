@@ -21,6 +21,8 @@ export const router = createRouter({
     { path: '/runs', component: () => import('../views/RunsView.vue') },
     { path: '/resources', component: () => import('../views/ResourcesView.vue') },
     { path: '/api-keys', component: () => import('../views/ApiKeysView.vue') },
+    // Admins only (its API refuses anyone else); reached from the user menu.
+    { path: '/settings', component: () => import('../views/SettingsView.vue') },
     // Agent-written reports: off unless built with VITE_AGENT_REPORTS=1, as the
     // backend's agent API is off unless enabled.
     ...(AGENT_REPORTS

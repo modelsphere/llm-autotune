@@ -127,7 +127,38 @@ class CatalogExportOut(BaseModel):
     # Where the perf report came from: "saved:<report id>"; "" when none ships.
     report_source: str = ""
     hf: str = ""
+    # A catalog server and its write key are set (Settings), so the form
+    # offers Publish to catalog next to the download.
+    catalog_writable: bool = False
+    catalog_url: str = ""
     display_name: str = ""
     description: str = ""
     family: str = ""
     tags: list[str] = Field(default_factory=list)
+
+
+class CatalogPublishRequest(CatalogExportRequest):
+    # True: check every write and commit nothing (what the form shows first).
+    dry_run: bool = True
+    # The commit message; the server's default names the file and version.
+    message: str = ""
+
+
+class CatalogWriteOut(BaseModel):
+    path: str
+    action: str  # add_model | add | replace | metadata
+    status: str  # ok | unchanged | failed
+    commit: str | None = None
+    version: str = ""
+    digest: str = ""
+    message: str = ""
+
+
+class CatalogPublishOut(BaseModel):
+    url: str
+    dry_run: bool
+    ok: bool
+    writes: list[CatalogWriteOut] = Field(default_factory=list)
+    message: str = ""
+    # The export as published: without a report, so with no tuning entry.
+    export: CatalogExportOut | None = None

@@ -29,8 +29,9 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.control.search.space import prune_inactive
 from app.datasets import pinning
-from app.db.models import is_baseline_candidate
+from app.db.models import is_baseline_candidate, is_baseline_config
 from app.evaluation.aggregate import summary_of
 from app.hardware import normalize_gpu_type
 from app.objective import sort_key, target_metric
@@ -60,22 +61,43 @@ def leaderboard_entries(campaign, rows: list[tuple[Any, Any, Any]]) -> list[Lead
     result — the caller's query, because that part differs between an async
     endpoint and the worker's sync session.
     """
-    # The production baseline this campaign measured, per stage. It rode the
+    # The production baseline this campaign measured, per stage: the MEAN of
+    # every measurement of it, so three nights that each measured production
+    # rank against one reference rather than whichever came last. It rode the
     # same dataset as the candidates it is compared to, so a candidate expressed
     # as a multiple of it is comparable across nights even as the dataset (and
-    # the absolute numbers) drift. One baseline per stage; the last wins if a
-    # campaign somehow ran more than one. Its card type is remembered too: a
-    # candidate is only normalized against a baseline measured on the SAME chip.
-    baseline_by_stage: dict[str, float] = {}
-    baseline_card_by_stage: dict[str, str] = {}
+    # the absolute numbers) drift. A candidate is only normalized against
+    # measurements taken on the SAME chip: the reference card is the one most of
+    # the stage's baseline runs used, and only those enter the mean.
+    production = _production_configs(campaign, rows)
+
+    def _is_baseline(candidate) -> bool:
+        # A policy's search measures production too — its anchor runs carry
+        # production's exact config but no baseline flag. They are measurements
+        # of the reference all the same. Only in the search: at validation the
+        # platform flags its own production run, and a finalist that happens to
+        # be production's config stays a finalist (history reads its ratio as
+        # the validation's noise).
+        if is_baseline_candidate(candidate):
+            return True
+        return stage_of(candidate) != VERIFY and dict(candidate.config or {}) in production
+
+    measured: dict[str, list[tuple[float, str]]] = {}
     for _run, candidate, result in rows:
-        if not is_baseline_candidate(candidate):
+        if not _is_baseline(candidate):
             continue
         stage = stage_of(candidate)
         value = _score(result, summary_of(result, stage_objective(campaign, stage)))
         if value:  # a zero or missing reference cannot normalize anything
-            baseline_by_stage[stage] = value
-            baseline_card_by_stage[stage] = card_type_of(_run)
+            measured.setdefault(stage, []).append((value, card_type_of(_run)))
+    baseline_by_stage: dict[str, float] = {}
+    baseline_card_by_stage: dict[str, str] = {}
+    for stage, values in measured.items():
+        cards = [card for _value, card in values]
+        card = max(dict.fromkeys(cards), key=cards.count)
+        same = [value for value, c in values if c == card]
+        baseline_by_stage[stage] = sum(same) / len(same)
+        baseline_card_by_stage[stage] = card
 
     entries: list[LeaderboardEntry] = []
     for run, candidate, result in rows:
@@ -108,7 +130,7 @@ def leaderboard_entries(campaign, rows: list[tuple[Any, Any, Any]]) -> list[Lead
                 comparable=pinning.comparable(campaign, result.metrics or {}),
                 dataset_build_id=replayed[0] if replayed else "",
                 vs_baseline=(score / reference) if (reference and score is not None) else None,
-                is_baseline=is_baseline_candidate(candidate),
+                is_baseline=_is_baseline(candidate),
                 card_type=card_type,
             )
         )
@@ -132,6 +154,28 @@ def leaderboard_entries(campaign, rows: list[tuple[Any, Any, Any]]) -> list[Lead
         )
     )
     return entries
+
+
+def _production_configs(campaign, rows: list[tuple[Any, Any, Any]]) -> list[dict]:
+    """Production's config, as the campaign's candidates spell it: whatever its
+    flagged baseline candidates carry. A policy campaign that has not validated
+    yet has none, and its production is the campaign's base (prune_inactive
+    gives it the canonical form a policy's configs take).
+
+    A recipe campaign's production is the recipe as written: no changes, the
+    base alone, which is often the empty config."""
+    recipe = bool(getattr(campaign, "recipe", None))
+    configs = [
+        dict(candidate.config or {})
+        for _run, candidate, _result in rows
+        if is_baseline_candidate(candidate) and (candidate.config or recipe)
+        and not is_baseline_config(candidate.config)
+    ]
+    if not configs and getattr(campaign, "policy_id", None) is not None:
+        space = campaign.search_space or {}
+        if space.get("base") or recipe:
+            configs.append(prune_inactive(dict(space.get("base") or {}), space))
+    return configs
 
 
 def winner(entries: list[LeaderboardEntry]) -> LeaderboardEntry | None:

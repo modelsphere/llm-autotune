@@ -8,6 +8,9 @@
 export function apiErrorText(error: unknown, fallback: string): string {
   const detail = (error as any)?.response?.data?.detail
   if (typeof detail === 'string' && detail) return detail
+  // A structured refusal carries its sentence as `message`, next to the data
+  // a dialog shows (the runs in the way, a probe's findings).
+  if (typeof detail?.message === 'string' && detail.message) return detail.message
   if (Array.isArray(detail)) {
     const lines = detail
       .map((d: any) => {

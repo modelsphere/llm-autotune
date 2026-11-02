@@ -6,10 +6,10 @@ A **Replay** workload sends each candidate recorded production requests
 instead of random prompts, so the measurement reflects real prompt lengths
 and prefix-cache reuse. The requests come from a **dataset**: a sample of one
 model's traffic that LLMBench collects from the gateway's request logs in
-VictoriaLogs. **Automatic Tuning ▸ Datasets** sets datasets up and shows what
+VictoriaLogs. **Datasets** (top menu) sets datasets up and shows what
 each sample holds.
 
-![The Datasets page, with one dataset's sample opened](images/datasets-list.png)
+![The Datasets page: totals, how collection works, and one card per dataset](images/datasets-list.png)
 
 ## Requirements
 
@@ -61,17 +61,30 @@ sample, which takes seconds to minutes.
 | **Timezone** | UTC | the clock that slices longer than an hour align to |
 | **ID** | from the name | the dataset's name on LLMBench, which cannot be changed later |
 
-## The list
+## The page
 
-- **Current sample**: the request count and when it was taken; *Collecting…*
-  while a new sample is being collected; the error if the last attempt
-  failed.
-- **New sample**: the interval and when the next sample is due.
-- **Campaigns**: the campaigns that replay the dataset.
+At the top, four totals: the datasets, the requests in their samples, what is
+being collected (or held steady for campaigns), and the campaigns that replay
+them. Below, **How collection works** draws the path from the gateway's logs
+to a replay in five steps; **Hide** folds it away.
 
-The arrow on a row opens the sample's details: its traffic window, prompt and
-output lengths, the prefix-cache hit rate, prompt lengths by band, and the
-recent samples with their errors.
+Each dataset is a card:
+
+- **The header**: its name and state (*Ready*, *Collecting*, *Collection
+  failed*, *Not collected yet*), then the model, the nodes, the sample size
+  and window, and its ID. While a sample is being collected, its progress
+  shows under the header; a failed attempt shows its error.
+- **Sample in use**: the request count, when it was taken, the traffic window
+  it covers, and how much of the prompt tokens the serving engine had cached.
+- **Prompt lengths**: the share of requests in each prompt-length band, with
+  the median and p90 prompt and output lengths.
+- **Next sample**: the interval and when the next sample is due, or the lock
+  that holds it back while a campaign measures on the current one.
+  **Recent collections** draws the last few attempts, green for a sample and
+  red for a failure; hover one for its time, size and error.
+- **Replayed by**: the campaigns that replay the dataset, as chips. A lock
+  marks one measuring on the current sample; the dot is the campaign's
+  status. The first few show, and **+N more** lists the rest.
 
 - **Collect now** starts a new sample immediately.
 - **Edit** changes the settings. They apply from the next sample.
@@ -79,7 +92,7 @@ recent samples with their errors.
   campaign replays it.
 
 Only the user who created a dataset, or an admin, can edit or delete it.
-Datasets an admin set up directly on LLMBench are listed with an *LLMBench*
+Datasets an admin set up directly on LLMBench carry an *on LLMBench*
 tag. They can be replayed and collected here, but are edited on LLMBench.
 
 ## New samples and running campaigns
@@ -89,7 +102,7 @@ compare. It uses the dataset's current sample, or with **Resample at start**
 (on the **Benchmark** step) collects a fresh one first.
 
 A scheduled new sample does not replace the current one while an unfinished
-campaign (paused campaigns included) is measuring on it. The list shows
+campaign (paused campaigns included) is measuring on it. The card says it
 *waits for* that campaign, and the new sample is collected once it finishes.
 **Collect now** asks before replacing a sample a campaign is using: that
 campaign's later replay runs would use the new sample and be marked not
@@ -115,7 +128,7 @@ frozen). Every campaign that replays one sees exactly the same requests, on
 every night, so their results compare with each other; there is nothing to
 pin and nothing to resample.
 
-- **Frozen datasets**, below the list, shows them: how many requests, the size,
+- **Frozen datasets**, below the cards, shows them: how many requests, the size,
   where each came from (the profile and sample it was taken from), when it was
   frozen, and the campaigns here that replay it. *imported* marks an import.
 - To use one, choose it under **Frozen** in the **Replay** dataset list of a

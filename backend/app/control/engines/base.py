@@ -52,11 +52,17 @@ def render_args(engine_args: dict[str, Any], engine: str = "") -> list[str]:
     negatable few) and is omitted everywhere else — `--enable-x False` is
     parsed as "enabled" by both engines' argparse, and an invented `--no-x`
     on a store_true flag would crash the launch.
+
+    `env.<NAME>` keys are environment variables, not flags (env_keys.py):
+    they never reach the command line.
     """
+    from app.control.engines.env_keys import is_env_key
     from app.control.engines.flags import negated_flag, render_flag
 
     out: list[str] = []
     for key, value in sorted(engine_args.items()):
+        if is_env_key(key):
+            continue
         flag = render_flag(engine, key) if engine else flag_name(key)
         if isinstance(value, bool):
             if value:

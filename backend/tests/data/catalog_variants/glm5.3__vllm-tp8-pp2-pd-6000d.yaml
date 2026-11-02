@@ -1,0 +1,69 @@
+apiVersion: catalog.swiss/v2
+kind: Variant
+model: glm5.3
+id: vllm-tp8-pp2-pd-6000d
+version: 1.0.0
+servedName: glm-5.3
+engine: vllm
+chart:
+  name: vllm
+  version: '>=0.8.12'
+image:
+  repository: 4pdosc/vllm-openai
+  tag: v0.30.0-pd-fix1
+requires:
+  gpus: 1
+  topology: pd
+  rdma: true
+  gpuProduct:
+  - NVIDIA-RTX-6000D
+values:
+  model:
+    localPath: /data/models/GLM-5.3-NVFP4
+    mountPath: /models
+    hostPathType: Directory
+    contextLength: ''
+  modelCheck:
+    enabled: true
+    requiredGlobs:
+    - config.json
+    - '*.safetensors'
+  extraArgs:
+  - --pipeline-parallel-size=2
+  - --tensor-parallel-size=8
+  - --gpu-memory-utilization=0.80
+  - --max-model-len=1048576
+  - --max-num-seqs=20
+  - --trust-remote-code
+  - --enable-prefix-caching
+  - --enable-prompt-tokens-details
+  - --chat-template-content-format=string
+  - --tool-call-parser=glm47
+  - --enable-auto-tool-choice
+  - --reasoning-parser=glm45
+  - --max-num-batched-tokens=16384
+  env:
+  - name: PYTORCH_ALLOC_CONF
+    value: expandable_segments:False
+  - name: VLLM_FLASHINFER_AUTOTUNE_SKIP_OPS
+    value: trtllm::fused_moe::gemm1,trtllm::fused_moe::gemm2,fp8_gemm
+  hostNetwork: true
+  rdma:
+    enabled: true
+  shm:
+    enabled: true
+    sizeLimit: 32Gi
+  scaler:
+    enabled: false
+  pd:
+    enabled: true
+    colocate: false
+    transferBackend: mooncake
+    prefill:
+      replicas: 2
+      size: 2
+      gpus: '8'
+    decode:
+      replicas: 1
+      size: 2
+      gpus: '8'

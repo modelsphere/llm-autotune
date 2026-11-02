@@ -2,7 +2,7 @@
 
 # Running a campaign
 
-Each campaign has a page, opened from **Automatic Tuning ▸ Campaigns**. This
+Each campaign has a page, opened from **Campaigns**. This
 page covers starting, pausing and stopping a campaign, its schedule, and what
 the page shows while it runs. Results are covered in
 [Reading results](results.md).

@@ -8,7 +8,7 @@ An **objective** says what "better" means for a campaign:
 - a **direction**: maximize it (throughput) or minimize it (latency);
 - **redlines**, limits a config must stay within to rank at all.
 
-Objectives are under **Automatic Tuning ▸ Objectives**. A campaign copies its
+Objectives are under **Library ▸ Objectives**. A campaign copies its
 objective when it is created, so editing an objective later does not re-rank
 existing campaigns.
 

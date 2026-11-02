@@ -86,7 +86,8 @@ async def test_the_manifest_carries_the_forbidden_list_params_and_diagnostics(ni
         await session.commit()
     policy = await _boot(supervisor, driver, http)
     manifest = (await policy.get("/session")).json()
-    assert manifest["contract"]["version"] == "1.3"
+    version = tuple(int(p) for p in manifest["contract"]["version"].split("."))
+    assert version >= (1, 3)
     assert manifest["services"]["diagnostics"] is True
     assert manifest["policy"]["params"] == {"model": "some-llm", "effort": "high"}
     assert manifest["space_policy"]["forbidden"] == list(DEFAULT_FORBIDDEN_PARAMS)

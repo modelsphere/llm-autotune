@@ -12,6 +12,30 @@ from app.control.orchestrator.supervisor import Supervisor
 from tests.fakes import NullDriver
 
 
+def test_worker_adopts_edited_cluster_endpoint(monkeypatch):
+    from dataclasses import replace
+
+    from app.control.launch.clusters import K8sClusterSettings
+
+    current = K8sClusterSettings(
+        cluster_id=1, k8s_node_host="198.51.100.10", k8s_service_nodeport=31080,
+    )
+    monkeypatch.setattr("app.control.launch.k8s.resolve_cluster", lambda _: current)
+    monkeypatch.setattr(
+        "app.control.orchestrator.supervisor.resolve_cluster", lambda _: current,
+    )
+    sup = _supervisor_with(NullDriver())
+    machine = MachineInfo(name="gpu", host="h", driver="k8s", cluster_id=1)
+    original = sup._driver_for(machine)
+    assert sup._driver_for(machine) is original
+    current = replace(current, k8s_node_host="198.51.100.20", k8s_service_nodeport=31081)
+    refreshed = sup._driver_for(machine)
+    assert refreshed is not original
+    assert refreshed.settings.k8s_node_host == "198.51.100.20"
+    assert refreshed.settings.k8s_service_nodeport == 31081
+    assert sup._driver_for(machine) is refreshed
+
+
 def _supervisor_with(driver):
     sup = Supervisor(session_factory=lambda: None)
     sup.driver = driver  # the injection every tick-based test uses

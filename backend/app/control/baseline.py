@@ -7,12 +7,14 @@ same way — and so "does production already run this config" (the in-place
 shortcut) is decided by one comparison, not two that can disagree.
 """
 
+from dataclasses import dataclass
 from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.db.models import Baseline
+from app.control.launch_config import LaunchConfig
+from app.db.models import Baseline, Campaign
 
 
 def resolve_baseline(
@@ -54,3 +56,44 @@ def same_config(a: dict[str, Any] | None, b: dict[str, Any] | None) -> bool:
     expected to be placement-stripped already (baseline_engine_args does this),
     so this compares the tuning knobs only."""
     return _normalize(a) == _normalize(b)
+
+
+@dataclass(frozen=True)
+class Production:
+    """Production for a campaign, as the policy is told it and the platform
+    validates it: one definition, so the two can never measure different
+    things under the same name.
+
+    `config` is what a policy sends to launch it: the space's base and the
+    recorded Baselines args, over the campaign's anchor. `launch` is what that
+    runs — for a recipe campaign, the recipe with `config` applied, read the
+    way every starting config is read (LaunchConfig). `source` says where it
+    came from: "baselines" (a recorded reference), "recipe" (none recorded, so
+    the campaign's recipe as written) or "campaign" (neither: the campaign's
+    own fields and base)."""
+
+    config: dict[str, Any]
+    launch: LaunchConfig
+    source: str
+    baseline_id: int | None = None
+
+
+def production_for(session: Session, campaign: Campaign, card_type: str) -> Production:
+    from app.control.search.space import prune_inactive
+
+    recorded = resolve_baseline(session, campaign.served_model_name, campaign.engine, card_type)
+    space = campaign.search_space or {}
+    config = prune_inactive(
+        {**(space.get("base") or {}), **dict((recorded.engine_args if recorded else None) or {})},
+        space,
+    )
+    if recorded is not None:
+        source = "baselines"
+    else:
+        source = "recipe" if campaign.recipe else "campaign"
+    return Production(
+        config=config,
+        launch=LaunchConfig.from_campaign(campaign, config, gpu_type=card_type),
+        source=source,
+        baseline_id=recorded.id if recorded is not None else None,
+    )

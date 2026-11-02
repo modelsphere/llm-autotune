@@ -19,6 +19,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core import platform_settings
 from app.core.auth import get_current_user
 from app.core.config import get_settings
 from app.datasets import editor, refresh
@@ -44,17 +45,20 @@ class ValuesIn(BaseModel):
     hours: float = Field(24.0, gt=0, le=24 * 7)
 
 
-def _log_store(form_url: str = "") -> str:
-    return (form_url or get_settings().llmbench_victorialogs_url).strip().rstrip("/")
+async def _log_store(db: AsyncSession, form_url: str = "") -> str:
+    """The form's address, else Settings → External platforms, else the install's."""
+    if form_url.strip():
+        return form_url.strip().rstrip("/")
+    return (await platform_settings.resolve(db)).victorialogs_url
 
 
-def _require_log_store(form_url: str) -> str:
-    url = _log_store(form_url)
+async def _require_log_store(db: AsyncSession, form_url: str) -> str:
+    url = await _log_store(db, form_url)
     if not url:
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
-            "No VictoriaLogs address: enter it under Advanced, or set "
-            "llmbench.victoriaLogsUrl when installing.",
+            "No VictoriaLogs address: enter it under Advanced, set it in Settings, or "
+            "set llmbench.victoriaLogsUrl when installing.",
         )
     return url
 
@@ -165,7 +169,7 @@ async def list_datasets(
         "datasets": [_out(p, rows.get(p.get("name")), account, campaigns, user, now)
                      for p in profiles],
         "collector": collector,
-        "victorialogs_url": _log_store(),
+        "victorialogs_url": await _log_store(db),
         "llmbench_url": web,
     }
 
@@ -206,10 +210,14 @@ async def frozen_datasets(
 
 
 @router.post("/check", summary="Count what an unsaved dataset's filters match")
-async def check(form: DatasetForm, _user: User = Depends(get_current_user)):
+async def check(
+    form: DatasetForm,
+    _user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_async_session),
+):
     """How many requests in the last day match the form's model, nodes and
     filters. A failure comes back as `error`, for the form to show."""
-    url = _require_log_store(form.source_url)
+    url = await _require_log_store(db, form.source_url)
     hours = min(form.window_hours, CHECK_HOURS)
     try:
         result = await anyio.to_thread.run_sync(
@@ -227,12 +235,16 @@ async def check(form: DatasetForm, _user: User = Depends(get_current_user)):
 
 
 @router.post("/values", summary="Models or nodes the log store has seen")
-async def values(body: ValuesIn, _user: User = Depends(get_current_user)):
+async def values(
+    body: ValuesIn,
+    _user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_async_session),
+):
     """The models in the gateway's traffic, or the nodes serving one model,
     most requests first: what the form offers instead of asking for names.
     `victorialogs_url` is the install's address, which the form pre-fills."""
-    default = _log_store()
-    url = _log_store(body.source_url)
+    default = await _log_store(db)
+    url = await _log_store(db, body.source_url)
     if not url:
         return {"values": [], "error": "no VictoriaLogs address is configured",
                 "victorialogs_url": default}
@@ -259,7 +271,7 @@ async def create_dataset(
 ):
     """Creates the collection profile on LLMBench and asks for its first
     sample. `collect_error` says why that could not start, if it could not."""
-    url = _require_log_store(form.source_url)
+    url = await _require_log_store(db, form.source_url)
     if form.name and not editor.valid_slug(form.name):
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -305,7 +317,7 @@ async def update_dataset(
     row = await db.get(ReplayDataset, name)
     if not _may_edit(user, row):
         raise HTTPException(status.HTTP_403_FORBIDDEN, "only its creator or an admin may change it")
-    url = _require_log_store(form.source_url)
+    url = await _require_log_store(db, form.source_url)
 
     def _save():
         client = DatasetProfileClient()

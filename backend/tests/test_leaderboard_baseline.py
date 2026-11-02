@@ -176,3 +176,75 @@ async def test_a_run_on_another_card_is_not_normalized_and_sinks(client):
     # And it sinks below the on-chip entries despite the bigger raw number —
     # ranking an off-card run at the top is exactly the mistake this prevents.
     assert [e["run_id"] for e in board] == [2, 1, 3]
+
+
+async def test_several_baseline_measurements_rank_against_their_mean(client):
+    # Production measured twice (100k, 110k): one reference of 105k, not the last.
+    await _seed(client.factory, [
+        (CandidateKind.BASELINE.value, 100_000.0),
+        (CandidateKind.BASELINE.value, 110_000.0),
+        (CandidateKind.SEARCH.value, 126_000.0),
+    ])
+    board = (await client.get("/api/campaigns/1/leaderboard")).json()
+    by_run = {e["run_id"]: e for e in board}
+    assert round(by_run[3]["vs_baseline"], 3) == 1.2
+    assert round(by_run[1]["vs_baseline"], 3) == round(100_000 / 105_000, 3)
+
+
+async def test_a_policys_search_runs_on_productions_config_are_baseline_measurements(client):
+    # A policy campaign: its search runs carry configs, its anchors production's,
+    # and no candidate is flagged. Production is the campaign's base.
+    base = {"tp": 2, "page_size": 64}
+    async with client.factory() as session:
+        session.add(Campaign(
+            id=1, owner_id=1, name="c", engine="sglang", image="img", model_path="/m",
+            served_model_name="glm-5", search_space={"base": base}, objective=OBJECTIVE,
+            status=CampaignStatus.ACTIVE.value, policy_id=7,
+        ))
+        await session.flush()
+        configs = [dict(base), {**base, "kv_cache_dtype": "fp8_e4m3"}, dict(base)]
+        scores = (100_000.0, 103_000.0, 102_000.0)
+        for i, (config, score) in enumerate(zip(configs, scores, strict=True), start=1):
+            session.add(Candidate(id=i, campaign_id=1, config=config, config_hash=f"h{i}",
+                                  kind=CandidateKind.SEARCH.value,
+                                  status=CandidateStatus.EXHAUSTED.value))
+            session.add(Run(id=i, campaign_id=1, candidate_id=i, machine_id=None,
+                            kind=RunKind.EXTERNAL.value, status=RunStatus.SUCCEEDED.value))
+            session.add(Result(run_id=i, source="llmbench", passed=True, score=score,
+                               metrics={TARGET: score}, objective_value=score, feasible=True,
+                               breaches=[]))
+        await session.commit()
+    board = (await client.get("/api/campaigns/1/leaderboard")).json()
+    by_run = {e["run_id"]: e for e in board}
+    assert by_run[1]["is_baseline"] and by_run[3]["is_baseline"] and not by_run[2]["is_baseline"]
+    # fp8 against the anchors' mean (101k), so the bar gets its colour.
+    assert round(by_run[2]["vs_baseline"], 4) == round(103_000 / 101_000, 4)
+
+
+async def test_a_recipe_campaigns_unchanged_recipe_is_the_baseline(client):
+    # A recipe campaign has no base: production is the recipe as written, which
+    # a policy's anchor sends as the empty config.
+    async with client.factory() as session:
+        session.add(Campaign(
+            id=1, owner_id=1, name="c", engine="sglang", image="img", model_path="/m",
+            served_model_name="glm-5", search_space={}, objective=OBJECTIVE,
+            status=CampaignStatus.ACTIVE.value, policy_id=7,
+            recipe={"engine": "sglang", "values": {"model": {"tp": 2}}},
+        ))
+        await session.flush()
+        configs = [{}, {"mem_fraction_static": 0.85}, {}]
+        scores = (100_000.0, 103_000.0, 102_000.0)
+        for i, (config, score) in enumerate(zip(configs, scores, strict=True), start=1):
+            session.add(Candidate(id=i, campaign_id=1, config=config, config_hash=f"h{i}",
+                                  kind=CandidateKind.SEARCH.value,
+                                  status=CandidateStatus.EXHAUSTED.value))
+            session.add(Run(id=i, campaign_id=1, candidate_id=i, machine_id=None,
+                            kind=RunKind.EXTERNAL.value, status=RunStatus.SUCCEEDED.value))
+            session.add(Result(run_id=i, source="llmbench", passed=True, score=score,
+                               metrics={TARGET: score}, objective_value=score, feasible=True,
+                               breaches=[]))
+        await session.commit()
+    board = (await client.get("/api/campaigns/1/leaderboard")).json()
+    by_run = {e["run_id"]: e for e in board}
+    assert by_run[1]["is_baseline"] and by_run[3]["is_baseline"] and not by_run[2]["is_baseline"]
+    assert round(by_run[2]["vs_baseline"], 4) == round(103_000 / 101_000, 4)

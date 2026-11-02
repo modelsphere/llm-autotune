@@ -21,7 +21,8 @@ from typing import Any
 
 from app.control.orchestrator import timing
 from app.control.orchestrator.lifecycle import as_utc, now
-from app.control.search.validation import cards_used, widest_cards
+from app.control.recipe.campaign import config_cards
+from app.control.recipe.campaign import widest_cards as campaign_widest_cards
 from app.core.config import get_settings
 from app.db.models import (
     Campaign,
@@ -93,10 +94,14 @@ def search_deadline(campaign: Campaign, machine: Machine | None) -> datetime | N
     hard = hard_deadline(campaign, machine)
     if hard is None:
         return None
-    reserve = settings_of(campaign).reserve_minutes(
+    return hard - timedelta(minutes=reserve_minutes(campaign, machine))
+
+
+def reserve_minutes(campaign: Campaign, machine: Machine | None) -> int:
+    """The end of the window held back for validation."""
+    return settings_of(campaign).reserve_minutes(
         contender_minutes(campaign), validation_rounds(campaign, machine)
     )
-    return hard - timedelta(minutes=reserve)
 
 
 def gpu_budget(campaign: Campaign, machine: Machine | None) -> int:
@@ -108,7 +113,7 @@ def gpu_budget(campaign: Campaign, machine: Machine | None) -> int:
         return knobs.cards
     if machine is not None and not is_node_pool(machine) and machine.gpu_count:
         return machine.gpu_count
-    return max(widest_cards(campaign.search_space or {}), 1)
+    return max(campaign_widest_cards(campaign), 1)
 
 
 def validation_rounds(campaign: Campaign, machine: Machine | None) -> int:
@@ -116,7 +121,7 @@ def validation_rounds(campaign: Campaign, machine: Machine | None) -> int:
     by side on the GPU budget. Each launch is sized like production (the base
     config), the best guess before the contenders exist."""
     knobs = settings_of(campaign)
-    per_launch = max(cards_used((campaign.search_space or {}).get("base") or {}), 1)
+    per_launch = max(config_cards(campaign, (campaign.search_space or {}).get("base") or {}), 1)
     budget = max(gpu_budget(campaign, machine), per_launch)
     side_by_side = max(budget // per_launch, 1)
     return -(-knobs.validation_launches() // side_by_side)
@@ -126,6 +131,18 @@ def deadlines(
     campaign: Campaign, machine: Machine | None
 ) -> tuple[datetime | None, datetime | None]:
     return search_deadline(campaign, machine), hard_deadline(campaign, machine)
+
+
+def token_expiry(hard: datetime | None, settings) -> datetime:
+    """When a session's API token stops working: the session's hard deadline
+    (the end of its window) plus the grace a policy is promised to read its
+    results in. A session with no deadline gets the flat cap instead. Never a
+    flat cap for one that has a window: a 63-hour window under a 48-hour token
+    lost its policy 15 hours early, mid-search."""
+    grace = timedelta(hours=settings.policy_token_grace_hours)
+    if hard is not None:
+        return hard + grace
+    return now() + timedelta(hours=settings.policy_token_max_hours)
 
 
 def heartbeat_silence(session: PolicySession, moment: datetime | None = None) -> float:

@@ -6,6 +6,7 @@
  *  date picker would make tomorrow's occurrence look like the only one.
  */
 import { computed } from 'vue'
+import { useI18n } from '../i18n'
 import InfoHint from './InfoHint.vue'
 
 const props = defineProps<{
@@ -24,6 +25,7 @@ const emit = defineEmits<{
 
 /** Every night, or no window at all. Said as a choice: clearing both time
  *  pickers was the only way to run a campaign by hand, and nothing said so. */
+const { t } = useI18n()
 const mode = computed(() => (props.start || props.end ? 'nightly' : 'manual'))
 let remembered = { start: '23:00', end: '08:00' }
 function setMode(next: string | number | boolean | undefined) {
@@ -65,13 +67,15 @@ const summary = computed(() => {
   const a = minutes(props.start)
   const b = minutes(props.end)
   if (a === null || b === null) return { text: '', overnight: false, bad: !!(props.start || props.end) }
-  if (a === b) return { text: 'start and end are the same — a window needs a length', overnight: false, bad: true }
+  if (a === b) return { text: t('campaignNew.win.same'), overnight: false, bad: true }
   const overnight = b <= a
   const span = overnight ? 24 * 60 - a + b : b - a
   const hours = Math.floor(span / 60)
   const mins = span % 60
   return {
-    text: `${hours}h${mins ? ` ${mins}m` : ''} every night${overnight ? ', ending the next morning' : ''}`,
+    text: overnight
+      ? t('campaignNew.win.spanOvernight', { span: `${hours}h${mins ? ` ${mins}m` : ''}` })
+      : t('campaignNew.win.span', { span: `${hours}h${mins ? ` ${mins}m` : ''}` }),
     overnight,
     bad: false,
   }
@@ -81,8 +85,8 @@ const summary = computed(() => {
 <template>
   <div class="window">
     <el-radio-group :model-value="mode" size="small" class="mode" @update:model-value="setMode">
-      <el-radio-button value="nightly">Every night</el-radio-button>
-      <el-radio-button value="manual">No window (start it by hand)</el-radio-button>
+      <el-radio-button value="nightly">{{ t('campaignNew.win.nightly') }}</el-radio-button>
+      <el-radio-button value="manual">{{ t('campaignNew.win.manual') }}</el-radio-button>
     </el-radio-group>
     <template v-if="mode === 'nightly'">
     <div class="row">
@@ -92,25 +96,22 @@ const summary = computed(() => {
            at all. `value-format` keeps the model a plain "HH:mm" string, which
            is what the campaign stores and what the summary below parses. -->
       <div class="field">
-        <label>Start</label>
+        <label>{{ t('campaignNew.win.start') }}</label>
         <el-time-picker :model-value="start" format="HH:mm" value-format="HH:mm"
           placeholder="23:00" style="width: 128px"
           @update:model-value="(v: string | null) => emit('update:start', v ?? '')" />
       </div>
       <span class="arrow">→</span>
       <div class="field">
-        <label>End</label>
+        <label>{{ t('campaignNew.win.end') }}</label>
         <el-time-picker :model-value="end" format="HH:mm" value-format="HH:mm"
           placeholder="08:00" style="width: 128px"
           @update:model-value="(v: string | null) => emit('update:end', v ?? '')" />
       </div>
       <div class="field grow">
         <label>
-          Timezone
-          <InfoHint>
-            The window is stored as local clock times, so 23:00 stays 23:00 across a
-            daylight-saving change rather than drifting by an hour.
-          </InfoHint>
+          {{ t('campaignNew.win.tz') }}
+          <InfoHint>{{ t('campaignNew.win.tzHint') }}</InfoHint>
         </label>
         <el-select :model-value="timezone || localZone" filterable style="width: 100%"
           @update:model-value="(v: string) => emit('update:timezone', v)">
@@ -122,14 +123,10 @@ const summary = computed(() => {
     <div class="row">
       <div class="field grow">
         <label>
-          Repeat until
-          <InfoHint>
-            Optional. After this, no new night starts and the campaign finishes. A night
-            already running is never cut short by it. Leave empty to keep going until the
-            search is exhausted.
-          </InfoHint>
+          {{ t('campaignNew.win.until') }}
+          <InfoHint>{{ t('campaignNew.win.untilHint') }}</InfoHint>
         </label>
-        <el-date-picker :model-value="until" type="date" placeholder="until the search runs out"
+        <el-date-picker :model-value="until" type="date" :placeholder="t('campaignNew.win.untilPh')"
           style="width: 100%" value-format="YYYY-MM-DDTHH:mm:ss[Z]"
           @update:model-value="(v: string | null) => emit('update:until', v)" />
       </div>

@@ -1,0 +1,67 @@
+apiVersion: catalog.swiss/v2
+kind: Variant
+model: glm5.3
+id: sglang-tp8-pp2-ep8-6000d
+version: 1.0.5
+servedName: glm-5.3
+engine: sglang
+chart:
+  name: sglang
+  version: '>=0.9.9'
+image:
+  repository: lmsysorg/sglang
+  tag: v0.5.20
+requires:
+  gpus: 8
+  nodes: 2
+  topology: lws
+  rdma: true
+  gpuProduct:
+  - NVIDIA-RTX-6000D
+values:
+  model:
+    localPath: /data/models/GLM-5.3-NVFP4
+    mountPath: /models
+    contextLength: ''
+  modelCheck:
+    enabled: true
+    requiredGlobs:
+    - config.json
+    - '*.safetensors'
+  lws:
+    enabled: true
+    size: 2
+  hostNetwork: true
+  rdma:
+    enabled: true
+  extraArgs:
+  - --tp-size=8
+  - --pp-size=2
+  - --ep-size=8
+  - --quantization=modelopt_fp4
+  - --disable-overlap-schedule
+  - --mem-fraction-static=0.72
+  - --disable-custom-all-reduce
+  - --reasoning-parser=glm45
+  - --tool-call-parser=glm47
+  - --trust-remote-code
+  - --enable-metrics
+  - --enable-cache-report
+  env:
+  - name: PYTORCH_ALLOC_CONF
+    value: expandable_segments:True
+  - name: NCCL_DEBUG
+    value: INFO
+  - name: NCCL_SOCKET_IFNAME
+    value: bond0
+  - name: GLOO_SOCKET_IFNAME
+    value: bond0
+  - name: NCCL_NET_GDR_LEVEL
+    value: '1'
+  shm:
+    enabled: true
+    sizeLimit: 64Gi
+  service:
+    port: 8050
+  hangWatcher:
+    enabled: true

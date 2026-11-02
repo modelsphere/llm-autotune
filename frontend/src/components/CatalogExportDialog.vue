@@ -8,13 +8,18 @@
  *  this tuning result; for a new model, the form asks for what its
  *  metadata.yaml needs (the Hugging Face repo id first) and drafts the rest.
  *  Every file is checked against the catalog's schemas and rules
- *  server-side. Nothing is pushed: download the zip, unpack it at the root of
- *  a model-catalog checkout and open the pull request.
+ *  server-side. Then either download the zip (unpack it at the root of a
+ *  model-catalog checkout and open the pull request), or, with a catalog
+ *  server and its write key set in Settings, publish straight to it: Publish
+ *  checks every write (a dry run) and shows them on a confirmation step; only
+ *  Confirm commits. Publishing sends no report
+ *  (the server takes none), so it records no tuning entry.
  *
  *  Plugins open it too, with their own runs (`candidates`).
  */
 import { computed, ref, watch } from 'vue'
-import { api, type CatalogExportPreview, type CatalogInput } from '../api/client'
+import { Refresh } from '@element-plus/icons-vue'
+import { api, type CatalogExportPreview, type CatalogInput, type CatalogPublishResult } from '../api/client'
 import { apiErrorText } from '../utils/apiError'
 import { copyText } from '../utils/clipboard'
 import { useI18n } from '../i18n'
@@ -41,6 +46,10 @@ const props = defineProps<{
   /** What the dialog opens with ticked: typically [baseline, optimized]. */
   initial: { run_id: number; role: string }[]
   modelName?: string
+  /** The model's Hugging Face id when the caller already knows it (a Hub
+   *  track is made for one): written as source.hf and used to find the model
+   *  in the catalog, and not editable here. */
+  hf?: string
 }>()
 const emit = defineEmits<{ (e: 'update:modelValue', open: boolean): void }>()
 
@@ -82,6 +91,11 @@ const downloading = ref(false)
 const error = ref('')
 const preview = ref<CatalogExportPreview | null>(null)
 const tab = ref('')
+/** The last publish: a dry run to confirm, or what was committed. */
+const published = ref<CatalogPublishResult | null>(null)
+const publishing = ref(false)
+/** form -> confirm (a dry run passed: what will be written, and where) -> done. */
+const step = ref<'form' | 'confirm' | 'done'>('form')
 
 watch(
   () => props.modelValue,
@@ -98,6 +112,7 @@ watch(
     for (const field of [name, hf, displayName, description, family, tags, license, homepage]) {
       field.value = ''
     }
+    hf.value = props.hf?.trim() ?? ''
     gpuProduct.value = ''
     reportId.value = null
     startupMinutes.value = null
@@ -106,6 +121,8 @@ watch(
     advanced.value = []
     more.value = []
     preview.value = null
+    published.value = null
+    step.value = 'form'
     error.value = ''
     tab.value = ''
     void load()
@@ -160,6 +177,7 @@ async function load() {
   }
   loading.value = true
   error.value = ''
+  published.value = null
   try {
     const { data } = await api.post<CatalogExportPreview>('/catalog-export/preview', body())
     preview.value = data
@@ -239,6 +257,32 @@ function statusText(v: CatalogExportPreview['variants'][number]) {
 
 const variantFiles = computed(() => (preview.value?.files ?? []).filter((f) => f.kind !== 'report'))
 
+/** Check every write (dryRun), or, after a dry run that passed, commit them. */
+async function publish(dryRun: boolean) {
+  publishing.value = true
+  error.value = ''
+  try {
+    const message = `${preview.value?.name ?? 'model'}: measured on LLM AutoTune`
+    const { data } = await api.post<CatalogPublishResult>('/catalog-export/publish', {
+      ...body(), dry_run: dryRun, message,
+    })
+    published.value = data
+    if (data.ok) step.value = dryRun ? 'confirm' : 'done'
+    else if (!dryRun) step.value = 'done'
+  } catch (e) {
+    error.value = apiErrorText(e, t('catalogExport.publish.failed'))
+    published.value = null
+  } finally {
+    publishing.value = false
+  }
+}
+
+function back() {
+  step.value = 'form'
+  published.value = null
+}
+const hasTuning = computed(() => (preview.value?.variants ?? []).some((v) => v.tuning === 'recorded'))
+
 async function download() {
   downloading.value = true
   error.value = ''
@@ -260,199 +304,259 @@ async function download() {
 
 <template>
   <el-dialog v-model="open" :title="t('catalogExport.title')" width="820px" top="6vh">
-    <h4>{{ t('catalogExport.configs') }}</h4>
-    <el-table :data="rows" size="small" max-height="240" class="configs"
-      :empty-text="t('catalogExport.noRuns')">
-      <el-table-column width="44">
-        <template #default="{ row }">
-          <el-checkbox v-model="row.picked" @change="onTick(row)" />
-        </template>
-      </el-table-column>
-      <el-table-column :label="t('catalogExport.runCol')" min-width="220">
-        <template #default="{ row }">{{ row.label }}
-          <span v-if="row.detail" class="muted">· {{ row.detail }}</span></template>
-      </el-table-column>
-      <el-table-column :label="t('catalogExport.role')" width="140">
-        <template #default="{ row }">
-          <el-select v-model="row.role" size="small" clearable :disabled="!row.picked" placeholder="—">
-            <el-option value="baseline" :label="t('catalogExport.roles.baseline')" />
-            <el-option value="optimized" :label="t('catalogExport.roles.optimized')" />
-          </el-select>
-        </template>
-      </el-table-column>
-    </el-table>
-
-    <h4>{{ t('catalogExport.model') }}
-      <el-tag v-if="preview" size="small" class="model-tag"
-        :type="preview.catalog === 'found' ? 'success' : 'info'">
-        {{ t(`catalogExport.catalog.${preview.catalog}`) }}</el-tag></h4>
-    <el-form label-width="110px" size="small" class="form">
-      <el-form-item :label="t('catalogExport.name')">
-        <el-input v-model="name" :placeholder="modelName" class="mono" :disabled="!isNew" />
-      </el-form-item>
-      <el-form-item v-if="isNew" :label="t('catalogExport.hf')" required>
-        <el-input v-model="hf" class="mono" placeholder="org/name" />
-        <el-button v-if="preview?.hf_suggestion && !hf" size="small" link class="hint"
-          @click="useSuggestion">{{ t('catalogExport.useSuggestion', { hf: preview.hf_suggestion }) }}</el-button>
-      </el-form-item>
-    </el-form>
-
-    <el-collapse v-model="advanced" class="advanced">
-      <el-collapse-item v-if="isNew" :title="t('catalogExport.modelDetails')" name="model">
-        <el-form label-width="150px" size="small">
-          <el-form-item :label="t('catalogExport.displayName')">
-            <el-input v-model="displayName" maxlength="128" />
-          </el-form-item>
-          <el-form-item :label="t('catalogExport.descriptionField')">
-            <el-input v-model="description" type="textarea" :rows="3" maxlength="2048" />
-          </el-form-item>
-          <el-form-item :label="t('catalogExport.familyTags')">
-            <el-input v-model="family" placeholder="qwen" class="short" />
-            <el-input v-model="tags" placeholder="chat, moe" class="tags" />
-          </el-form-item>
-          <el-form-item :label="t('catalogExport.licenseHome')">
-            <el-input v-model="license" placeholder="apache-2.0" class="short" />
-            <el-input v-model="homepage" placeholder="https://huggingface.co/org/name" class="tags" />
-          </el-form-item>
-        </el-form>
-      </el-collapse-item>
-      <el-collapse-item :title="t('catalogExport.advanced')" name="advanced">
-        <el-form label-width="150px" size="small">
-          <el-form-item :label="t('catalogExport.reportId')">
-            <el-input-number v-model="reportId" :min="1" size="small" :value-on-clear="null"
-              :placeholder="t('catalogExport.auto')" />
-            <span class="muted tiny hint">{{ t('catalogExport.reportIdHint') }}</span>
-          </el-form-item>
-          <el-form-item :label="t('catalogExport.variantIds')">
-            <div class="ids">
-              <div v-for="row in picked" :key="row.run_id" class="id-row">
-                <span class="muted tiny id-label">{{ row.label }}</span>
-                <el-input v-model="row.id" size="small" class="mono" :placeholder="t('catalogExport.auto')" />
-                <el-input v-model="row.imageTag" size="small" class="mono tag-input"
-                  :placeholder="t('catalogExport.imageTag')" />
-              </div>
-            </div>
-          </el-form-item>
-          <el-form-item :label="t('catalogExport.defaultVariant')">
-            <el-select v-model="defaultVariant" clearable :placeholder="t('catalogExport.auto')">
-              <el-option v-for="id in variantIds" :key="id" :value="id" :label="id" />
-            </el-select>
-          </el-form-item>
-          <el-form-item :label="t('catalogExport.options')">
-            <el-checkbox v-model="includeEnv">{{ t('catalogExport.includeEnv') }}</el-checkbox>
-            <el-checkbox v-model="includeVolumes">{{ t('catalogExport.includeVolumes') }}</el-checkbox>
-          </el-form-item>
-          <el-form-item :label="t('catalogExport.startup')">
-            <el-input-number v-model="startupMinutes" :min="1" :max="240" size="small"
-              :placeholder="t('catalogExport.auto')" :value-on-clear="null" />
-          </el-form-item>
-          <el-form-item label="gpuProduct">
-            <el-input v-model="gpuProduct" class="mono" :placeholder="t('catalogExport.auto')" />
-          </el-form-item>
-        </el-form>
-      </el-collapse-item>
-    </el-collapse>
-
-    <el-alert v-if="error" type="error" :closable="false" :title="error" class="note" />
-    <div v-if="loading && !preview" class="muted tiny">{{ t('catalogExport.checking') }}</div>
-    <template v-if="preview">
-      <h4>{{ t('catalogExport.result') }}</h4>
-      <el-alert v-if="preview.errors.length" type="error" :closable="false" class="note"
-        :title="t('catalogExport.fixFirst')">
-        <ul class="list"><li v-for="(e, i) in preview.errors" :key="i">{{ e }}</li></ul>
+    <!-- Publish, second step: what the check passed, and where it goes. -->
+    <div v-if="step !== 'form' && published" class="published">
+      <el-alert :type="published.ok ? (published.dry_run ? 'info' : 'success') : 'error'" :closable="false"
+        show-icon :title="published.dry_run
+          ? t('catalogExport.publish.confirmTitle', { n: published.writes.length })
+          : (published.ok ? t('catalogExport.publish.done') : t('catalogExport.publish.failedMid'))">
+        <div class="tiny">
+          <template v-if="published.dry_run">{{ t('catalogExport.publish.confirmBody') }} </template>
+          <template v-else>{{ published.message }} · </template>
+          <span class="mono">{{ published.url }}</span>
+        </div>
       </el-alert>
-
-      <ul class="variants">
-        <li v-for="v in preview.variants" :key="v.id">
-          <span class="mono">{{ v.id }}</span>
-          <span class="muted"> · {{ statusText(v) }}</span>
-          <template v-if="v.tuning === 'recorded'">
-            <span class="muted"> · </span><span class="good">{{ t('catalogExport.tuning.recorded',
-              { uplift: v.uplift == null ? '' : `${v.uplift > 0 ? '+' : ''}${v.uplift}%` }) }}</span>
-          </template>
-          <template v-else-if="v.tuning === 'no_report'">
-            <span class="muted"> · {{ t('catalogExport.tuning.no_report') }} </span>
-            <el-button size="small" link type="primary" @click="pickReport">
-              {{ t('catalogExport.pickReport') }}</el-button>
-          </template>
-          <span v-else-if="v.tuning === 'no_baseline'" class="muted"> · {{ t('catalogExport.tuning.no_baseline') }}</span>
+      <ul class="list writes">
+        <li v-for="w in published.writes" :key="w.path + w.action">
+          <span :class="w.status === 'failed' ? 'bad' : ''">
+            {{ t(`catalogExport.publish.actions.${w.action}`) }}</span>
+          <span class="mono tiny"> {{ w.path }}</span>
+          <span v-if="w.version" class="muted tiny"> {{ w.version }}</span>
+          <span v-if="w.status === 'unchanged'" class="muted tiny"> · {{ t('catalogExport.publish.unchanged') }}</span>
+          <span v-if="w.commit" class="muted tiny mono"> · {{ w.commit.slice(0, 10) }}</span>
+          <div v-if="w.message" class="tiny" :class="w.status === 'failed' ? 'bad' : 'muted'">{{ w.message }}</div>
         </li>
       </ul>
+      <p v-if="published.dry_run && hasTuning" class="muted tiny">{{ t('catalogExport.publish.noReport') }}</p>
+      <el-alert v-if="error" type="error" :closable="false" :title="error" class="note" />
+    </div>
 
-      <div v-if="questions.length" class="questions">
-        <div class="q-title">{{ t('catalogExport.question') }}</div>
-        <div v-for="q in questions" :key="q.name" class="q-row">
-          <code class="q-name" :title="q.value">{{ q.name }}={{ q.value }}</code>
-          <el-button size="small" @click="decide(q.name, true)">{{ t('catalogExport.include') }}</el-button>
-          <el-button size="small" @click="decide(q.name, false)">{{ t('catalogExport.leaveOut') }}</el-button>
-        </div>
-        <el-checkbox v-model="rememberCalls" size="small">{{ t('catalogExport.remember') }}</el-checkbox>
-      </div>
+    <template v-else>
+      <h4>{{ t('catalogExport.configs') }}</h4>
+      <el-table :data="rows" size="small" max-height="240" class="configs"
+        :empty-text="t('catalogExport.noRuns')">
+        <el-table-column width="44">
+          <template #default="{ row }">
+            <el-checkbox v-model="row.picked" @change="onTick(row)" />
+          </template>
+        </el-table-column>
+        <el-table-column :label="t('catalogExport.runCol')" min-width="220">
+          <template #default="{ row }">{{ row.label }}
+            <span v-if="row.detail" class="muted">· {{ row.detail }}</span></template>
+        </el-table-column>
+        <el-table-column :label="t('catalogExport.role')" width="140">
+          <template #default="{ row }">
+            <el-select v-model="row.role" size="small" clearable :disabled="!row.picked" placeholder="—">
+              <el-option value="baseline" :label="t('catalogExport.roles.baseline')" />
+              <el-option value="optimized" :label="t('catalogExport.roles.optimized')" />
+            </el-select>
+          </template>
+        </el-table-column>
+      </el-table>
 
-      <el-alert v-if="preview.warnings.length" type="warning" :closable="false" class="note"
-        :title="t('catalogExport.check')">
-        <ul class="list"><li v-for="(w, i) in preview.warnings" :key="i">{{ w }}</li></ul>
-      </el-alert>
-
-      <el-collapse v-model="more" class="more">
-        <el-collapse-item v-if="inputs.length" name="inputs"
-          :title="`${t('catalogExport.inputs')} · ${summary}`">
-          <el-table :data="inputs" size="small" max-height="280">
-            <el-table-column :label="t('catalogExport.inputName')" min-width="240">
-              <template #default="{ row }">
-                <span class="mono">{{ row.name }}</span>
-                <div class="muted tiny mono ellipsis" :title="row.value">
-                  {{ row.value }}</div>
-              </template>
-            </el-table-column>
-            <el-table-column :label="t('catalogExport.inExport')" width="150">
-              <template #default="{ row }">
-                <el-switch v-if="row.kind === 'env'" :model-value="kept(row)" size="small"
-                  :active-text="kept(row) ? t('catalogExport.actions.kept') : t('catalogExport.actions.left_out')"
-                  @change="(v: string | number | boolean) => decide(row.name, Boolean(v))" />
-                <span v-else>{{ t(`catalogExport.actions.${row.action.replace(' ', '_')}`) }}</span>
-              </template>
-            </el-table-column>
-            <el-table-column :label="t('catalogExport.why')" min-width="160">
-              <template #default="{ row }"><span class="muted tiny">{{ row.reason }}</span></template>
-            </el-table-column>
-          </el-table>
-        </el-collapse-item>
-        <el-collapse-item name="files" :title="t('catalogExport.files', { n: preview.files.length })">
-          <el-tabs v-model="tab">
-            <el-tab-pane v-for="f in variantFiles" :key="f.path" :name="f.path" :label="f.path.split('/').pop()">
-              <div class="file-actions">
-                <span class="muted tiny mono">{{ f.path }}</span>
-                <el-button size="small" link @click="copyText(f.text, t('catalogExport.copied'))">
-                  {{ t('common.copy') }}</el-button>
-              </div>
-              <pre class="yaml">{{ f.text }}</pre>
-            </el-tab-pane>
-          </el-tabs>
-        </el-collapse-item>
-        <el-collapse-item v-if="preview.details.length" name="details"
-          :title="t('catalogExport.detailsN', { n: preview.details.length })">
-          <ul class="list muted"><li v-for="(d, i) in preview.details" :key="i">{{ d }}</li></ul>
-        </el-collapse-item>
-        <el-collapse-item v-if="preview.provenance?.length" name="pr" :title="t('catalogExport.provenance')">
-          <div class="file-actions">
-            <span />
-            <el-button size="small" link
-              @click="copyText(preview!.provenance.map((l) => `- ${l}`).join('\n'), t('catalogExport.copied'))">
-              {{ t('common.copy') }}</el-button>
+      <h4>{{ t('catalogExport.model') }}
+        <el-tag v-if="preview" size="small" :type="preview.catalog === 'found' ? 'success' : 'info'">
+          {{ t(`catalogExport.catalog.${preview.catalog}`) }}</el-tag></h4>
+      <el-form label-width="150px" label-position="left" size="small" class="form">
+        <el-form-item :label="t('catalogExport.name')">
+          <el-input v-model="name" :placeholder="modelName" class="mono field" :disabled="!isNew" />
+        </el-form-item>
+        <el-form-item v-if="isNew" :label="t('catalogExport.hf')" required>
+          <div class="stack">
+            <el-input v-model="hf" class="mono field" placeholder="org/name"
+              :disabled="!!props.hf?.trim()" />
+            <span v-if="props.hf?.trim()" class="muted tiny">{{ t('catalogExport.hfGiven') }}</span>
+            <el-button v-else-if="preview?.hf_suggestion && !hf" size="small" link type="primary"
+              @click="useSuggestion">{{ t('catalogExport.useSuggestion', { hf: preview.hf_suggestion }) }}</el-button>
           </div>
-          <ul class="list"><li v-for="(l, i) in preview.provenance" :key="i" class="mono tiny">{{ l }}</li></ul>
+        </el-form-item>
+      </el-form>
+
+      <el-collapse v-model="advanced" class="advanced">
+        <el-collapse-item v-if="isNew" :title="t('catalogExport.modelDetails')" name="model">
+          <el-form label-width="150px" label-position="left" size="small">
+            <el-form-item :label="t('catalogExport.displayName')">
+              <el-input v-model="displayName" maxlength="128" class="field" />
+            </el-form-item>
+            <el-form-item :label="t('catalogExport.descriptionField')">
+              <el-input v-model="description" type="textarea" :rows="3" maxlength="2048" />
+            </el-form-item>
+            <el-form-item :label="t('catalogExport.familyTags')">
+              <el-input v-model="family" placeholder="qwen" class="short" />
+              <el-input v-model="tags" placeholder="chat, moe" class="tags" />
+            </el-form-item>
+            <el-form-item :label="t('catalogExport.licenseHome')">
+              <el-input v-model="license" placeholder="apache-2.0" class="short" />
+              <el-input v-model="homepage" placeholder="https://huggingface.co/org/name" class="tags" />
+            </el-form-item>
+          </el-form>
+        </el-collapse-item>
+        <el-collapse-item :title="t('catalogExport.advanced')" name="advanced">
+          <el-form label-width="150px" label-position="left" size="small">
+            <el-form-item :label="t('catalogExport.reportId')">
+              <el-input-number v-model="reportId" :min="1" size="small" :value-on-clear="null"
+                :placeholder="t('catalogExport.auto')" />
+              <span class="muted tiny hint">{{ t('catalogExport.reportIdHint') }}</span>
+            </el-form-item>
+            <el-form-item :label="t('catalogExport.variantIds')">
+              <div class="ids">
+                <div v-for="row in picked" :key="row.run_id" class="id-row">
+                  <span class="muted tiny id-label">{{ row.label }}</span>
+                  <el-input v-model="row.id" size="small" class="mono" :placeholder="t('catalogExport.auto')" />
+                  <el-input v-model="row.imageTag" size="small" class="mono tag-input"
+                    :placeholder="t('catalogExport.imageTag')" />
+                </div>
+              </div>
+            </el-form-item>
+            <el-form-item :label="t('catalogExport.defaultVariant')">
+              <el-select v-model="defaultVariant" clearable :placeholder="t('catalogExport.auto')" class="field">
+                <el-option v-for="id in variantIds" :key="id" :value="id" :label="id" />
+              </el-select>
+            </el-form-item>
+            <el-form-item :label="t('catalogExport.options')">
+              <el-checkbox v-model="includeEnv">{{ t('catalogExport.includeEnv') }}</el-checkbox>
+              <el-checkbox v-model="includeVolumes">{{ t('catalogExport.includeVolumes') }}</el-checkbox>
+            </el-form-item>
+            <el-form-item :label="t('catalogExport.startup')">
+              <el-input-number v-model="startupMinutes" :min="1" :max="240" size="small"
+                :placeholder="t('catalogExport.auto')" :value-on-clear="null" />
+            </el-form-item>
+            <el-form-item label="gpuProduct">
+              <el-input v-model="gpuProduct" class="mono field" :placeholder="t('catalogExport.auto')" />
+            </el-form-item>
+          </el-form>
         </el-collapse-item>
       </el-collapse>
+
+      <el-alert v-if="error" type="error" :closable="false" :title="error" class="note" />
+      <div v-if="loading && !preview" class="muted tiny">{{ t('catalogExport.checking') }}</div>
+      <template v-if="preview">
+        <h4>{{ t('catalogExport.result') }}</h4>
+        <el-alert v-if="preview.errors.length" type="error" :closable="false" class="note"
+          :title="t('catalogExport.fixFirst')">
+          <ul class="list"><li v-for="(e, i) in preview.errors" :key="i">{{ e }}</li></ul>
+        </el-alert>
+
+        <ul class="variants">
+          <li v-for="v in preview.variants" :key="v.id">
+            <span class="mono">{{ v.id }}</span>
+            <span class="muted"> · {{ statusText(v) }}</span>
+            <template v-if="v.tuning === 'recorded'">
+              <span class="muted"> · </span><span class="good">{{ t('catalogExport.tuning.recorded',
+                { uplift: v.uplift == null ? '' : `${v.uplift > 0 ? '+' : ''}${v.uplift}%` }) }}</span>
+            </template>
+            <template v-else-if="v.tuning === 'no_report'">
+              <span class="muted"> · {{ t('catalogExport.tuning.no_report') }} </span>
+              <el-button size="small" link type="primary" @click="pickReport">
+                {{ t('catalogExport.pickReport') }}</el-button>
+            </template>
+            <span v-else-if="v.tuning === 'no_baseline'" class="muted"> · {{ t('catalogExport.tuning.no_baseline') }}</span>
+          </li>
+        </ul>
+
+        <div v-if="questions.length" class="questions">
+          <div class="q-title">{{ t('catalogExport.question') }}</div>
+          <div v-for="q in questions" :key="q.name" class="q-row">
+            <code class="q-name" :title="q.value">{{ q.name }}={{ q.value }}</code>
+            <el-button size="small" @click="decide(q.name, true)">{{ t('catalogExport.include') }}</el-button>
+            <el-button size="small" @click="decide(q.name, false)">{{ t('catalogExport.leaveOut') }}</el-button>
+          </div>
+          <el-checkbox v-model="rememberCalls" size="small">{{ t('catalogExport.remember') }}</el-checkbox>
+        </div>
+
+        <el-alert v-if="preview.warnings.length" type="warning" :closable="false" class="note"
+          :title="t('catalogExport.check')">
+          <ul class="list"><li v-for="(w, i) in preview.warnings" :key="i">{{ w }}</li></ul>
+        </el-alert>
+
+        <el-collapse v-model="more" class="more">
+          <el-collapse-item v-if="inputs.length" name="inputs"
+            :title="`${t('catalogExport.inputs')} · ${summary}`">
+            <el-table :data="inputs" size="small" max-height="280">
+              <el-table-column :label="t('catalogExport.inputName')" min-width="240">
+                <template #default="{ row }">
+                  <span class="mono">{{ row.name }}</span>
+                  <div class="muted tiny mono ellipsis" :title="row.value">
+                    {{ row.value }}</div>
+                </template>
+              </el-table-column>
+              <el-table-column :label="t('catalogExport.inExport')" width="150">
+                <template #default="{ row }">
+                  <el-switch v-if="row.kind === 'env'" :model-value="kept(row)" size="small"
+                    :active-text="kept(row) ? t('catalogExport.actions.kept') : t('catalogExport.actions.left_out')"
+                    @change="(v: string | number | boolean) => decide(row.name, Boolean(v))" />
+                  <span v-else>{{ t(`catalogExport.actions.${row.action.replace(' ', '_')}`) }}</span>
+                </template>
+              </el-table-column>
+              <el-table-column :label="t('catalogExport.why')" min-width="160">
+                <template #default="{ row }"><span class="muted tiny">{{ row.reason }}</span></template>
+              </el-table-column>
+            </el-table>
+          </el-collapse-item>
+          <el-collapse-item name="files" :title="t('catalogExport.files', { n: variantFiles.length })">
+            <el-tabs v-model="tab">
+              <el-tab-pane v-for="f in variantFiles" :key="f.path" :name="f.path" :label="f.path.split('/').pop()">
+                <div class="file-actions">
+                  <span class="muted tiny mono">{{ f.path }}</span>
+                  <el-button size="small" link @click="copyText(f.text, t('catalogExport.copied'))">
+                    {{ t('common.copy') }}</el-button>
+                </div>
+                <pre class="yaml">{{ f.text }}</pre>
+              </el-tab-pane>
+            </el-tabs>
+          </el-collapse-item>
+          <el-collapse-item v-if="preview.details.length" name="details"
+            :title="t('catalogExport.detailsN', { n: preview.details.length })">
+            <ul class="list muted"><li v-for="(d, i) in preview.details" :key="i">{{ d }}</li></ul>
+          </el-collapse-item>
+          <el-collapse-item v-if="preview.provenance?.length" name="pr" :title="t('catalogExport.provenance')">
+            <div class="file-actions">
+              <span class="muted tiny">{{ t('catalogExport.provenanceHint') }}</span>
+              <el-button size="small" link
+                @click="copyText(preview!.provenance.map((l) => `- ${l}`).join('\n'), t('catalogExport.copied'))">
+                {{ t('common.copy') }}</el-button>
+            </div>
+            <ul class="list"><li v-for="(l, i) in preview.provenance" :key="i" class="mono tiny">{{ l }}</li></ul>
+          </el-collapse-item>
+        </el-collapse>
+
+        <!-- A dry run the catalog refused: why, on the form, to fix and retry. -->
+        <el-alert v-if="published && !published.ok" type="error" :closable="false" show-icon class="note"
+          :title="t('catalogExport.publish.refused')">
+          <div class="tiny">{{ published.message }}</div>
+        </el-alert>
+      </template>
     </template>
 
     <template #footer>
-      <span class="muted tiny footnote">{{ t('catalogExport.next') }}</span>
-      <el-button @click="open = false">{{ t('common.close') }}</el-button>
-      <el-button :loading="loading" :disabled="!ready" @click="load">{{ t('catalogExport.refresh') }}</el-button>
-      <el-button type="primary" :loading="downloading"
-        :disabled="!preview || loading || !preview.valid" @click="download">
-        {{ t('catalogExport.download') }}</el-button>
+      <div class="footer">
+        <template v-if="step === 'form'">
+          <el-tooltip :content="t('catalogExport.refresh')" placement="top">
+            <el-button :icon="Refresh" circle :loading="loading" :disabled="!ready"
+              :aria-label="t('catalogExport.refresh')" @click="load" />
+          </el-tooltip>
+          <span class="spacer" />
+          <el-tooltip :content="t('catalogExport.next')" placement="top">
+            <el-button :type="preview?.catalog_writable ? 'default' : 'primary'" :loading="downloading"
+              :disabled="!preview || loading || !preview.valid" @click="download">
+              {{ t('catalogExport.download') }}</el-button>
+          </el-tooltip>
+          <el-button v-if="preview?.catalog_writable" type="primary" :loading="publishing"
+            :disabled="!preview.valid || loading" @click="publish(true)">
+            {{ t('catalogExport.publish.button') }}</el-button>
+        </template>
+        <template v-else-if="step === 'confirm'">
+          <el-button :disabled="publishing" @click="back">{{ t('catalogExport.publish.back') }}</el-button>
+          <span class="spacer" />
+          <el-button type="primary" :loading="publishing" @click="publish(false)">
+            {{ t('catalogExport.publish.commit', { n: published?.writes.length ?? 0 }) }}</el-button>
+        </template>
+        <template v-else>
+          <el-button v-if="!published?.ok" @click="back">{{ t('catalogExport.publish.back') }}</el-button>
+          <span class="spacer" />
+          <el-button type="primary" @click="open = false">{{ t('common.close') }}</el-button>
+        </template>
+      </div>
     </template>
   </el-dialog>
 </template>
@@ -461,6 +565,8 @@ async function download() {
 h4 { margin: 14px 0 6px; font-size: 13px; display: flex; align-items: center; gap: 8px; }
 .configs { margin-bottom: 4px; }
 .form { margin-top: 4px; }
+.field { width: 360px; }
+.stack { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; }
 .short { max-width: 140px; }
 .tags { max-width: 280px; margin-left: 8px; }
 .hint { margin-left: 10px; }
@@ -486,6 +592,11 @@ h4 { margin: 14px 0 6px; font-size: 13px; display: flex; align-items: center; ga
   background: var(--el-fill-color-light); padding: 10px; border-radius: 6px; margin: 0;
   white-space: pre;
 }
-.footnote { margin-right: auto; float: left; max-width: 340px; text-align: left; line-height: 1.4; }
+.footer { display: flex; align-items: center; gap: 8px; }
+.footer .el-button + .el-button { margin-left: 0; }
+.spacer { flex: 1; }
 .tiny { font-size: 11.5px; }
+.published { margin-top: 12px; }
+.writes { margin-top: 8px; }
+.bad { color: var(--el-color-danger); }
 </style>

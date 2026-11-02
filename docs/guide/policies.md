@@ -19,7 +19,7 @@ results.
 
 ## The Policies page
 
-**Automatic Tuning ▸ Policies** lists the registered policies, the image each
+**Library ▸ Policies** lists the registered policies, the image each
 one runs, and how many campaigns use it.
 
 ![The Policies page](images/policies-list.png)

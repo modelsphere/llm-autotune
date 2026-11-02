@@ -1,0 +1,12 @@
+#!/usr/bin/env python3
+"""Shim so `sglang serve <flags>` (the CLI the engine charts run) runs the mock engine."""
+
+import sys
+
+from mock_engine import main
+
+if __name__ == "__main__":
+    args = sys.argv[1:]
+    if args[:1] == ["serve"]:
+        args = args[1:]
+    main(argv=args, mode="sglang")

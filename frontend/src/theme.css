@@ -14,13 +14,95 @@
   --autotune-text: #1e293b;    /* slate-800 */
   --autotune-muted: #64748b;   /* slate-500 */
   --autotune-border: #e2e8f0;  /* slate-200 */
+  --autotune-surface: #ffffff; /* cards, bars, the top bar */
 }
+
+/* Element Plus's own greys, onto the same slate scale, so a table, an input
+   and a page's own text are one family rather than three. */
+:root {
+  --autotune-font: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB',
+    'Microsoft YaHei', 'Helvetica Neue', Arial, sans-serif;
+  --el-font-family: var(--autotune-font);
+  --el-text-color-primary: #1e293b;   /* slate-800 */
+  --el-text-color-regular: #334155;   /* slate-700 */
+  --el-text-color-secondary: #64748b; /* slate-500 */
+  --el-text-color-placeholder: #94a3b8; /* slate-400 */
+  --el-border-color: #cbd5e1;         /* slate-300: inputs */
+  --el-border-color-light: #e2e8f0;   /* slate-200 */
+  --el-border-color-lighter: #eef2f6;
+  --el-fill-color-light: #f1f5f9;     /* slate-100 */
+  --el-fill-color-lighter: #f8fafc;
+  --el-bg-color-page: #f8fafc;
+  --el-border-radius-base: 6px;
+
+  /* Status colours that sit with the teal accent instead of Element's stock
+     green, orange and red, with the tints tags and alerts are drawn from. */
+  --el-color-success: #16a34a;
+  --el-color-success-light-3: #4ade80;
+  --el-color-success-light-5: #86efac;
+  --el-color-success-light-7: #bbf7d0;
+  --el-color-success-light-8: #dcfce7;
+  --el-color-success-light-9: #f0fdf4;
+  --el-color-success-dark-2: #15803d;
+  --el-color-warning: #d97706;
+  --el-color-warning-light-3: #f59e0b;
+  --el-color-warning-light-5: #fcd34d;
+  --el-color-warning-light-7: #fde68a;
+  --el-color-warning-light-8: #fef3c7;
+  --el-color-warning-light-9: #fffbeb;
+  --el-color-warning-dark-2: #b45309;
+  --el-color-danger: #dc2626;
+  --el-color-danger-light-3: #f87171;
+  --el-color-danger-light-5: #fca5a5;
+  --el-color-danger-light-7: #fecaca;
+  --el-color-danger-light-8: #fee2e2;
+  --el-color-danger-light-9: #fef2f2;
+  --el-color-danger-dark-2: #b91c1c;
+  --el-color-error: #dc2626;
+  --el-color-info: #64748b;
+  --el-color-info-light-3: #94a3b8;
+  --el-color-info-light-5: #cbd5e1;
+  --el-color-info-light-7: #e2e8f0;
+  --el-color-info-light-8: #f1f5f9;
+  --el-color-info-light-9: #f8fafc;
+  --el-color-info-dark-2: #475569;
+}
+
+/* The step being filled in, in the accent rather than black. */
+.el-step__head.is-process { color: var(--el-color-primary); border-color: var(--el-color-primary); }
+.el-step__title.is-process { color: var(--el-color-primary); }
 
 body {
   margin: 0;
   background: var(--autotune-bg);
   color: var(--autotune-text);
-  font-family: 'Helvetica Neue', Helvetica, Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  font-family: var(--autotune-font);
+  font-size: 14px;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* A list is a card: white, one border, rounded, with a quiet header row, so
+   it reads as one object on the page instead of rows floating on grey. */
+.page .el-table {
+  border: 1px solid var(--autotune-border);
+  border-radius: 8px;
+  --el-table-header-bg-color: #f8fafc;
+  --el-table-header-text-color: var(--autotune-muted);
+  --el-table-row-hover-bg-color: #f1f5f9;
+  --el-table-border-color: var(--autotune-border);
+  font-variant-numeric: tabular-nums;
+}
+.page .el-table th.el-table__cell {
+  font-size: 12px;
+  font-weight: 600;
+}
+.page .el-table .el-table__inner-wrapper::before {
+  display: none;
+}
+/* The same for a dialog's table: the dialog is already the card. */
+.el-dialog .el-table {
+  border: none;
+  border-radius: 0;
 }
 
 .page {
@@ -30,8 +112,9 @@ body {
 }
 
 .page-title {
-  font-size: 20px;
-  font-weight: 600;
+  font-size: 22px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
   margin: 0 0 16px;
 }
 

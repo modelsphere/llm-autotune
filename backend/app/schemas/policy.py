@@ -11,11 +11,11 @@ because a newer SDK talking to an older platform must degrade, not 422.
 """
 
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-CONTRACT_VERSION = "1.3"
+CONTRACT_VERSION = "1.7"
 
 # Inbound payloads from policy containers: unknown fields are the future, not
 # an error.
@@ -73,6 +73,11 @@ class PolicySettings(BaseModel):
     # handed over verbatim in the manifest as `policy.params`. The platform
     # never reads them.
     params: dict[str, Any] = Field(default_factory=dict)
+    # `env.<NAME>` keys are checked against the vocabulary dumped from the
+    # campaign's image: a variable the engine does not read would be ignored
+    # silently. With no vocabulary for the image, "refuse" (the default)
+    # refuses env keys outright; "warn" lets them through with a warning.
+    env_without_vocabulary: Literal["refuse", "warn"] = "refuse"
 
     def forbidden(self) -> list[str]:
         """The forbidden-parameter patterns in force for this campaign."""
@@ -118,6 +123,9 @@ class PolicyBase(BaseModel):
     # the container's launch command. Secrets go in `secret_env`.
     env: dict[str, str] = Field(default_factory=dict)
     ports: int = Field(default=4, ge=1, le=16)
+    # The LLM endpoint (Settings → LLM endpoints) an agent policy calls; at
+    # launch it sets LLM_BASE_URL, LLM_MODEL and LLM_API_KEY. None: no model.
+    llm_endpoint_id: int | None = None
 
 
 class PolicyIn(PolicyBase):
@@ -147,6 +155,16 @@ class ManifestModel(BaseModel):
     served_model_name: str
     extra_env: dict[str, Any] = Field(default_factory=dict)
     extra_volumes: dict[str, Any] = Field(default_factory=dict)
+    # 1.5: read from the model's own config.json (engines/model_facts.py):
+    # layers, KV heads, experts and how many are active, built-in draft layers
+    # (draft_layers), attention layout, dtype, context. Empty until read.
+    facts: dict[str, Any] = Field(default_factory=dict)
+    # 1.6: the configuration every launch starts from, as the engine chart
+    # reads it ({engine, chart, values}; app/control/recipe), the space's base
+    # applied. A config's keys are addresses into it: a flag, env.<NAME>,
+    # prefill./decode.<flag> (a pd role's flags) or values.<path> (any chart
+    # value). A winner is published as this document with its config applied.
+    recipe: dict[str, Any] = Field(default_factory=dict)
 
 
 class ManifestHardware(BaseModel):
@@ -202,6 +220,42 @@ class ManifestServices(BaseModel):
     # 1.3: engine logs, structured benchmark results, run environments, and
     # the configs/check dry run.
     diagnostics: bool = False
+    # 1.4: PUT /session/digest and GET /history — what other campaigns learned.
+    history: bool = False
+    # 1.5: a config may set environment variables as `env.<NAME>` keys; the
+    # platform puts them into the engine container's env. GET
+    # /engine/vocabulary lists the flags and variables the image reads, with
+    # each one's recommendation level.
+    env_keys: bool = False
+    vocabulary: bool = False
+    # 1.6: config keys may also address a pd role's flags (`prefill.`/`decode.`)
+    # and chart values (`values.<path>`); the manifest carries the recipe every
+    # launch starts from, and /configs/check returns the recipe it builds.
+    recipes: bool = False
+    # 1.7: `production` is the platform's production config, built from the
+    # Baselines record or, with none, from the campaign's recipe: what it runs
+    # (`engine_args`, `env`), the config that launches it (`config`) and where
+    # it came from (`source`).
+    production_config: bool = False
+
+
+class ManifestProduction(BaseModel):
+    """Production: what serves today, as the platform launches it when it
+    measures production next to the contenders."""
+
+    # What it runs: every engine flag and env variable, read from the recipe
+    # the platform builds (the recipe's own, with the recorded args applied).
+    engine_args: dict[str, Any] = Field(default_factory=dict)
+    env: dict[str, str] = Field(default_factory=dict)
+    image: str = ""
+    # (1.7) The config a policy sends to launch exactly production: the keys
+    # over the campaign's anchor, so {} when production is the recipe as
+    # written.
+    config: dict[str, Any] = Field(default_factory=dict)
+    # (1.7) "baselines": a recorded reference; "recipe": none recorded, so the
+    # campaign's recipe as written; "campaign": the campaign's fields and base.
+    source: str = ""
+    launch_command: str = ""
 
 
 class SessionManifest(BaseModel):
@@ -219,7 +273,7 @@ class SessionManifest(BaseModel):
     space_policy: dict[str, Any] = Field(
         default_factory=lambda: {"deviations": "allowed_if_declared", "forbidden": []}
     )
-    production: dict[str, Any] = Field(default_factory=dict)
+    production: ManifestProduction = Field(default_factory=ManifestProduction)
     time: ManifestTime
     contenders: ManifestContenders
     services: ManifestServices
@@ -468,9 +522,43 @@ class ConfigCheckOut(BaseModel):
     config: dict[str, Any] = Field(default_factory=dict)
     cards: int = 0
     command: list[str] = Field(default_factory=list)
+    # The config's `env.<NAME>` keys as the container receives them (1.4),
+    # set over the campaign's own extra_env.
+    env: dict[str, str] = Field(default_factory=dict)
     problems: list[ConfigProblem] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
     deviations: list[dict[str, Any]] = Field(default_factory=list)
+    # 1.6: the recipe a launch of this config runs, the pods it makes and the
+    # cards each claims, and each role's engine command as the chart builds it
+    # (the chart's own flags first, then the recipe's).
+    recipe: dict[str, Any] = Field(default_factory=dict)
+    shape: dict[str, Any] = Field(default_factory=dict)
+    commands: dict[str, list[str]] = Field(default_factory=dict)
+
+
+class VocabularyOut(BaseModel):
+    """The flags and environment variables the campaign's engine image reads
+    (1.5), best recommendation first.
+
+    `status` is "ok", "partial" (some of it could not be read; `notes` says
+    what), or "none" (nothing has been dumped from this image yet). Each entry:
+    {kind: flag|env, name, type, default, choices, help, help_source, where,
+    level: high|mid|low|unknown, when}. `level` is the platform's hand-written
+    recommendation, `when` the situation it helps in; an entry labeled only for
+    other hardware is left out.
+    """
+
+    status: str
+    engine: str
+    engine_version: str = ""
+    image: str = ""
+    total: int = 0
+    notes: list[str] = Field(default_factory=list)
+    entries: list[dict[str, Any]] = Field(default_factory=list)
+    # The model's facts and its whole config.json, once read (1.5); empty
+    # before. Here as well as in the manifest, which a policy reads once.
+    model_facts: dict[str, Any] = Field(default_factory=dict)
+    model_config_json: dict[str, Any] = Field(default_factory=dict)
 
 
 # -- contenders ---------------------------------------------------------------------
@@ -627,3 +715,68 @@ class SpaceCoverage(BaseModel):
     axes: list[AxisCoverage] = Field(default_factory=list)
     # Echo of the policy's own last coverage heartbeat, badged self-reported.
     policy_declared: PolicyCoverage | None = None
+
+
+# -- history (1.4) -------------------------------------------------------------
+
+
+class DigestLesson(BaseModel):
+    model_config = _lenient
+
+    text: str = Field(max_length=2000)
+    # How far it reaches: campaign (this workload and objective), model,
+    # engine or hardware. Only the policy knows; the platform files it.
+    scope: str = Field("campaign", max_length=32)
+
+
+class DigestIn(BaseModel):
+    """What a night learned, in the policy's words: written once its search is
+    over, for other campaigns to read through GET /history. The conditions it
+    was learned under are the platform's to state, not the policy's."""
+
+    model_config = _lenient
+
+    summary: str = Field(max_length=20000)
+    lessons: list[DigestLesson] = Field(default_factory=list, max_length=50)
+    # What failed and must not be repeated, with the cause.
+    constraints: list[str] = Field(default_factory=list, max_length=50)
+    open_questions: list[str] = Field(default_factory=list, max_length=20)
+
+
+class HistoryConditions(BaseModel):
+    """Under what a night's findings hold, from the platform's own records."""
+
+    engine: str
+    image: str
+    model_path: str
+    served_model_name: str
+    gpu_type: str = ""
+    cards: int | None = None
+    benchmark_slug: str = ""
+    objective: ManifestObjective
+    forbidden: list[str] = Field(default_factory=list)
+
+
+class HistoryVerdict(BaseModel):
+    """One config the platform validated at the end of the night."""
+
+    config: dict[str, Any]
+    is_production: bool = False
+    value: float | None = None
+    # Value as a multiple of production's on the same night (>1 = higher).
+    vs_production: float | None = None
+    holds_redlines: bool = True
+    # A finalist whose config IS production's: its vs_production measures the
+    # validation's own noise, not an effect.
+    same_as_production: bool = False
+
+
+class HistoryEntry(BaseModel):
+    campaign_id: int
+    campaign_name: str
+    session_id: int
+    ended_at: datetime | None = None
+    end_reason: str = ""
+    conditions: HistoryConditions
+    verdicts: list[HistoryVerdict] = Field(default_factory=list)
+    digest: DigestIn | None = None

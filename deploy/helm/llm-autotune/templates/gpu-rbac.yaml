@@ -3,9 +3,9 @@
 {{- $ns := .Values.gpuCluster.namespace | default .Release.Namespace -}}
 # What the launch driver needs in the namespace runs land in, and nothing more.
 # This is NOT the operator's RBAC (that ships with the operator and is much
-# broader): in "custom" mode the platform only creates and reads TuningRuns and
-# the operator does the rest; in "deployment" mode it manages the engine's
-# Deployment and Service itself.
+# broader): in "llmservice" mode the platform creates LLMServices and reads what
+# their charts made; the deprecated "custom" (TuningRun) and "deployment" modes
+# keep their grants below.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -13,6 +13,15 @@ metadata:
   namespace: {{ $ns }}
   labels: {{- include "llm-autotune.labels" . | nindent 4 }}
 rules:
+  # An engine is an LLMService (llm-operator installs its chart). The platform
+  # reads the chart's Service and its endpoints itself: the operator reports
+  # whether the chart applied, not whether the engine is up.
+  - apiGroups: ["serving.modelsphere.dev"]
+    resources: ["llmservices"]
+    verbs: ["create", "get", "list", "watch", "update", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["endpoints"]
+    verbs: ["get", "list"]
   - apiGroups: ["tuning.modelsphere.dev"]
     resources: ["tuningruns"]
     verbs: ["create", "get", "list", "watch", "delete"]
@@ -28,6 +37,10 @@ rules:
   # carries its real reason instead of a generic timeout.
   - apiGroups: [""]
     resources: ["events"]
+    verbs: ["get", "list"]
+  # The namespace's GPU quota: a pool's capacity where nodes cannot be read.
+  - apiGroups: [""]
+    resources: ["resourcequotas"]
     verbs: ["get", "list"]
   # A policy is a CONTROLLER, not a service: it dials the platform API and asks
   # for launches. So it runs as a Job — narrower than a Deployment grant on

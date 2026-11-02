@@ -13,29 +13,30 @@ const router = useRouter()
 const { t, locale, setLocale } = useI18n()
 
 const activeMenu = computed(() => '/' + route.path.split('/')[1])
-/** The pages that live under the tuning menu. A sub-menu does not light up
- *  from its child being active the way a top-level item does, and a nav that
- *  forgets where you are is worse than one with more entries — so the group
- *  is marked active by hand. */
-/** The menu, with whatever installed plugins add, each group in `order`. */
+/** The menu, with whatever installed plugins add, each group in `order`.
+ *  The top row is where people work all day: campaigns, their runs, the
+ *  production traffic they replay, the machines they run on. The Library holds what a campaign is built from,
+ *  set up once and reused, each entry saying what it is. */
 const NAV: NavItem[] = [
-  { path: '/campaigns', label: 'nav.campaigns', group: 'tuning', order: 10 },
-  { path: '/search-spaces', label: 'nav.searchSpaces', group: 'tuning', order: 30 },
-  { path: '/objectives', label: 'nav.objectives', group: 'tuning', order: 40 },
-  { path: '/datasets', label: 'nav.datasets', group: 'tuning', order: 42 },
-  { path: '/policies', label: 'nav.policies', group: 'tuning', order: 45 },
-  { path: '/baselines', label: 'nav.baselines', group: 'tuning', order: 50 },
+  { path: '/campaigns', label: 'nav.campaigns', group: 'top', order: 10 },
   { path: '/runs', label: 'nav.runs', group: 'top', order: 20 },
+  { path: '/datasets', label: 'nav.datasets', group: 'top', order: 25 },
   { path: '/resources', label: 'nav.resources', group: 'top', order: 30 },
   ...(AGENT_REPORTS ? [{ path: '/reports', label: 'nav.reports', group: 'top' as const, order: 50 }] : []),
+  { path: '/search-spaces', label: 'nav.searchSpaces', hint: 'nav.hint.searchSpaces', group: 'library', order: 10 },
+  { path: '/objectives', label: 'nav.objectives', hint: 'nav.hint.objectives', group: 'library', order: 20 },
+  { path: '/policies', label: 'nav.policies', hint: 'nav.hint.policies', group: 'library', order: 40 },
+  { path: '/baselines', label: 'nav.baselines', hint: 'nav.hint.baselines', group: 'library', order: 50 },
 ]
 function navOf(group: NavItem['group']): NavItem[] {
   return [...NAV.filter((n) => n.group === group), ...pluginNav(group)]
     .sort((a, b) => a.order - b.order)
 }
-const tuningNav = navOf('tuning')
+const libraryNav = navOf('library')
 const topNav = navOf('top')
-const inTuning = computed(() => tuningNav.some((n) => n.path === activeMenu.value))
+/** A sub-menu does not light up from its child being active the way a
+ *  top-level item does, so the Library is marked active by hand. */
+const inLibrary = computed(() => libraryNav.some((n) => n.path === activeMenu.value))
 
 /** The store only learned who you are at login, so a reload left `user` null
  *  and the menu had no name to show. Fetch it whenever there is a token and no
@@ -59,6 +60,7 @@ const initial = computed(() => (auth.user?.username ?? '?').charAt(0).toUpperCas
 function onCommand(command: string) {
   if (command === 'account') router.push('/account')
   else if (command === 'keys') router.push('/api-keys')
+  else if (command === 'settings') router.push('/settings')
   else if (command === 'logout') logout()
 }
 
@@ -101,24 +103,21 @@ function logout() {
   <el-container>
     <el-header v-if="auth.isAuthenticated" class="topbar">
       <span class="brand">LLM AutoTune</span>
-      <!-- Four entries, not seven. The tuning stack is one activity — a
-           campaign searches a space against an objective, from a baseline —
-           so it folds into one menu, and what is left on the top row are the
-           things that are their own thing: the runs, the machines, and the
-           when enabled, the reports written from them). -->
       <el-menu mode="horizontal" :default-active="activeMenu" :ellipsis="false" router
         class="nav-menu">
-        <el-sub-menu index="tuning" :class="{ 'is-active-group': inTuning }">
-          <template #title>{{ t('nav.tuning') }}</template>
-          <el-menu-item v-for="item in tuningNav" :key="item.path" :index="item.path">
-            <a :href="href(item.path)" class="menu-link" @click="onNavLinkClick">{{
-              t(item.label) }}</a>
-          </el-menu-item>
-        </el-sub-menu>
         <el-menu-item v-for="item in topNav" :key="item.path" :index="item.path">
           <a :href="href(item.path)" class="menu-link" @click="onNavLinkClick">{{
             t(item.label) }}</a>
         </el-menu-item>
+        <el-sub-menu index="library" popper-class="library-menu" :class="{ 'is-active-group': inLibrary }">
+          <template #title>{{ t('nav.library') }}</template>
+          <el-menu-item v-for="item in libraryNav" :key="item.path" :index="item.path">
+            <a :href="href(item.path)" class="menu-link" @click="onNavLinkClick">
+              <span class="menu-label">{{ t(item.label) }}</span>
+              <span v-if="item.hint" class="menu-hint">{{ t(item.hint) }}</span>
+            </a>
+          </el-menu-item>
+        </el-sub-menu>
       </el-menu>
       <span class="spacer" />
       <!-- Two languages, so a segmented control rather than a dropdown: the
@@ -161,6 +160,10 @@ function logout() {
               <a :href="href('/api-keys')" class="dropdown-link"
                 @click="onMenuLinkClick($event, '/api-keys')">{{ t('nav.apiKeys') }}</a>
             </el-dropdown-item>
+            <el-dropdown-item v-if="auth.user?.role === 'admin'" command="settings">
+              <a :href="href('/settings')" class="dropdown-link"
+                @click="onMenuLinkClick($event, '/settings')">{{ t('nav.settings') }}</a>
+            </el-dropdown-item>
             <el-dropdown-item divided command="logout">
               {{ t('nav.logOut') }}
             </el-dropdown-item>
@@ -186,14 +189,20 @@ function logout() {
 .topbar {
   display: flex;
   align-items: center;
-  gap: 16px;
-  background: #fff;
+  gap: 24px;
+  height: 56px;
+  background: var(--autotune-surface);
   border-bottom: 1px solid var(--autotune-border);
 }
 .brand {
   font-weight: 700;
   font-size: 16px;
+  letter-spacing: -0.01em;
   white-space: nowrap;
+}
+.nav-menu {
+  --el-menu-horizontal-height: 55px;
+  --el-menu-item-font-size: 14px;
 }
 .nav-menu {
   border-bottom: none;
@@ -287,6 +296,26 @@ a.menu-link::after {
   content: '';
   position: absolute;
   inset: 0;
+}
+/* The Library's entries: a name and what it is, on two lines. */
+.el-popper.library-menu .el-menu--popup .el-menu-item {
+  height: auto;
+  line-height: 1.35;
+  padding-top: 8px;
+  padding-bottom: 8px;
+}
+.library-menu a.menu-link {
+  display: flex;
+  flex-direction: column;
+  min-width: 240px;
+}
+.library-menu .menu-label {
+  font-size: 13.5px;
+  font-weight: 500;
+}
+.library-menu .menu-hint {
+  font-size: 12px;
+  color: var(--autotune-muted);
 }
 /* Same for the account menu's links: the item's padding is part of the link. */
 a.dropdown-link {

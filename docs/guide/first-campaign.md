@@ -34,12 +34,13 @@ local cluster) and sign in as `admin` with the printed password.
 
 The **Campaigns** page opens, empty. The top menu has three sections:
 
-- **Automatic Tuning**: Campaigns, Search spaces, Objectives, Policies and
-  Baselines.
+- **Campaigns**: every campaign, and a new one.
 - **Runs**: every run of every campaign.
 - **Resources**: GPU clusters and machines.
+- **Library**: what a campaign is built from: Search spaces, Objectives,
+  Datasets, Policies and Baselines.
 
-![The Automatic Tuning menu](images/nav-tuning-menu.png)
+![The Library menu](images/nav-library-menu.png)
 
 The user menu (top right) has **Account** and **API keys**.
 
@@ -79,7 +80,7 @@ pod on the node.
 
 ## 3. Create a search space
 
-Open **Automatic Tuning ▸ Search spaces** and press **New search space**.
+Open **Library ▸ Search spaces** and press **New search space**.
 
 1. Enter a **Name** and select the **Engine** (`sglang` or `vllm`).
 2. In **Add a parameter**, search for an engine setting and select it. The
@@ -104,7 +105,7 @@ Press **Save**.
 
 ## 4. Choose an objective
 
-Open **Automatic Tuning ▸ Objectives**. The install provides six built-in
+Open **Library ▸ Objectives**. The install provides six built-in
 objectives. **Throughput per GPU** is the default: it ranks configs by output
 tokens per minute divided by the GPUs they use.
 
@@ -116,7 +117,7 @@ with a **redline**, or **Duplicate** one and edit it
 
 ## 5. Create the campaign
 
-Open **Automatic Tuning ▸ Campaigns** and press **New campaign**. The wizard
+Open **Campaigns** and press **New campaign**. The wizard
 has six steps; the **So far** panel on the right summarizes the campaign.
 Click a step title to return to it.
 

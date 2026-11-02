@@ -43,6 +43,8 @@ import secrets
 import shlex
 import socket
 import time
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 from app.control.engines import MODEL_MOUNT, get_adapter
@@ -52,15 +54,16 @@ from app.control.launch.base import (
     DeploymentState,
     LaunchSpec,
     MachineInfo,
+    SmokeSteps,
     WorkloadSpec,
     WorkloadState,
     merge_volumes,
     smoke_check,
-    smoke_result,
 )
 from app.control.launch.clusters import K8sClusterSettings, as_cluster, resolve_cluster
 from app.control.launch.failures import TRANSIENT_PLACEMENT_FAILURES
 from app.control.launch.k8s_api import K8sApi, get_k8s_api
+from app.control.launch.locality import ANOTHER_CLUSTER, same_cluster, unreachable_by_name
 from app.core.config import Settings, get_settings
 from app.hardware import normalize_gpu_type
 
@@ -108,6 +111,26 @@ _POD_FAILED_REASONS = {
 _POD_FAILED_EVENT_REASONS = {
     "FailedMount", "FailedAttachVolume", "FailedCreatePodSandBox",
 }
+
+
+def _pod_ready(pod: dict) -> bool:
+    return any(
+        c.get("type") == "Ready" and c.get("status") == "True"
+        for c in (pod.get("status") or {}).get("conditions") or []
+    )
+
+
+def _restarted_before_ready(container: dict) -> bool:
+    """A container the cluster restarted while the pod was never ready: the
+    engine process died during startup, whatever its exit code (an OOM at
+    CUDA-graph capture exits 0). The Deployment restarts it with the same
+    config, so it dies the same way — and each restart resets the container's
+    `startedAt`, which the ready timeout counts from, so without this a
+    config that dies after ten minutes loops on its cards all night. Runs
+    have no liveness probe, so nothing else restarts a loading engine."""
+    return int(container.get("restartCount") or 0) > 0 and bool(
+        (container.get("lastState") or {}).get("terminated")
+    )
 
 
 def _failure_class_for(reason: str) -> str:
@@ -247,7 +270,10 @@ def _engine_container(spec: LaunchSpec, settings: Settings) -> dict:
     """The serving container, shared by the Deployment (and reusable by a CRD
     that takes a raw pod template)."""
     command = _guarded_command(get_adapter(spec.engine).build_command(spec))
-    env = {**DEFAULT_ENV, **spec.env}
+    env = {
+        **(DEFAULT_ENV if settings.k8s_gpu_resource.startswith("nvidia.com/") else {}),
+        **spec.env,
+    }
     pod_volumes, mounts = _engine_volumes(spec, settings)
     container: dict[str, Any] = {
         "name": "engine",
@@ -275,7 +301,7 @@ def _engine_container(spec: LaunchSpec, settings: Settings) -> dict:
         "volumeMounts": mounts,
     }
     # GPU-ness is per machine, exactly as in the ssh driver: only a machine with
-    # cards gets the resource request and the nvidia runtimeClass. This is also
+    # cards gets the configured resource request and runtimeClass. This is also
     # what lets the driver run on a GPU-less test cluster.
     gpus = _gpu_count(spec)
     pod_spec: dict[str, Any] = {"containers": [container], "volumes": pod_volumes}
@@ -523,6 +549,12 @@ def render_policy_job(spec: WorkloadSpec, settings: Settings) -> dict:
             pod_spec["nodeSelector"] = selector
         if gpus and settings.k8s_runtime_class:
             pod_spec["runtimeClassName"] = settings.k8s_runtime_class
+    elif (settings.k8s_policy_node_selector or "").strip():
+        # Not the machine's selector (that would park it on GPU hardware) nor
+        # the global one: only where the install says controllers may run.
+        selector = _node_selector_pairs(settings.k8s_policy_node_selector, settings)
+        if selector:
+            pod_spec["nodeSelector"] = selector
     # The same tolerations an engine with these cards would carry: a policy
     # that takes cards lands on a tainted GPU node like an engine does, and the
     # explicitly declared ones apply to every pod. Without them a self-serving
@@ -599,7 +631,10 @@ def _render_cr(spec: LaunchSpec, settings: Settings) -> dict:
     expressed. The common case — one model directory — is covered.
     """
     command = _guarded_command(get_adapter(spec.engine).build_command(spec))
-    env = {**DEFAULT_ENV, **spec.env}
+    env = {
+        **(DEFAULT_ENV if settings.k8s_gpu_resource.startswith("nvidia.com/") else {}),
+        **spec.env,
+    }
     cr_spec: dict[str, Any] = {
         "image": spec.image,
         "command": [command[0]],
@@ -608,6 +643,8 @@ def _render_cr(spec: LaunchSpec, settings: Settings) -> dict:
         # A count, never device indices — the scheduler places them.
         "gpuCount": _gpu_count(spec),
         "gpuResourceName": settings.k8s_gpu_resource,
+        # An explicit empty value disables the operator's NVIDIA default.
+        "runtimeClassName": settings.k8s_runtime_class if _gpu_count(spec) > 0 else "",
         "modelMountPath": MODEL_MOUNT,
         "serviceType": "NodePort",
         "env": {k: str(v) for k, v in sorted(env.items())},
@@ -783,19 +820,35 @@ def _node_name(node: dict) -> str:
     return str((node.get("metadata") or {}).get("name") or "")
 
 
-def _node_gpu_count(node: dict) -> int:
+def _node_gpu_count(node: dict, resource: str = _GPU_RESOURCE) -> int:
     """Allocatable GPUs on a node — what the scheduler can place, not the raw
     installed count (which a drained or partly-reserved node overstates)."""
     alloc = (node.get("status") or {}).get("allocatable") or {}
     try:
-        return int(alloc.get(_GPU_RESOURCE, 0) or 0)
+        return int(alloc.get(resource, 0) or 0)
     except (TypeError, ValueError):
         return 0
 
 
-def _node_takes_pods(node: dict) -> bool:
-    """Ready and not cordoned: a node the scheduler places new pods on."""
-    if (node.get("spec") or {}).get("unschedulable"):
+CORDON_TAINT = "node.kubernetes.io/unschedulable"
+
+
+def _tolerates_cordon(settings: Settings | None) -> bool:
+    """Whether this cluster's pods carry the cordon's toleration. An admin who
+    cordons GPU nodes to keep everything else off them, for this platform to
+    use, adds `node.kubernetes.io/unschedulable:NoSchedule` to the cluster's
+    tolerations: the scheduler then places our pods there and nothing else."""
+    for raw in ((settings.k8s_tolerations if settings else "") or "").split(","):
+        key = raw.strip().partition(":")[0].partition("=")[0].strip()
+        if key == CORDON_TAINT:
+            return True
+    return False
+
+
+def _node_takes_pods(node: dict, settings: Settings | None = None) -> bool:
+    """Ready, and not cordoned unless our pods tolerate the cordon: a node the
+    scheduler places our new pods on."""
+    if (node.get("spec") or {}).get("unschedulable") and not _tolerates_cordon(settings):
         return False
     return any(
         cond.get("type") == "Ready" and cond.get("status") == "True"
@@ -803,11 +856,11 @@ def _node_takes_pods(node: dict) -> bool:
     )
 
 
-def _node_gpu_type(node: dict) -> str:
+def _node_gpu_type(node: dict, product_label: str = _GPU_PRODUCT_LABEL) -> str:
     """The node's canonical card type from its GPU product label, or "" if the
     label is absent or names a card the platform does not know yet."""
     labels = (node.get("metadata") or {}).get("labels") or {}
-    return normalize_gpu_type(str(labels.get(_GPU_PRODUCT_LABEL) or ""))
+    return normalize_gpu_type(str(labels.get(product_label) or ""))
 
 
 class K8sDriver(DeploymentDriver):
@@ -942,6 +995,8 @@ class K8sDriver(DeploymentDriver):
                 terminated = (container.get("state") or {}).get("terminated") or {}
                 if terminated and terminated.get("exitCode") not in (0, None):
                     any_crashed = True
+                if _restarted_before_ready(container):
+                    any_crashed = True
         return DeploymentState.CRASHED if any_crashed else DeploymentState.STARTING
 
     def incarnation(self, handle: DeploymentHandle) -> str | None:
@@ -1027,6 +1082,14 @@ class K8sDriver(DeploymentDriver):
                 reason = waiting.get("reason")
                 if reason in _POD_FAILED_REASONS:
                     return (_failure_class_for(reason), waiting.get("message") or reason)
+                if not _pod_ready(pod) and _restarted_before_ready(container):
+                    last = (container.get("lastState") or {}).get("terminated") or {}
+                    return (
+                        "crash_loop",
+                        f"the engine exited before it was ready (exit code {last.get('exitCode')}"
+                        f"{', ' + last['reason'] if last.get('reason') else ''}) and the cluster "
+                        f"restarted it {int(container.get('restartCount') or 0)} time(s)",
+                    )
                 term = (container.get("state") or {}).get("terminated") or {}
                 if term and term.get("exitCode") not in (0, None):
                     if term.get("reason") == "OOMKilled":
@@ -1100,7 +1163,10 @@ class K8sDriver(DeploymentDriver):
                 )
         want = _pod_gpu_request(pod, self.settings.k8s_gpu_resource)
         if want > 0 and nodes:
-            biggest = max((_node_gpu_count(node) for node in nodes), default=0)
+            biggest = max(
+                (_node_gpu_count(node, self.settings.k8s_gpu_resource) for node in nodes),
+                default=0,
+            )
             if want > biggest:
                 return (
                     "unplaceable",
@@ -1278,11 +1344,13 @@ class K8sDriver(DeploymentDriver):
         """`http://<node>:<nodePort>` — the NodePort Service reached via a node
         IP. Falls back to the spec's host:port until the Service has a port
         (right after apply) or if no node IP can be read."""
-        port = self.settings.k8s_service_nodeport
+        # An existing Service keeps its allocated port when cluster defaults
+        # change. Never point a running model at a newly configured port.
+        svc = self.api.get("service", spec.container_name)
+        ports = ((svc or {}).get("spec") or {}).get("ports") or []
+        port = ports[0].get("nodePort") if ports else None
         if not port:
-            svc = self.api.get("service", spec.container_name)
-            ports = ((svc or {}).get("spec") or {}).get("ports") or []
-            port = ports[0].get("nodePort") if ports else None
+            port = self.settings.k8s_service_nodeport
         host = self.settings.k8s_node_host or self._first_node_ip()
         if host and port:
             return f"http://{host}:{port}"
@@ -1322,6 +1390,10 @@ class K8sDriver(DeploymentDriver):
         selector = machine.node_selector or self.settings.k8s_node_selector
         warnings: list[str] = []
         if not selector.strip():
+            # No nodes named: the namespace's quota is the whole of what this
+            # machine may use, when there is one.
+            if self._quota_limit() is not None:
+                return self._quota_capacity("no node selector set")
             return {
                 "supported": True, "gpu_count": 0, "gpu_type": "", "node_count": 0,
                 "node_gpu_max": 0, "gpu_free": None, "gpu_types": [],
@@ -1332,9 +1404,7 @@ class K8sDriver(DeploymentDriver):
         try:
             nodes = self.api.list("nodes", label_selector=selector.strip())
         except Exception as exc:
-            return {"supported": True, "gpu_count": 0, "gpu_type": "", "node_count": 0,
-                    "node_gpu_max": 0, "gpu_free": None, "gpu_types": [],
-                    "nodes": [], "warnings": [f"could not read nodes: {exc}"]}
+            return self._quota_capacity(f"could not read nodes: {exc}")
 
         resource = self.settings.k8s_gpu_resource
         held: dict[str, int] | None = None
@@ -1360,20 +1430,32 @@ class K8sDriver(DeploymentDriver):
         free_total = 0
         types: set[str] = set()
         for node in nodes:
-            count = _node_gpu_count(node)
-            gpu_type = _node_gpu_type(node)
-            total += count
-            schedulable = _node_takes_pods(node)
+            count = _node_gpu_count(node, self.settings.k8s_gpu_resource)
+            gpu_type = _node_gpu_type(node, self.settings.k8s_gpu_product_label)
+            schedulable = _node_takes_pods(node, self.settings)
             used = None if held is None else held.get(_node_name(node), 0)
+            cordoned = (node.get("spec") or {}).get("unschedulable")
+            if cordoned and not _tolerates_cordon(self.settings):
+                # Read as 0 cards, which says nothing about why. A node an
+                # admin cordoned to hand it to this platform is used once the
+                # cluster tolerates the cordon.
+                warnings.append(
+                    f"{_node_name(node)} is cordoned, so its {count} cards count as none; "
+                    f"if it was cordoned for this platform, add the toleration "
+                    f"{CORDON_TAINT}:NoSchedule to the cluster"
+                )
             free = None if used is None else (max(count - used, 0) if schedulable else 0)
             if schedulable:
+                # Only nodes that take new pods are capacity: a cordoned or
+                # not-Ready node's cards cannot be planned against.
+                total += count
                 largest = max(largest, count)
                 free_total += free or 0
             if gpu_type:
                 types.add(gpu_type)
             else:
                 labels = (node.get("metadata") or {}).get("labels") or {}
-                raw = labels.get(_GPU_PRODUCT_LABEL)
+                raw = labels.get(self.settings.k8s_gpu_product_label)
                 warnings.append(
                     f"{_node_name(node)}: unknown GPU product {raw!r} — add it to "
                     "app.hardware.GPU_TYPES" if raw
@@ -1386,6 +1468,17 @@ class K8sDriver(DeploymentDriver):
 
         if not nodes:
             warnings.append(f"selector {selector!r} matched no nodes")
+        elif not total:
+            warnings.append("no matched node takes new pods (cordoned or not Ready)")
+        gpu_free = None if held is None else free_total
+        # The namespace's quota bounds what our pods may hold at once, however
+        # many cards the nodes have.
+        limit = self._quota_limit() if total else None
+        if limit is not None and limit[0] < total:
+            warnings.append(f"capped at the namespace's GPU quota ({limit[0]} of {total} cards)")
+            total = limit[0]
+            spare = max(limit[0] - limit[1], 0)
+            gpu_free = spare if gpu_free is None else min(gpu_free, spare)
         if len(types) > 1:
             warnings.append(
                 f"selector spans multiple card types {sorted(types)} — results "
@@ -1400,61 +1493,142 @@ class K8sDriver(DeploymentDriver):
             # The widest pod that could ever be placed here: the biggest node
             # that takes new pods.
             "node_gpu_max": largest,
-            "gpu_free": None if held is None else free_total,
+            "gpu_free": gpu_free,
             "nodes": detail,
             "warnings": warnings,
         }
 
+    def _quota_limit(self) -> tuple[int, int] | None:
+        """(hard, used) of the namespace's tightest GPU quota; None when there
+        is none or it cannot be read."""
+        keys = (f"requests.{self.settings.k8s_gpu_resource}", self.settings.k8s_gpu_resource)
+        try:
+            quotas = self.api.list("resourcequotas")
+        except Exception:
+            return None
+        found: tuple[int, int] | None = None
+        for quota in quotas:
+            status = quota.get("status") or {}
+            limits = status.get("hard") or (quota.get("spec") or {}).get("hard") or {}
+            spent = status.get("used") or {}
+            for key in keys:
+                if key in limits:
+                    value = _quantity_int(limits[key])
+                    if found is None or value < found[0]:
+                        found = (value, _quantity_int(spent.get(key, 0)))
+                    break
+        return found
+
+    def _quota_capacity(self, why: str) -> dict[str, Any]:
+        """Capacity without node access: the namespace's GPU quota, which a
+        namespace-scoped role can read. It bounds how many cards our pods may
+        request at once, which is what admission needs; the cluster still
+        places them. Node sizes and card type stay unknown, so the node-fit
+        check passes and a pod no node can hold waits, then reads as
+        unplaceable."""
+        empty = {"supported": True, "gpu_count": 0, "gpu_type": "", "node_count": 0,
+                 "node_gpu_max": 0, "gpu_free": None, "gpu_types": [], "nodes": []}
+        limit = self._quota_limit()
+        if limit is None:
+            return {**empty, "warnings": [why, "and the namespace has no readable GPU quota "
+                                          "to go by; set the machine's card count by hand"]}
+        hard, used = limit
+        return {
+            **empty,
+            "gpu_count": hard,
+            "gpu_free": max(hard - used, 0),
+            "quota": True,
+            "warnings": [why + f"; capacity is the namespace's GPU quota ({hard})"],
+        }
+
     # -- smoke test ----------------------------------------------------------
 
-    def smoke_test(self, machine: MachineInfo, probe_pod: bool = False) -> dict[str, Any]:
+    def smoke_test(
+        self, machine: MachineInfo, probe_pod: bool = False,
+        progress: Callable[[dict], None] | None = None,
+    ) -> dict[str, Any]:
         """Walk what a launch on this machine needs from the cluster: a
         transport, a credential the API server accepts, the RBAC to create the
         workload, the node(s) the selector names, an address to reach a
-        NodePort on — and, with `probe_pod`, a pod actually placed there."""
+        NodePort on — and, with `probe_pod`, a pod actually placed there.
+
+        The transport and the credential come first, since nothing else can be
+        asked without them; the rest only need the credential, so they run side
+        by side and the test takes as long as its slowest step."""
         s = self.settings
-        checks: list[dict] = []
+        steps = SmokeSteps(
+            ["cluster", "credential", "permissions", "node", "endpoint"]
+            + (["probe pod"] if probe_pod else []),
+            progress,
+        )
         where = f"cluster {s.cluster_name}, namespace {s.k8s_namespace}"
+        transport: dict[str, K8sApi] = {}
 
-        if not s.k8s_api_mode or s.k8s_api_mode == "unavailable":
-            checks.append(smoke_check(
-                "cluster", "fail",
-                f"{where}: api_mode is 'unavailable' — the platform has no way to "
-                "talk to it; set api_mode and a kubeconfig on the cluster",
-            ))
-            return smoke_result(checks)
-        try:
-            api = self.api
-        except Exception as exc:  # noqa: BLE001 — a smoke test reports, never raises
-            checks.append(smoke_check("cluster", "fail", f"{where}: transport unavailable: {exc}"))
-            return smoke_result(checks)
-        checks.append(smoke_check(
-            "cluster", "pass", f"{where} ({s.k8s_api_mode}, {s.k8s_workload_kind} workloads)"
-        ))
+        def cluster() -> dict:
+            if not s.k8s_api_mode or s.k8s_api_mode == "unavailable":
+                return smoke_check(
+                    "cluster", "fail",
+                    f"{where}: api_mode is 'unavailable' — the platform has no way to "
+                    "talk to it; set api_mode and a kubeconfig on the cluster",
+                )
+            try:
+                transport["api"] = self.api
+            except Exception as exc:  # noqa: BLE001 — a smoke test reports, never raises
+                return smoke_check("cluster", "fail", f"{where}: transport unavailable: {exc}")
+            return smoke_check(
+                "cluster", "pass", f"{where} ({s.k8s_api_mode}, {s.k8s_workload_kind} workloads)"
+            )
 
-        try:
-            pods = api.list("pods")
-        except Exception as exc:  # noqa: BLE001
-            checks.append(smoke_check("credential", "fail", _credential_problem(exc)))
-            return smoke_result(checks)
-        checks.append(smoke_check(
-            "credential", "pass",
-            f"accepted; {len(pods)} pod(s) visible in {s.k8s_namespace}",
-        ))
+        def credential() -> dict:
+            try:
+                pods = transport["api"].list("pods")
+            except Exception as exc:  # noqa: BLE001
+                return smoke_check("credential", "fail", _credential_problem(exc))
+            return smoke_check(
+                "credential", "pass", f"accepted; {len(pods)} pod(s) visible in {s.k8s_namespace}"
+            )
 
-        checks.append(self._smoke_permissions(api, probe_pod))
-        nodes, node_check = self._smoke_nodes(api, machine)
-        checks.append(node_check)
-        checks.append(self._smoke_endpoint_host(nodes))
+        if steps.run("cluster", cluster)["status"] == "fail":
+            return steps.result()
+        if steps.run("credential", credential)["status"] == "fail":
+            return steps.result()
+        api = transport["api"]
+
+        def node_then_endpoint() -> None:
+            seen: list[dict] = []
+
+            def node() -> dict:
+                nodes, check = self._smoke_nodes(api, machine)
+                seen.extend(nodes)
+                return check
+
+            steps.run("node", node)
+            steps.run("endpoint", lambda: self._smoke_endpoint_host(seen))
+
+        lanes = [
+            lambda: steps.run("permissions", lambda: self._smoke_permissions(api, probe_pod)),
+            node_then_endpoint,
+        ]
         if probe_pod:
-            checks.append(self._smoke_probe_pod(api, machine))
-        return smoke_result(checks)
+            lanes.append(
+                lambda: steps.run("probe pod", lambda: self._smoke_probe_pod(api, machine))
+            )
+        with ThreadPoolExecutor(max_workers=len(lanes)) as pool:
+            for future in [pool.submit(lane) for lane in lanes]:
+                future.result()
+        return steps.result()
 
     def _smoke_permissions(self, api: K8sApi, probe_pod: bool) -> dict:
         s = self.settings
         if s.k8s_workload_kind == "custom":
             needs = [("create", s.k8s_cr_plural, s.k8s_cr_group),
                      ("delete", s.k8s_cr_plural, s.k8s_cr_group)]
+        elif s.k8s_workload_kind == "llmservice":
+            # The object, and the reads the driver does itself: the chart's
+            # Service (its endpoints are readiness) and the pods.
+            needs = [("create", "llmservices", "serving.modelsphere.dev"),
+                     ("delete", "llmservices", "serving.modelsphere.dev"),
+                     ("get", "endpoints", ""), ("list", "pods", "")]
         else:
             needs = [("create", "deployments", "apps"), ("delete", "deployments", "apps"),
                      ("create", "services", ""), ("delete", "services", "")]
@@ -1462,9 +1636,13 @@ class K8sDriver(DeploymentDriver):
         if probe_pod:
             needs += [("create", "pods", ""), ("delete", "pods", "")]
         missing, unknown = [], 0
-        for verb, resource, group in needs:
+        # One round trip each, so asked together rather than one after another.
+        with ThreadPoolExecutor(max_workers=len(needs)) as pool:
+            futures = [pool.submit(api.can_i, verb, resource, group)
+                       for verb, resource, group in needs]
+        for (verb, resource, group), future in zip(needs, futures, strict=True):
             try:
-                allowed = api.can_i(verb, resource, group)
+                allowed = future.result()
             except Exception as exc:  # noqa: BLE001
                 return smoke_check("permissions", "warn", f"could not ask the API server: {exc}")
             if allowed is None:
@@ -1502,7 +1680,9 @@ class K8sDriver(DeploymentDriver):
         parts, worst = [], "pass"
         for node in nodes:
             spec = node.get("spec") or {}
-            gpus = f"{_node_gpu_count(node)} × {_node_gpu_type(node) or 'GPU'} allocatable"
+            count = _node_gpu_count(node, self.settings.k8s_gpu_resource)
+            card_type = _node_gpu_type(node, self.settings.k8s_gpu_product_label)
+            gpus = f"{count} × {card_type or 'accelerator'} allocatable"
             if not _node_ready(node):
                 parts.append(f"{_node_name(node)}: NotReady")
                 worst = "fail"
@@ -1519,6 +1699,20 @@ class K8sDriver(DeploymentDriver):
         s = self.settings
         if s.k8s_workload_kind == "custom":
             return smoke_check("endpoint", "skip", "custom workloads publish their own URL")
+        if s.k8s_workload_kind == "llmservice" and (s.k8s_endpoint or "dns") != "nodeport":
+            local = same_cluster(s)
+            if local is False:
+                return smoke_check(
+                    "endpoint", "fail",
+                    f"runs are reached by Service name in {s.k8s_namespace}, but {ANOTHER_CLUSTER}",
+                )
+            return smoke_check(
+                "endpoint", "pass" if local else "warn",
+                f"runs are reached by Service name in {s.k8s_namespace} (in-cluster DNS); "
+                + ("this is the cluster AutoTune runs in" if local else
+                   "AutoTune cannot tell whether this is its own cluster: the benchmark "
+                   "must run in this cluster"),
+            )
         host = s.k8s_node_host or self._first_node_ip()
         if not host:
             return smoke_check(
@@ -1596,13 +1790,15 @@ class K8sDriver(DeploymentDriver):
                 for cond in (pod.get("status") or {}).get("conditions") or []:
                     if cond.get("type") == "PodScheduled" and cond.get("status") == "False":
                         unschedulable = cond.get("message") or cond.get("reason") or ""
-                if time.monotonic() >= deadline:
+                # It asks for nothing, so the scheduler's no is a selector,
+                # taint or cordon — waiting out the clock will not change it.
+                if unschedulable or time.monotonic() >= deadline:
                     break
-                time.sleep(2)
+                time.sleep(1)
+            if unschedulable:
+                return smoke_check("probe pod", "fail", f"not schedulable: {unschedulable[:400]}")
             return smoke_check(
-                "probe pod", "fail",
-                f"not scheduled within {_SMOKE_POD_WAIT_SECONDS}s"
-                + (f": {unschedulable[:400]}" if unschedulable else ""),
+                "probe pod", "fail", f"not scheduled within {_SMOKE_POD_WAIT_SECONDS}s"
             )
         finally:
             try:
@@ -1634,10 +1830,18 @@ class K8sDriver(DeploymentDriver):
         except Exception as exc:  # noqa: BLE001 — a preflight reports, never raises
             return [pf.Check("cluster", "Cluster", pf.FAIL, f"transport unavailable: {exc}")]
         checks: list[Any] = []
+        if unreachable_by_name(self.settings):
+            # Every run would load its model and then fail its health check.
+            checks.append(pf.Check(
+                "endpoint", "Endpoint", pf.FAIL,
+                f"runs on {self.settings.k8s_namespace} are reached by Service name, but "
+                f"{ANOTHER_CLUSTER}",
+                "Edit the cluster under Resources ▸ Clusters: NodePort, and its public host.",
+            ))
         nodes, node = self._smoke_nodes(api, machine)
         checks.append(pf.Check("node", "Node", node["status"], node["detail"]))
         if widest_candidate_cards and nodes:
-            biggest = max(_node_gpu_count(n) for n in nodes)
+            biggest = max(_node_gpu_count(n, self.settings.k8s_gpu_resource) for n in nodes)
             if widest_candidate_cards > biggest:
                 checks.append(pf.Check(
                     "gpus", "GPUs", pf.FAIL,
@@ -1651,6 +1855,40 @@ class K8sDriver(DeploymentDriver):
             return checks
         checks.extend(self._probe_job(api, machine, image, model_path, policy_images, timeout))
         return checks
+
+    def run_in_image(
+        self, machine: MachineInfo, image: str, command: str, timeout: int,
+        model_path: str = "",
+    ) -> tuple[str, str]:
+        """A Job on the machine's node (render_image_job): its log, and the
+        digest the node resolved the image to."""
+        api = self.api
+        name = f"autotune-vocab-{secrets.token_hex(4)}"
+        api.apply(render_image_job(name, machine, image, command, self.settings, model_path))
+        try:
+            deadline = time.monotonic() + timeout
+            while True:
+                pods = api.list("pods", label_selector=f"{PREFLIGHT_LABEL}={name}")
+                phase = ((pods[0].get("status") or {}).get("phase") if pods else "") or ""
+                if phase in ("Succeeded", "Failed"):
+                    break
+                if time.monotonic() >= deadline:
+                    raise RuntimeError(
+                        f"did not finish in {timeout}s (pod phase {phase or 'none'})"
+                    )
+                time.sleep(3)
+            statuses = (pods[0].get("status") or {}).get("containerStatuses") or []
+            digest = str((statuses[0] if statuses else {}).get("imageID") or "")
+            digest = digest.removeprefix("docker-pullable://")
+            out = api.logs(f"{PREFLIGHT_LABEL}={name}", tail=2000)
+            if phase == "Failed":
+                raise RuntimeError(f"the job failed: {out.strip()[-1500:]}")
+            return out, digest
+        finally:
+            try:
+                api.delete("job", name)
+            except Exception:  # noqa: BLE001 — labelled; it reaps itself after 600 s
+                logger.warning("could not delete vocabulary job %s", name)
 
     def model_presence(
         self,
@@ -1678,7 +1916,7 @@ class K8sDriver(DeploymentDriver):
         try:
             api = self.api
             names = [_node_name(n) for n in api.list("nodes", label_selector=selector)
-                     if _node_takes_pods(n)]
+                     if _node_takes_pods(n, self.settings)]
         except Exception as exc:  # noqa: BLE001 — a probe reports, never raises
             return unknown(f"could not read the machine's nodes: {str(exc)[:300]}")
         if not names:
@@ -1843,11 +2081,33 @@ class K8sDriver(DeploymentDriver):
             return ""
         for node in nodes:
             if _node_name(node) == node_name or len(nodes) == 1:
-                return _node_gpu_type(node)
+                return _node_gpu_type(node, self.settings.k8s_gpu_product_label)
         return ""
 
 
 _FILE_SUFFIXES = (".gguf", ".safetensors", ".bin", ".pt", ".pth")
+
+
+def _weights_mount(
+    model_path: str, settings: Settings
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], str]:
+    """(volumes, mounts, where the weights are in the container), mounted as a
+    run mounts them: the shared weights claim at its subpath, else a hostPath
+    with a type check, so a missing path fails the mount rather than appearing
+    as an empty directory."""
+    pvc = (settings.k8s_model_pvc or "").strip()
+    if pvc:
+        return (
+            [{"name": "weights", "persistentVolumeClaim": {"claimName": pvc, "readOnly": True}}],
+            [{"name": "weights", "mountPath": "/weights", "readOnly": True}],
+            "/weights/" + _model_subpath(model_path, settings),
+        )
+    kind = "File" if model_path.endswith(_FILE_SUFFIXES) else "Directory"
+    return (
+        [{"name": "model", "hostPath": {"path": model_path, "type": kind}}],
+        [{"name": "model", "mountPath": MODEL_MOUNT, "readOnly": True}],
+        MODEL_MOUNT,
+    )
 
 
 def render_preflight_job(
@@ -1871,18 +2131,11 @@ def render_preflight_job(
     command = "exit 0"
     reads_log = False
     if model_path and images and images[0][0] == "engine":
-        pvc = (settings.k8s_model_pvc or "").strip()
-        if pvc:
-            volumes.append({"name": "weights",
-                            "persistentVolumeClaim": {"claimName": pvc, "readOnly": True}})
-            mounts.append({"name": "weights", "mountPath": "/weights", "readOnly": True})
-            target = shlex.quote("/weights/" + _model_subpath(model_path, settings))
+        volumes, mounts, target = _weights_mount(model_path, settings)
+        if (settings.k8s_model_pvc or "").strip():
+            target = shlex.quote(target)
             command = f"if [ -e {target} ]; then echo model-present; else echo model-missing; fi"
             reads_log = True
-        else:
-            kind = "File" if model_path.endswith(_FILE_SUFFIXES) else "Directory"
-            volumes.append({"name": "model", "hostPath": {"path": model_path, "type": kind}})
-            mounts.append({"name": "model", "mountPath": MODEL_MOUNT, "readOnly": True})
     containers = []
     for container_name, _, _, ref in images:
         container: dict[str, Any] = {
@@ -1891,8 +2144,9 @@ def render_preflight_job(
             "command": ["sh", "-c", command if container_name == "engine" else "exit 0"],
             # No cards: keep the NVIDIA runtime from handing it every GPU on the
             # node because the image says "all".
-            "env": [{"name": "NVIDIA_VISIBLE_DEVICES", "value": "void"},
-                    {"name": "NVIDIA_DISABLE_REQUIRE", "value": "1"}],
+            "env": ([{"name": "NVIDIA_VISIBLE_DEVICES", "value": "void"},
+                     {"name": "NVIDIA_DISABLE_REQUIRE", "value": "1"}]
+                    if settings.k8s_gpu_resource.startswith("nvidia.com/") else []),
             "resources": {
                 "requests": {"cpu": "10m", "memory": "16Mi"},
                 "limits": {"cpu": "100m", "memory": "64Mi"},
@@ -1933,6 +2187,66 @@ def render_preflight_job(
         },
     }
     return job, reads_log
+
+
+def render_image_job(
+    name: str, machine: MachineInfo, image: str, command: str, settings: Settings,
+    model_path: str = "",
+) -> dict:
+    """A Job that runs one shell line in `image` on the machine's node, with
+    no cards: how the engine vocabulary (and, given a model path, the model's
+    own config) is read. Room for importing an engine (torch included),
+    nothing more. The weights, when given, are mounted as a run mounts them,
+    at $MODEL_DIR."""
+    volumes, mounts, model_dir = (
+        _weights_mount(model_path, settings) if model_path else ([], [], "")
+    )
+    container: dict[str, Any] = {
+        "name": "engine",
+        "image": image,
+        "command": ["sh", "-c", command],
+        # "none", not "void": no cards, but the driver libraries, which an
+        # engine's parser may load (vllm's CUDA platform needs libcuda).
+        "env": ([{"name": "NVIDIA_VISIBLE_DEVICES", "value": "none"},
+                 {"name": "NVIDIA_DISABLE_REQUIRE", "value": "1"}]
+                if settings.k8s_gpu_resource.startswith("nvidia.com/") else []),
+        "resources": {
+            "requests": {"cpu": "500m", "memory": "2Gi"},
+            "limits": {"cpu": "2", "memory": "8Gi"},
+        },
+    }
+    if model_path:
+        container["volumeMounts"] = mounts
+        container["env"].append({"name": "MODEL_DIR", "value": model_dir})
+    pod_spec: dict[str, Any] = {
+        "restartPolicy": "Never",
+        "automountServiceAccountToken": False,
+        "terminationGracePeriodSeconds": 0,
+        "containers": [container],
+    }
+    if volumes:
+        pod_spec["volumes"] = volumes
+    selector = _node_selector_pairs(machine.node_selector, settings)
+    if selector:
+        pod_spec["nodeSelector"] = selector
+    tolerations = _tolerations(1, settings)
+    if tolerations:
+        pod_spec["tolerations"] = tolerations
+    pull_secrets = _image_pull_secrets(settings)
+    if pull_secrets:
+        pod_spec["imagePullSecrets"] = pull_secrets
+    labels = {MANAGED_LABEL: "true", PREFLIGHT_LABEL: name}
+    return {
+        "apiVersion": "batch/v1",
+        "kind": "Job",
+        "metadata": {"name": name, "labels": labels},
+        "spec": {
+            "backoffLimit": 0,
+            "ttlSecondsAfterFinished": 600,
+            "activeDeadlineSeconds": 3600,
+            "template": {"metadata": {"labels": labels}, "spec": pod_spec},
+        },
+    }
 
 
 class ProbeVerdict:
@@ -2100,3 +2414,11 @@ def _yaml_ish(manifests: list[dict]) -> str:
     record. Not a YAML serializer — JSON is valid YAML — just indented so the
     stored command reads like what an operator would apply by hand."""
     return json.dumps(manifests, indent=2, sort_keys=True)
+
+
+def _quantity_int(value: Any) -> int:
+    """A quota quantity as a card count ("8", 8; GPUs are whole numbers)."""
+    try:
+        return int(float(str(value).strip()))
+    except (TypeError, ValueError):
+        return 0

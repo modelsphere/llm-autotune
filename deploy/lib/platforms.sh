@@ -525,9 +525,26 @@ secrets:
   serviceApiKey: "$SERVICE_API_KEY"
 postgres:
   password: "$LLMBENCH_POSTGRES_PASSWORD"
+# 32 benchmark runs at once (4 worker pods x 8 processes): AutoTune starts one
+# per trial in flight and its validation runs side by side, and a run that
+# finds no free slot waits, its engine holding GPUs. LLMBench 0.3.0's chart
+# defaults to 2. A process peaks around 1.3 GiB on a large replay.
+replicaCount:
+  worker: 4
+resources:
+  worker:
+    requests:
+      memory: 2Gi
+    limits:
+      cpu: 8000m
+      memory: 16Gi
+app:
+  worker:
+    processes: 8
+    threads: 1
 EOF
     if [ -n "${HF_ENDPOINT:-}" ]; then
-      printf 'app:\n  extraEnv:\n    - name: HF_ENDPOINT\n      value: "%s"\n' "$HF_ENDPOINT"
+      printf '  extraEnv:\n    - name: HF_ENDPOINT\n      value: "%s"\n' "$HF_ENDPOINT"
     fi
     if [ -n "${VICTORIALOGS_URL:-}" ]; then
       printf 'datasets:\n  enabled: true\n  accessMode: %s\ndatasetBuilder:\n  enabled: true\n' "$datasets_access"
@@ -554,6 +571,14 @@ EOF
     if [ -n "${VICTORIALOGS_URL:-}" ]; then
       printf '  victoriaLogsUrl: "%s"\n' "$VICTORIALOGS_URL"
     fi
+    # After the optional key above: it belongs to the llmbench: block.
+    cat <<EOF
+defaultPolicies:
+  - name: random-search
+    image: "$POLICY_IMAGE"
+    description: Samples the search space at random.
+    repoUrl: https://github.com/modelsphere/llm-autotune-policies
+EOF
     if [ "$MODE" = demo ]; then
       printf 'mockModel:\n  image: "%s"\n' "$mock_image"
     else
@@ -779,7 +804,7 @@ fi
 
 if [ "$MODE" = demo ]; then say "Wiring the two and starting the demo campaign"; else say "Wiring the two"; fi
 {
-  api_script "\"demo\": $([ "$MODE" = demo ] && echo True || echo False), \"image\": \"$mock_image\", \"model_path\": \"$MOCK_MODEL_PATH\", \"policy_image\": \"$POLICY_IMAGE\""
+  api_script "\"demo\": $([ "$MODE" = demo ] && echo True || echo False), \"image\": \"$mock_image\", \"model_path\": \"$MOCK_MODEL_PATH\""
   cat <<'PY'
 
 
@@ -795,20 +820,9 @@ ensured = until("the screen benchmark on LLMBench", ensure)
 print(f"   AutoTune measures runs with {ensured['slug']} on LLMBench "
       f"({'created' if ensured['created'] else 'present'}, locked)")
 
-# The published random-search policy, unless a policy of that name is already
-# registered (one built here with `policy`, or edited on the Policies page).
-status, rows = call("GET", "/policies", token=token)
-if status == 200 and not any(p["name"] == "random-search" for p in rows):
-    status, body = call("POST", "/policies", {
-        "name": "random-search", "image": CFG["policy_image"],
-        "version": CFG["policy_image"].rsplit(":", 1)[-1],
-        "description": "Samples the search space at random.",
-        "repo_url": "https://github.com/modelsphere/llm-autotune-policies",
-        "gpus_in_container": False, "needs_model": False,
-    }, token)
-    if status not in (200, 201):
-        sys.exit(f"could not register the random-search policy: {status} {body}")
-    print(f"   registered the random-search policy ({CFG['policy_image']})")
+# random-search is the chart's defaultPolicies (POLICY_IMAGE), registered by
+# the migrate job unless a policy of that name already is (one built here with
+# `policy`, or edited on the Policies page).
 if not CFG["demo"]:
     sys.exit(0)
 

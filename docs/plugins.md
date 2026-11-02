@@ -224,8 +224,10 @@ export default plugin
 
 - **`routes`** are added after the app's own. List a literal path before a
   parameter one (`/things/new` before `/things/:id`).
-- **`nav`** entries go under the Tuning menu (`group: 'tuning'`) or on the top
-  row (`'top'`), placed by `order` among the app's own entries (10, 20, 30…).
+- **`nav`** entries go on the top row (`group: 'top'`) or in the Library menu
+  (`'library'`; the old name `'tuning'` still lands there), placed by `order`
+  among the app's own entries (10, 20, 30…). A Library entry may add `hint`,
+  an i18n key for the line under its label.
 - **`messages`** are merged into the app's dictionaries, so `t('example.nav')`
   works anywhere.
 - **`slots`** fill the places the app marks with `<PluginSlot>`:
@@ -299,6 +301,8 @@ the platform and can change in any release. It offers:
   `reservations_on`, the queue keys, `preflight`;
 - **the search space, engines and configs**: `expand`, `space_errors`,
   `cards_used`, `LaunchConfig`, `parse_launch_command`, the flag helpers;
+- **recipes**: `Recipe`, `parse_recipe`, `recipe_problems`, `recipe_shape`;
+  a managed campaign given a `recipe` launches it unchanged;
 - **measuring**: objectives (`direction`, `target_metric`, `sort_key`),
   `summary_of`, `Gate`, `scenarios`, `LLMBenchClient`, dataset pinning;
 - **the agent API's run documents**: `load_run`, the document parts and

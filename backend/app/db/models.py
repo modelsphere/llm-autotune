@@ -281,14 +281,28 @@ class Cluster(Base):
     kubeconfig_enc: Mapped[str] = mapped_column(Text, default="")
     context: Mapped[str] = mapped_column(String(128), default="")
     namespace: Mapped[str] = mapped_column(String(128), default="autotune")
-    # "deployment" (the driver manages Deployment + NodePort Service) or
-    # "custom" (a TuningRun the operator reconciles). Per cluster because an
-    # operator may be installed on one cluster and not another.
-    workload_kind: Mapped[str] = mapped_column(String(24), default="deployment")
+    # "llmservice" (an LLMService per run), or the deprecated "deployment"
+    # (Deployment + NodePort Service) and "custom" (a TuningRun). Per cluster
+    # because an operator may be installed on one cluster and not another.
+    workload_kind: Mapped[str] = mapped_column(String(24), default="llmservice")
+    # "llmservice" mode (an LLMService per run; see app/control/recipe). Empty
+    # chart_repo = the install's AUTOTUNE_K8S_CHART_REPO.
+    chart_repo: Mapped[str] = mapped_column(String(512), default="", server_default="")
+    chart_credentials_secret: Mapped[str] = mapped_column(
+        String(253), default="", server_default=""
+    )
+    # "dns" (the benchmark is in this cluster) or "nodeport" (opt-in).
+    endpoint: Mapped[str] = mapped_column(String(16), default="dns", server_default="dns")
+    image_mirror: Mapped[str] = mapped_column(String(255), default="", server_default="")
+    # Chart values for every engine on this cluster, as JSON text.
+    site_values: Mapped[str] = mapped_column(Text, default="", server_default="")
     # The host LLMBench is given for a run's NodePort endpoint. Empty = derive
     # from a node InternalIP, which needs the cluster-scoped `nodes` read.
     node_host: Mapped[str] = mapped_column(String(255), default="")
     gpu_resource: Mapped[str] = mapped_column(String(64), default="nvidia.com/gpu")
+    gpu_product_label: Mapped[str] = mapped_column(
+        String(253), default="nvidia.com/gpu.product", server_default="nvidia.com/gpu.product"
+    )
     runtime_class: Mapped[str] = mapped_column(String(64), default="nvidia")
     tolerate_gpu_taint: Mapped[bool] = mapped_column(Boolean, default=True)
     tolerations: Mapped[str] = mapped_column(String(512), default="")
@@ -297,6 +311,10 @@ class Cluster(Base):
     model_pvc_root: Mapped[str] = mapped_column(String(255), default="")
     shm_size_mb: Mapped[int] = mapped_column(Integer, default=2048)
     node_selector: Mapped[str] = mapped_column(String(512), default="")
+    # Where a delegated policy pod (no cards) runs on this cluster, `k=v,k2=v2`.
+    # Empty = the install's AUTOTUNE_K8S_POLICY_NODE_SELECTOR, which names a
+    # node of one cluster and so cannot place pods on every cluster.
+    policy_node_selector: Mapped[str] = mapped_column(String(512), default="", server_default="")
     service_nodeport: Mapped[int] = mapped_column(Integer, default=0)
     run_ttl_seconds: Mapped[int] = mapped_column(Integer, default=0)
     in_cluster: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -506,6 +524,20 @@ class Campaign(Base):
     served_model_name: Mapped[str] = mapped_column(String(128))
     # {"base": {fixed args}, "grid": {param: [values]}, "tied": [{param: [values]}]}
     search_space: Mapped[dict] = mapped_column(JsonCol)
+    # The configuration every run starts from, as the engine chart reads it
+    # (app/control/recipe): {engine, chart, values}. A run launches this with
+    # its candidate's config applied, and a winner is published as it. Empty =
+    # a campaign from before recipes, built from the fields above.
+    recipe: Mapped[dict] = mapped_column(JsonCol, default=dict)
+    # The exact chart version every run renders. The recipe may name a range
+    # (the catalog does); a campaign pins it once, so a chart released mid-way
+    # cannot change what later trials measure. Set at creation when given or
+    # when the recipe names an exact version, else from the version the
+    # operator installed for the first run. Empty = not pinned yet.
+    chart_version: Mapped[str] = mapped_column(String(64), default="")
+    # Where the recipe came from, when it is a catalog variant:
+    # "<model>/<variant>@<version>". Empty = pasted or built from the fields.
+    recipe_source: Mapped[str] = mapped_column(String(255), default="")
     # {"target_metric": "...", "redlines": [{"metric": "...", "op": "<=", "value": x}]}
     objective: Mapped[dict] = mapped_column(JsonCol, default=dict)
     status: Mapped[str] = mapped_column(String(16), default=CampaignStatus.DRAFT.value, index=True)
@@ -575,6 +607,10 @@ class Campaign(Base):
     )
 
     max_run_minutes: Mapped[int] = mapped_column(Integer, default=150)
+    # How long an engine whose container is running may take to answer
+    # /v1/models before its run fails as ready_timeout. The model decides this
+    # (a very large one loads for over an hour), so it is the campaign's.
+    ready_timeout_minutes: Mapped[int] = mapped_column(Integer, default=120)
     # Set = this campaign's search runs in an external policy container: the
     # supervisor launches the image for the window and the container proposes
     # every config through the policy session API. Null = the platform simply
@@ -1112,6 +1148,58 @@ class CatalogEnvCategory(Base):
     )
 
 
+class PlatformSetting(Base):
+    """One admin-set value from the Settings page: an external platform's
+    address, or which LLM endpoint a job uses (core/platform_settings.py names
+    the keys). An empty or absent row falls back to the install's env, so a
+    chart value still works until an admin overrides it."""
+
+    __tablename__ = "platform_settings"
+
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    value: Mapped[str] = mapped_column(Text, default="")
+    # A secret value (an API key) is stored encrypted (core/secrets.py) here,
+    # never in `value`, and never returned by the API.
+    secret: Mapped[str] = mapped_column(Text, default="", server_default="")
+    updated_by_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class LlmEndpoint(Base):
+    """An OpenAI-compatible LLM endpoint an admin registered once, for the jobs
+    that call a model: report writing and LLM-agent policies. Its key is
+    stored encrypted and never returned; a policy that uses it gets it as
+    LLM_API_KEY at launch, redacted from the launch command."""
+
+    __tablename__ = "llm_endpoints"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(128), unique=True)
+    description: Mapped[str] = mapped_column(Text, default="")
+    base_url: Mapped[str] = mapped_column(String(512))
+    model: Mapped[str] = mapped_column(String(255))
+    api_key: Mapped[str] = mapped_column(Text, default="", server_default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    def api_key_value(self) -> str:
+        """The decrypted key; "" when none is set or it will not decrypt."""
+        from app.core.secrets import decrypt_secret
+
+        return decrypt_secret(self.api_key or "")
+
+    def set_api_key(self, value: str) -> None:
+        from app.core.secrets import encrypt_secret
+
+        self.api_key = encrypt_secret(value) if value else ""
+
+
 class Baseline(Base):
     """A production reference config, keyed by what it serves and on what.
 
@@ -1281,6 +1369,12 @@ class Policy(Base):
     # redacted from its launch command. Never returned by the API; only its
     # keys are (`secret_env_keys`).
     secret_env: Mapped[str] = mapped_column(Text, default="", server_default="")
+    # The LLM endpoint (Settings) an agent policy calls: at launch its address,
+    # model and key become LLM_BASE_URL, LLM_MODEL and LLM_API_KEY, over the
+    # same names in `env` and `secret_env`. None for a policy that calls no model.
+    llm_endpoint_id: Mapped[int | None] = mapped_column(
+        ForeignKey("llm_endpoints.id", ondelete="SET NULL"), nullable=True
+    )
     # How many host ports a session should reserve for it.
     ports: Mapped[int] = mapped_column(Integer, default=4)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
@@ -1396,6 +1490,10 @@ class PolicySession(Base):
     # The PUT /session/plan declaration: {"tuning": [...], "extras": [...],
     # "notes": ...}. The extras list is the allow-list for deviation badges.
     plan: Mapped[dict] = mapped_column(JsonCol, default=dict)
+    # What the night learned, in the policy's words (PUT /session/digest);
+    # other campaigns read it through GET /history.
+    digest: Mapped[dict | None] = mapped_column(JsonCol, nullable=True)
+    digest_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     finalize_requested_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
@@ -1547,6 +1645,46 @@ class AgentReport(Base):
     scenario_labels: Mapped[dict] = mapped_column(JsonCol, default=dict)
     created_by: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_by_name: Mapped[str] = mapped_column(String(64), default="")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
+class EngineVocabulary(Base):
+    """The flags and environment variables one engine image reads, dumped from
+    the image itself (control/engines/vocabulary.py). One row per image digest;
+    a moved tag dumps again. `status` "partial" keeps what could be read (the
+    flags without the env list, say); "failed" keeps only the reason."""
+
+    __tablename__ = "engine_vocabularies"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    engine: Mapped[str] = mapped_column(String(16))
+    image: Mapped[str] = mapped_column(String(512), index=True)
+    image_digest: Mapped[str] = mapped_column(String(128), default="", server_default="")
+    engine_version: Mapped[str] = mapped_column(String(64), default="", server_default="")
+    status: Mapped[str] = mapped_column(String(16), default="ok", server_default="ok")
+    # [{kind, name, type, default, choices, help, help_source, where}, ...]
+    entries: Mapped[list] = mapped_column(JsonCol, default=list)
+    # What could not be read, and where descriptions came from.
+    notes: Mapped[list] = mapped_column(JsonCol, default=list)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
+class ModelConfig(Base):
+    """A model's own config.json and the facts read from it
+    (control/engines/model_facts.py), one row per read of a model path."""
+
+    __tablename__ = "model_configs"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    model_path: Mapped[str] = mapped_column(String(1024), index=True)
+    status: Mapped[str] = mapped_column(String(16), default="ok", server_default="ok")
+    facts: Mapped[dict] = mapped_column(JsonCol, default=dict)
+    config: Mapped[dict] = mapped_column(JsonCol, default=dict)
+    notes: Mapped[list] = mapped_column(JsonCol, default=list)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

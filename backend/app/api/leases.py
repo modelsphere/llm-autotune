@@ -50,6 +50,7 @@ from app.db.models import (
     MachineState,
     Run,
     RunNode,
+    UserRole,
 )
 from app.hardware import coerce_gpu_type, is_node_pool, record_capacity
 
@@ -279,6 +280,12 @@ async def lease_machine(
     created = machine is None
 
     if created:
+        # Registering a machine is admin work, whoever leases it later.
+        if principal.user.role != UserRole.ADMIN.value:
+            raise HTTPException(
+                status.HTTP_403_FORBIDDEN,
+                f"'{name}' is not registered; only an admin can register a machine",
+            )
         if not (body.host or "").strip():
             raise HTTPException(
                 status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -315,7 +322,9 @@ async def lease_machine(
 
         info = MachineInfo.of(machine)
         try:
-            probe = await anyio.to_thread.run_sync(get_driver("k8s").probe_capacity, info)
+            # The machine's own cluster, not the platform default's.
+            driver = get_driver("k8s", cluster_id=machine.cluster_id)
+            probe = await anyio.to_thread.run_sync(driver.probe_capacity, info)
         except Exception:
             probe = {}
         record_capacity(machine, probe)

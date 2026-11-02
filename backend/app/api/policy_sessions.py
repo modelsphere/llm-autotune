@@ -30,10 +30,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agent.loader import load_run
 from app.agent.parts import environment_part, results_part
-from app.control.baseline import resolve_baseline
+from app.control.baseline import production_for
 from app.control.engine_command import PLACEMENT_FLAGS, round_trip_problems
+from app.control.engines import vocabulary as vocab_mod
 from app.control.engines.base import render_args
+from app.control.engines.env_keys import env_problems, is_env_key, split_env
 from app.control.engines.flags import known_flags, normalize_args
+from app.control.launch.clusters import resolve_cluster
 from app.control.orchestrator.policy_lifecycle import (
     PENDING_CONTENDER_STATES,
     command_for,
@@ -41,22 +44,40 @@ from app.control.orchestrator.policy_lifecycle import (
     deadlines,
     settings_of,
 )
+from app.control.recipe import Recipe
+from app.control.recipe import shape as recipe_shape
+from app.control.recipe.address import BadAddress
+from app.control.recipe.address import parse as parse_address
+from app.control.recipe.campaign import (
+    base_recipe,
+    config_cards,
+    config_pod_cards,
+    recipe_for,
+    split_flat,
+)
+from app.control.recipe.check import config_problems as recipe_config_problems
+from app.control.recipe.check import recipe_problems
+from app.control.recipe.command import recipe_flags
+from app.control.recipe.render import chart_commands
 from app.control.search.base import CandidateConfig
 from app.control.search.space import deviations as space_deviations
 from app.control.search.space import forbidden_hits, prune_inactive
-from app.control.search.validation import ValidationContext, cards_used, validate_config
+from app.control.search.validation import ValidationContext, validate_config
 from app.core.auth import PolicyCaller, get_policy_session
 from app.core.config import get_settings
 from app.db.base import get_async_session
 from app.db.models import (
     TERMINAL_RUN_STATES,
+    TERMINAL_SESSION_STATES,
     Campaign,
     Candidate,
     CandidateKind,
     CandidateStatus,
     ContenderStatus,
+    EngineVocabulary,
     Event,
     Machine,
+    ModelConfig,
     Policy,
     PolicyContender,
     PolicySession,
@@ -86,9 +107,13 @@ from app.schemas.policy import (
     ContenderOut,
     ContendersEcho,
     ContendersPut,
+    DigestIn,
     ExternalBenchmarkIn,
     HeartbeatIn,
     HeartbeatOut,
+    HistoryConditions,
+    HistoryEntry,
+    HistoryVerdict,
     LaunchBenchmarkIn,
     LaunchIn,
     LaunchOut,
@@ -96,6 +121,7 @@ from app.schemas.policy import (
     ManifestHardware,
     ManifestModel,
     ManifestObjective,
+    ManifestProduction,
     ManifestServices,
     ManifestTime,
     PlanIn,
@@ -105,6 +131,7 @@ from app.schemas.policy import (
     SessionManifest,
     TrialIn,
     TrialOut,
+    VocabularyOut,
 )
 from app.staging import SCREEN, VERIFY
 from app.staging import objective as stage_objective
@@ -159,53 +186,184 @@ def _canonical(config: dict[str, Any], campaign: Campaign) -> dict[str, Any]:
     return prune_inactive(merged, space)
 
 
+async def _model_config(db: AsyncSession, campaign: Campaign) -> ModelConfig | None:
+    """The newest good read of the campaign's model config."""
+    if not campaign.model_path:
+        return None
+    return (
+        await db.execute(
+            select(ModelConfig)
+            .where(ModelConfig.model_path == campaign.model_path, ModelConfig.status == "ok")
+            .order_by(ModelConfig.id.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+
+
+async def _vocabulary(db: AsyncSession, campaign: Campaign) -> vocab_mod.Vocabulary | None:
+    """The newest usable vocabulary dumped from the campaign's image."""
+    row = (
+        await db.execute(
+            select(EngineVocabulary)
+            .where(
+                EngineVocabulary.image == campaign.image,
+                EngineVocabulary.engine == campaign.engine,
+                EngineVocabulary.status != "failed",
+            )
+            .order_by(EngineVocabulary.id.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    return vocab_mod.from_row(row) if row is not None else None
+
+
+def _env_vocabulary_problems(
+    canonical: dict[str, Any], campaign: Campaign, vocab: vocab_mod.Vocabulary | None
+) -> list[ConfigProblem]:
+    """Env keys the image does not read; with no env vocabulary for the image,
+    every env key unless the campaign lets them through unchecked."""
+    if not any(is_env_key(k) for k in canonical):
+        return []
+    if vocab is not None and vocab.names("env"):
+        return [ConfigProblem(**p) for p in vocab_mod.unknown_env_problems(canonical, vocab)]
+    if settings_of(campaign).env_without_vocabulary == "warn":
+        return []
+    return [
+        ConfigProblem(
+            kind="unknown_env", param=k,
+            message=f"{k}: the platform has no list of the environment variables "
+            f"{campaign.image} reads yet, so it cannot tell whether the engine would "
+            "ignore this one",
+        )
+        for k in sorted(canonical) if is_env_key(k)
+    ]
+
+
+def _anchor(campaign: Campaign) -> Recipe:
+    """What every launch starts from: the campaign's recipe (or the one its
+    fields make) with the space's base applied."""
+    return recipe_for(campaign, (campaign.search_space or {}).get("base") or {})
+
+
+def _launches_recipes(machine: Machine | None) -> bool:
+    """Whether this machine's runs are LLMServices, which carry the whole recipe."""
+    if machine is None or (machine.driver or "") != "k8s":
+        return False
+    try:
+        return resolve_cluster(machine.cluster_id).k8s_workload_kind == "llmservice"
+    except Exception:
+        return False
+
+
+def _split_addresses(config: dict[str, Any]) -> tuple[dict[str, Any], list[ConfigProblem]]:
+    """The bare flags and env keys (what every check before 1.6 reads), and a
+    problem for each address that cannot be read. Role flags and chart values
+    are checked on the recipe they produce."""
+    flat: dict[str, Any] = {}
+    problems: list[ConfigProblem] = []
+    for key, value in config.items():
+        try:
+            kind = parse_address(key).kind
+        except BadAddress as exc:
+            problems.append(ConfigProblem(kind="bad_key", param=key, message=str(exc)))
+            continue
+        if kind in ("flag", "env"):
+            flat[key] = value
+    return flat, problems
+
+
 def _config_problems(
-    config: dict[str, Any], campaign: Campaign, machine: Machine | None
+    config: dict[str, Any],
+    campaign: Campaign,
+    machine: Machine | None,
+    vocab: vocab_mod.Vocabulary | None = None,
 ) -> tuple[dict[str, Any], list[ConfigProblem]]:
     """The canonical config, and every reason a launch of it would be refused.
 
     Shared by the refusals (`_validated`) and the dry run (`POST
     /configs/check`), so the two can never disagree about a config.
     """
-    problems = [
+    canonical_all = _canonical(config, campaign)
+    _, address_problems = _split_addresses(canonical_all)
+    problems = list(address_problems)
+    problems += [
+        ConfigProblem(**found)
+        for found in recipe_config_problems(
+            {k: v for k, v in canonical_all.items() if "." in k and not k.startswith("env.")}
+        )
+    ]
+    flat_config, _ = _split_addresses(config)
+    config = flat_config
+    _, recipe_only = split_flat(canonical_all)
+    if recipe_only and not _launches_recipes(machine):
+        problems += [
+            ConfigProblem(
+                kind="substrate", param=key,
+                message=f"{key}: this machine's launch driver applies flags and env only; "
+                "pd role flags and chart values need a cluster that launches LLMServices",
+            )
+            for key in sorted(recipe_only)
+        ]
+    problems += [
         ConfigProblem(
             kind="placement", param=key,
             message=f"{key} is placement, which the platform sets: remove it",
         )
         for key in sorted(set(config) & set(PLACEMENT_FLAGS))
     ]
-    canonical = _canonical(config, campaign)
+    canonical = canonical_all
     for hit in forbidden_hits(
         canonical, campaign.search_space or {}, settings_of(campaign).forbidden(),
         campaign.engine,
+        anchor=recipe_flags(base_recipe(campaign)) if campaign.recipe else None,
     ):
         problems.append(ConfigProblem(
             kind="forbidden", param=hit["param"],
             message=f"{hit['param']} is forbidden for this campaign (matches "
             f"{hit['pattern']!r}): leave it at the campaign's value",
         ))
-    for found in round_trip_problems(
-        {k: v for k, v in canonical.items() if k not in PLACEMENT_FLAGS}, campaign.engine
-    ):
+    flat, _ = _split_addresses(canonical)
+    args, _env = split_env(flat)
+    flags = {k: v for k, v in args.items() if k not in PLACEMENT_FLAGS}
+    round_trip = round_trip_problems(flags, campaign.engine)
+    problems += [ConfigProblem(**found) for found in round_trip]
+    if vocab is not None and not round_trip:
+        problems += [
+            ConfigProblem(**found)
+            for found in vocab_mod.unknown_flag_problems(flags, vocab, campaign.engine)
+        ]
+    for found in env_problems(flat):
         problems.append(ConfigProblem(**found))
+    if not any(p.param.startswith("env.") for p in problems):
+        problems += _env_vocabulary_problems(flat, campaign, vocab)
     error = validate_config(
-        canonical,
+        args,
         ValidationContext(
             gpu_count=(machine.gpu_count if machine else 0) or 0, engine=campaign.engine
         ),
     )
     if error:
         problems.append(ConfigProblem(kind="safety", message=error))
+    # A recipe campaign's launch is the recipe with this config applied: what
+    # the chart would refuse, it refuses here.
+    if campaign.recipe and not any(p.kind == "bad_key" for p in problems):
+        problems += [
+            ConfigProblem(**found)
+            for found in recipe_problems(recipe_for(campaign, canonical))
+        ]
     return canonical, problems
 
 
 def _validated(
-    config: dict[str, Any], campaign: Campaign, machine: Machine | None
+    config: dict[str, Any],
+    campaign: Campaign,
+    machine: Machine | None,
+    vocab: vocab_mod.Vocabulary | None = None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     """Canonical config + deviations, or a 422 saying everything that is wrong
     with it: placement, a forbidden parameter, a value that cannot round-trip
     through a command line, or a safety failure."""
-    canonical, problems = _config_problems(config, campaign, machine)
+    canonical, problems = _config_problems(config, campaign, machine, vocab)
     if problems:
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_ENTITY, "; ".join(p.message for p in problems)
@@ -224,7 +382,7 @@ async def _validated_or_audit(
     refused config never becomes a trial, so without this the only trace of
     what a policy tried and was told no is the policy's own log."""
     try:
-        return _validated(config, campaign, machine)
+        return _validated(config, campaign, machine, await _vocabulary(db, campaign))
     except HTTPException as exc:
         _audit(
             db, caller, "policy_config_refused",
@@ -277,18 +435,41 @@ async def _idempotent_run(
     ).scalar_one_or_none()
 
 
-def _check_fits_a_node(machine: Machine | None, needed: int) -> None:
-    """On a node pool a launch's cards are all on one node, so a config wider
+def _check_fits_a_node(machine: Machine | None, per_pod: int) -> None:
+    """On a node pool each pod's cards are all on one node, so a pod wider
     than the widest node could never be scheduled: refuse it now, rather than
-    let it wait for room that will never come. Unknown sizes pass."""
+    let it wait for room that will never come. A gang or a pd recipe spreads
+    over several pods, so its widest pod is what must fit, not its total.
+    Unknown sizes pass (a pool read from a namespace quota has no node sizes)."""
     if machine is None or not is_node_pool(machine) or not machine.node_gpu_max:
         return
-    if needed > machine.node_gpu_max:
+    if per_pod > machine.node_gpu_max:
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
-            f"config uses {needed} card(s) (tp×dp×pp), but the largest node in "
+            f"a pod of this config uses {per_pod} card(s), but the largest node in "
             f"{machine.name} has {machine.node_gpu_max}: no node could ever hold it",
         )
+
+
+def _free_cards(session: PolicySession, live: list[Run], needed: int) -> list[int]:
+    """The first `needed` cards of the allocation no live run of the session
+    holds; 429 (wait, as for busy cards) when fewer are free, 422 when the
+    allocation could never hold them."""
+    allowed = list(session.gpu_indices or [])
+    if needed > len(allowed):
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            f"the recipe uses {needed} card(s) but this session holds {len(allowed)}",
+        )
+    busy = {i for r in live for i in (r.gpu_indices or [])}
+    free = [i for i in allowed if i not in busy]
+    if len(free) < needed:
+        raise HTTPException(
+            status.HTTP_429_TOO_MANY_REQUESTS,
+            f"the recipe uses {needed} card(s) and {len(free)} are free of your own runs "
+            "— release something or wait",
+        )
+    return free[:needed]
 
 
 def _check_cards_and_port(
@@ -579,19 +760,20 @@ async def manifest(
         ]
     }
 
-    # Production's config for this model, as recorded on Baselines.
+    # Production as the platform launches it: the Baselines record over the
+    # campaign's anchor, or the recipe as written when none is recorded.
     card_type = machine.gpu_type if machine is not None else ""
-    recorded = await db.run_sync(
-        lambda sync: resolve_baseline(
-            sync, campaign.served_model_name, campaign.engine, card_type or ""
-        )
-    )
-    production = (
-        {"engine_args": dict(recorded.engine_args or {}), "launch_command": ""}
-        if recorded is not None else {}
+    found = await db.run_sync(lambda sync: production_for(sync, campaign, card_type or ""))
+    production = ManifestProduction(
+        engine_args=dict(found.launch.engine_args),
+        env=dict(found.launch.extra_env),
+        image=found.launch.image,
+        config=dict(found.config),
+        source=found.source,
     )
 
     screen_slug = campaign.benchmark_slug or settings.llmbench_benchmark_slug
+    model_row = await _model_config(db, campaign)
     return SessionManifest(
         contract={"version": CONTRACT_VERSION},
         session_id=session.id,
@@ -609,6 +791,8 @@ async def manifest(
             served_model_name=campaign.served_model_name,
             extra_env=campaign.extra_env or {},
             extra_volumes=campaign.extra_volumes or {},
+            facts=dict((model_row.facts if model_row else None) or {}),
+            recipe=_anchor(campaign).model_dump(),
         ),
         hardware=ManifestHardware(
             machine=machine.name if machine else "",
@@ -654,6 +838,11 @@ async def manifest(
             },
             state=True,
             diagnostics=True,
+            env_keys=True,
+            vocabulary=True,
+            recipes=True,
+            production_config=True,
+            history=True,
         ),
         prior=prior,
         measures=measure_catalogue(),
@@ -823,21 +1012,30 @@ async def request_launch(
         await db.commit()
         return _launch_out(existing, await db.get(Candidate, existing.candidate_id))
 
-    canonical, dev = await _validated_or_audit(db, caller, body.engine_args, campaign, machine)
-    needed = cards_used(canonical)
+    canonical, dev = await _validated_or_audit(
+        db, caller, dict(body.engine_args or {}), campaign, machine
+    )
+    needed = config_cards(campaign, canonical)
+    live = await _live_session_runs(db, session)
+    gpu_indices = list(body.gpu_indices)
     # A machine with no cards (a CPU-only slice: kind, the demo's mock
     # engine) gives the session none, and its launches ask for none whatever
     # the config's parallelism, the way a plain campaign runs there. Asking
     # for a card it does not hold is still refused, as outside the allocation.
-    if session.gpu_indices and needed != len(body.gpu_indices):
-        raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY,
-            f"config uses {needed} card(s) (tp×dp×pp) but {len(body.gpu_indices)} were "
-            "requested — they must match",
-        )
-    _check_fits_a_node(machine, needed)
-    live = await _live_session_runs(db, session)
-    port = _check_cards_and_port(session, live, body.gpu_indices, body.port)
+    if session.gpu_indices and needed != len(gpu_indices):
+        if base_recipe(campaign) is None:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                f"config uses {needed} card(s) (tp×dp×pp) but {len(gpu_indices)} were "
+                "requested — they must match",
+            )
+        # Under a recipe its shape decides the cards (lws.size, pd roles,
+        # parallelism set in the recipe rather than the config), which a
+        # policy counting the config's own tp×dp×pp cannot see: the platform
+        # takes them from the allocation instead.
+        gpu_indices = _free_cards(session, live, needed)
+    _check_fits_a_node(machine, config_pod_cards(campaign, canonical))
+    port = _check_cards_and_port(session, live, gpu_indices, body.port)
 
     candidate = await _make_candidate(db, campaign, canonical, dev)
     run = Run(
@@ -846,7 +1044,7 @@ async def request_launch(
         machine_id=session.machine_id,
         kind=RunKind.POLICY_LAUNCH.value,
         status=RunStatus.PENDING.value,
-        gpu_indices=list(body.gpu_indices),
+        gpu_indices=gpu_indices,
         service_port=port,
         policy_session_id=session.id,
         idempotency_key=idempotency_key,
@@ -859,7 +1057,7 @@ async def request_launch(
     await db.flush()
     _audit(
         db, caller, "policy_launch_requested", run_id=run.id,
-        payload={"config": canonical, "gpus": body.gpu_indices, "port": port},
+        payload={"config": canonical, "gpus": gpu_indices, "port": port},
     )
     await db.commit()
     return _launch_out(run, candidate)
@@ -1094,9 +1292,16 @@ async def check_config(
     echo, the rendered command, catalog warnings, deviations — without
     spending a launch. Never 422s: the answer is the point."""
     _session, campaign, machine = await _context(db, caller)
-    canonical, problems = _config_problems(body.engine_args, campaign, machine)
-    known = known_flags(campaign.engine)
-    normalized, _ = normalize_args(campaign.engine, canonical)
+    vocab = await _vocabulary(db, campaign)
+    canonical, problems = _config_problems(
+        dict(body.engine_args or {}), campaign, machine, vocab
+    )
+    # With the image's own parser at hand an unknown flag is a refusal above;
+    # the platform's catalog is only the fallback guess.
+    known = set() if vocab is not None and vocab.names("flag") else known_flags(campaign.engine)
+    flat, _ = _split_addresses(canonical)
+    args, env = split_env(flat)
+    normalized, _ = normalize_args(campaign.engine, args)
     # Only what the policy chose: a key the campaign itself sets to this value
     # (the base config) is the operator's, and repeating its warning on every
     # check buries the ones about the policy's own flags.
@@ -1108,16 +1313,72 @@ async def check_config(
         if known and key not in known and not (key in base and base[key] == normalized[key])
     ]
     command: list[str] = []
+    recipe_out: dict[str, Any] = {}
+    shape_out: dict[str, Any] = {}
+    commands: dict[str, list[str]] = {}
     if not any(p.kind in ("not_renderable", "bad_key") for p in problems):
-        command = render_args(canonical, campaign.engine)
+        command = render_args(args, campaign.engine)
+        recipe = recipe_for(campaign, canonical)
+        recipe_out = recipe.model_dump()
+        shape_out = recipe_shape(recipe).payload()
+        commands = chart_commands(recipe)
     return ConfigCheckOut(
         ok=not problems,
         config=canonical,
-        cards=cards_used(canonical),
+        cards=config_cards(campaign, canonical),
         command=command,
+        env=env,
         problems=problems,
         warnings=warnings,
         deviations=space_deviations(canonical, campaign.search_space or {}),
+        recipe=recipe_out,
+        shape=shape_out,
+        commands=commands,
+    )
+
+
+@router.get("/engine/vocabulary", response_model=VocabularyOut)
+async def engine_vocabulary(
+    kind: str = Query("", pattern="^(|flag|env)$"),
+    query: str = Query("", max_length=200),
+    level: str = Query("", pattern="^(|high|mid|low|unknown)$"),
+    limit: int = Query(100, ge=1, le=1000),
+    caller: PolicyCaller = Depends(get_policy_session),
+    db: AsyncSession = Depends(get_async_session),
+):
+    """What the campaign's engine image reads, filtered: `kind`, a substring
+    of the name or help (`query`), and the lowest `level` wanted ("mid" =
+    high and mid)."""
+    _session, campaign, machine = await _context(db, caller)
+    row = (
+        await db.execute(
+            select(EngineVocabulary)
+            .where(
+                EngineVocabulary.image == campaign.image,
+                EngineVocabulary.engine == campaign.engine,
+            )
+            .order_by(EngineVocabulary.id.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    model_row = await _model_config(db, campaign)
+    model = {
+        "model_facts": dict(model_row.facts or {}) if model_row else {},
+        "model_config_json": dict(model_row.config or {}) if model_row else {},
+    }
+    if row is None or row.status == "failed":
+        return VocabularyOut(
+            status="none", engine=campaign.engine, image=campaign.image,
+            notes=list(row.notes or []) if row is not None else [], **model,
+        )
+    rows = vocab_mod.lookup(
+        vocab_mod.annotate(vocab_mod.from_row(row), (machine.gpu_type if machine else "") or ""),
+        kind=kind, query=query, level=level,
+    )
+    return VocabularyOut(
+        status=row.status, engine=row.engine, engine_version=row.engine_version or "",
+        image=row.image, total=len(rows), notes=list(row.notes or []), entries=rows[:limit],
+        **model,
     )
 
 
@@ -1225,6 +1486,7 @@ async def put_contenders(
             f"contenders are frozen once the session is {session.status}",
         )
     knobs = settings_of(campaign)
+    vocab = await _vocabulary(db, campaign)
     accepted_rows: list[PolicyContender] = []
     rejected: list[dict[str, Any]] = []
     seen_ranks: set[int] = set()
@@ -1239,12 +1501,17 @@ async def put_contenders(
             )
             continue
         try:
-            canonical, dev = _validated(entry.launch_spec.engine_args, campaign, machine)
+            canonical, dev = _validated(
+                dict(entry.launch_spec.engine_args or {}),
+                campaign, machine, vocab,
+            )
         except HTTPException as exc:
             rejected.append({"rank": entry.rank, "reason": str(exc.detail)})
             continue
         spec = entry.launch_spec.model_dump(mode="json")
         spec["engine_args"] = canonical
+        # 1.6: what this contender launches and what a publish writes.
+        spec["recipe"] = recipe_for(campaign, canonical).model_dump()
         accepted_rows.append(
             PolicyContender(
                 session_id=session.id,
@@ -1447,6 +1714,139 @@ async def put_state(
     row.content_type = content_type[:128]
     row.size = len(blob)
     await db.commit()
+
+
+# -- history (1.4) -----------------------------------------------------------------
+
+
+@router.put("/session/digest", status_code=status.HTTP_204_NO_CONTENT)
+async def put_digest(
+    body: DigestIn,
+    caller: PolicyCaller = Depends(get_policy_session),
+    db: AsyncSession = Depends(get_async_session),
+):
+    """What tonight learned, for other campaigns. Replaces any earlier digest
+    of this session; accepted until the session ends."""
+    session = await db.get(PolicySession, caller.session.id)
+    if session.status in {s.value for s in TERMINAL_SESSION_STATES}:
+        raise HTTPException(status.HTTP_409_CONFLICT, f"the session is {session.status}")
+    session.digest = body.model_dump(mode="json")
+    session.digest_at = datetime.now(UTC)
+    _audit(db, caller, "policy_digest_written", payload={"bytes": len(body.summary)})
+    await db.commit()
+
+
+_HISTORY_MATCHES = ("model", "engine")
+
+
+@router.get("/history", response_model=list[HistoryEntry])
+async def history(
+    caller: PolicyCaller = Depends(get_policy_session),
+    db: AsyncSession = Depends(get_async_session),
+    match: str = Query("model", description="model: same engine and model; engine: same engine"),
+    limit: int = Query(10, ge=1, le=50),
+):
+    """Other campaigns' nights, newest first: what each policy wrote it
+    learned, under which conditions, and what the platform validated. Only
+    campaigns of the same owner; this campaign's own nights are in /state.
+    Findings from another workload or image are hints, not facts here."""
+    if match not in _HISTORY_MATCHES:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY, f"match must be one of {list(_HISTORY_MATCHES)}"
+        )
+    _, campaign, _ = await _context(db, caller)
+    query = (
+        select(PolicySession, Campaign)
+        .join(Campaign, PolicySession.campaign_id == Campaign.id)
+        .where(
+            Campaign.owner_id == campaign.owner_id,
+            Campaign.id != campaign.id,
+            Campaign.engine == campaign.engine,
+            (PolicySession.digest.is_not(None)) | (PolicySession.finalized_at.is_not(None)),
+        )
+        .order_by(PolicySession.id.desc())
+    )
+    if match == "model":
+        query = query.where(
+            (Campaign.served_model_name == campaign.served_model_name)
+            | (Campaign.model_path == campaign.model_path)
+        )
+    out: list[HistoryEntry] = []
+    for past, past_campaign in (await db.execute(query.limit(limit * 3))).all():
+        entry = await _history_entry(db, past, past_campaign)
+        if entry.digest is not None or entry.verdicts:
+            out.append(entry)
+        if len(out) >= limit:
+            break
+    return out
+
+
+async def _history_entry(
+    db: AsyncSession, past: PolicySession, campaign: Campaign
+) -> HistoryEntry:
+    from app.evaluation.ranking import leaderboard_entries
+
+    machine = await db.get(Machine, past.machine_id) if past.machine_id else None
+    objective = stage_objective(campaign, SCREEN)
+    rows = (
+        await db.execute(
+            select(Run, Candidate, Result)
+            .join(Candidate, Run.candidate_id == Candidate.id)
+            .join(Result, Result.run_id == Run.id)
+            .where(
+                Run.campaign_id == campaign.id,
+                Run.status == RunStatus.SUCCEEDED.value,
+                Result.source == "llmbench",
+            )
+        )
+    ).all()
+    night = {run.id for run, _, _ in rows if run.policy_session_id == past.id}
+    entries = [
+        e for e in leaderboard_entries(campaign, list(rows))
+        if e.stage == VERIFY and e.run_id in night
+    ]
+    production = [dict(e.config) for e in entries if e.is_baseline]
+    verdicts = [
+        HistoryVerdict(
+            config=dict(e.config),
+            is_production=e.is_baseline,
+            value=e.score,
+            vs_production=None if e.is_baseline else e.vs_baseline,
+            holds_redlines=e.holds_redlines,
+            same_as_production=not e.is_baseline and dict(e.config) in production,
+        )
+        for e in entries
+    ]
+    digest = None
+    if past.digest:
+        try:
+            digest = DigestIn.model_validate(past.digest)
+        except ValueError:
+            digest = None
+    return HistoryEntry(
+        campaign_id=campaign.id,
+        campaign_name=campaign.name,
+        session_id=past.id,
+        ended_at=past.finalized_at,
+        end_reason=past.search_end_reason or past.status,
+        conditions=HistoryConditions(
+            engine=campaign.engine,
+            image=campaign.image,
+            model_path=campaign.model_path,
+            served_model_name=campaign.served_model_name,
+            gpu_type=machine.gpu_type if machine is not None else "",
+            cards=settings_of(campaign).cards,
+            benchmark_slug=campaign.benchmark_slug or "",
+            objective=ManifestObjective(
+                target_metric=target_metric(objective),
+                direction=direction(objective),
+                redlines=redlines(objective),
+            ),
+            forbidden=list(settings_of(campaign).forbidden()),
+        ),
+        verdicts=verdicts,
+        digest=digest,
+    )
 
 
 # -- events -------------------------------------------------------------------------

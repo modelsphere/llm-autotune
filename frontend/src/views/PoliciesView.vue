@@ -5,7 +5,7 @@ import { apiErrorText } from '../utils/apiError'
  *  and judges every config it proposes. */
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { computed, onMounted, ref } from 'vue'
-import { api, type Campaign, type Policy } from '../api/client'
+import { api, type Campaign, type LlmEndpoint, type Policy } from '../api/client'
 import InfoHint from '../components/InfoHint.vue'
 import { all, useFirstLoad } from '../utils/load'
 import { fromYaml, toYaml, YamlError } from '../utils/yaml'
@@ -16,6 +16,7 @@ const CONTRACT_DOC =
 
 const policies = ref<Policy[]>([])
 const campaigns = ref<Campaign[]>([])
+const endpoints = ref<LlmEndpoint[]>([])
 const editorOpen = ref(false)
 const editingId = ref<number | null>(null)
 const advanced = ref<string[]>([])
@@ -33,6 +34,8 @@ function empty() {
     gpus_in_container: false,
     needs_model: false,
     ports: 4,
+    // An agent policy's model (Settings → LLM endpoints); null for one that calls none.
+    llm_endpoint_id: null as number | null,
     env_text: toYaml({}),
     // Secret variables (an LLM API key): name + value. A stored one comes back
     // with its name only; leaving its value blank keeps it.
@@ -51,9 +54,14 @@ const usage = computed(() => {
 })
 
 async function load() {
-  const [p, c] = await all(api.get('/policies'), api.get('/campaigns').catch(() => null))
+  const [p, c, e] = await all(
+    api.get('/policies'),
+    api.get('/campaigns').catch(() => null),
+    api.get('/llm-endpoints').catch(() => null),
+  )
   policies.value = p.data
   campaigns.value = c?.data ?? []
+  endpoints.value = e?.data ?? []
 }
 const first = useFirstLoad(load)
 
@@ -75,6 +83,7 @@ function openEdit(p: Policy) {
     gpus_in_container: p.gpus_in_container,
     needs_model: p.needs_model ?? true,
     ports: p.ports,
+    llm_endpoint_id: p.llm_endpoint_id ?? null,
     env_text: toYaml(p.env ?? {}),
     secrets: (p.secret_env_keys ?? []).map((key) => ({ key, value: '', stored: true })),
   }
@@ -198,6 +207,17 @@ onMounted(first.run)
         <el-form-item label="Description">
           <el-input v-model="form.description" placeholder="optional" />
         </el-form-item>
+        <el-form-item label="LLM endpoint">
+          <el-select v-model="form.llm_endpoint_id" clearable placeholder="none: the policy calls no model"
+            style="width: 100%">
+            <el-option v-for="e in endpoints" :key="e.id" :label="`${e.name} · ${e.model}`" :value="e.id" />
+          </el-select>
+          <div class="muted hint-line">
+            For an agent policy: at launch the endpoint sets LLM_BASE_URL, LLM_MODEL and LLM_API_KEY,
+            over the same names below. Admins add endpoints in
+            <router-link to="/settings">Settings</router-link>.
+          </div>
+        </el-form-item>
         <el-collapse v-model="advanced" class="advanced">
           <el-collapse-item name="advanced" title="Advanced">
             <div class="grid-2">
@@ -263,6 +283,10 @@ onMounted(first.run)
 </template>
 
 <style scoped>
+.hint-line {
+  font-size: 12px;
+  line-height: 1.5;
+}
 .secrets {
   width: 100%;
 }

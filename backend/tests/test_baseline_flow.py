@@ -99,7 +99,7 @@ def test_waiting_ends_once_the_readiness_window_has_passed():
     supervisor.tick()
     with factory() as session:  # backdate it past the readiness timeout
         session.get(Run, 1).started_at = datetime.now(UTC) - timedelta(
-            minutes=supervisor.settings.ready_timeout_minutes + 1
+            minutes=session.get(Run, 1).campaign.ready_timeout_minutes + 1
         )
         session.commit()
     supervisor.tick()

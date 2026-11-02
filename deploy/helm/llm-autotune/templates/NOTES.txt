@@ -42,8 +42,10 @@ then open http://localhost:8080
 {{ if .Values.adminPassword -}}
 Sign in as {{ .Values.adminUsername }} with the password you set.
 {{- else -}}
-No admin account was created: set adminPassword and upgrade, or create the
-first user yourself. Nothing can be done in the UI until one exists.
+Sign in as {{ .Values.adminUsername }}. The password was generated; read it with
+
+  kubectl -n {{ .Release.Namespace }} get secret {{ include "llm-autotune.fullname" . }}-secrets \
+    -o jsonpath='{.data.AUTOTUNE_ADMIN_PASSWORD}' | base64 -d; echo
 {{- end }}
 
 {{ if .Values.mockModel.enabled -}}
@@ -52,10 +54,12 @@ No GPUs: campaigns run the mock engine. Use image
 and model path {{ .Values.mockModel.path }} (a placeholder on every node).
 {{- end }}
 
-{{ if and (not .Values.publicApiUrl) (not .Values.gpuCluster.inCluster) -}}
-NOTE: publicApiUrl is empty. Policy campaigns need it — it is how a policy
+{{ if not .Values.publicApiUrl -}}
+NOTE: publicApiUrl is empty. {{ if .Values.gpuCluster.inCluster }}Policies on this cluster call the platform by
+its Service name; a policy on any other GPU cluster or ssh machine needs
+publicApiUrl, an address that machine can reach.{{ else }}Policy campaigns need it — it is how a policy
 container on a GPU machine calls the platform back. Set it to an address that
-machine can reach and upgrade.
+machine can reach and upgrade.{{ end }}
 {{- end }}
 
 {{ if and (not .Values.llmbench.url) (not .Values.mock.enabled) -}}

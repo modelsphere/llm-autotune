@@ -141,6 +141,9 @@ class MachineOut(BaseModel):
     cluster_id: int | None = None
     # Resolved from the clusters table for display; empty = the default cluster.
     cluster_name: str = ""
+    # How runs on this machine are launched: the cluster's workload kind
+    # (llmservice, deployment, custom) for a k8s machine, else ssh_docker.
+    launch_kind: str = ""
     node_selector: str
     data_host: str = ""
     nccl_ifname: str = ""
@@ -279,13 +282,26 @@ def served_name_for(model_path: str) -> str:
 
 
 class CampaignCreate(BaseModel):
-    name: str
-    engine: str  # sglang | vllm
-    image: str
+    name: str = Field(min_length=1, max_length=128)
+    # With a recipe, engine and image are the recipe's and may be left empty.
+    engine: str = ""  # sglang | vllm
+    image: str = ""
     model_path: str
     # Empty = derived from the model path (served_name_for).
     served_model_name: str = ""
     search_space: dict[str, Any]
+    # The configuration every run starts from (app/control/recipe): a recipe,
+    # a model-catalog variant or an LLMService, read into a recipe at save.
+    # The search space's keys then address it (a flag, env.<NAME>,
+    # prefill./decode.<flag>, values.<path>). Empty = built from the fields.
+    recipe: dict[str, Any] = Field(default_factory=dict)
+    # The same as text (YAML, or a `docker run` command line). Not stored.
+    recipe_text: str | None = None
+    # The exact chart version every run renders. Empty = the recipe's own when
+    # it names one exactly, else what the operator installs for the first run.
+    chart_version: str = Field("", max_length=64)
+    # The catalog variant the recipe was read from ("<model>/<variant>@<version>").
+    recipe_source: str = Field("", max_length=255)
     objective: dict[str, Any] = Field(default_factory=dict)
     benchmark_slug: str = ""  # "" = platform default
     # The workload instead of a slug (app/evaluation/benchmark_spec.py):
@@ -325,6 +341,9 @@ class CampaignCreate(BaseModel):
     # runs have actually taken (control/orchestrator/timing.py), never more
     # than this.
     max_run_minutes: int = 720
+    # How long a started engine may take to load the model and answer
+    # /v1/models before its run fails as ready_timeout.
+    ready_timeout_minutes: int = Field(default=120, ge=5, le=1440)
     # The external search container for this campaign: when set, it decides
     # what to try and the platform stops enumerating the space itself
     # (docs/api/policy-contract.md). `policy_settings` is validated against
@@ -395,6 +414,9 @@ class CampaignOut(BaseModel):
     model_path: str
     served_model_name: str
     search_space: dict[str, Any]
+    recipe: dict[str, Any] = {}
+    chart_version: str = ""
+    recipe_source: str = ""
     objective: dict[str, Any]
     status: str
     benchmark_slug: str
@@ -414,6 +436,7 @@ class CampaignOut(BaseModel):
     schedule_until: datetime | None
     override_until: datetime | None
     max_run_minutes: int
+    ready_timeout_minutes: int
     policy_id: int | None
     policy_settings: dict[str, Any]
     # What the campaign's runs have taken so far (timing.summary), in minutes;
@@ -494,6 +517,9 @@ class RunOut(BaseModel):
     # Set when a policy session drove this run (a launch or its validation), so
     # the UI can offer that session's container log alongside the run's.
     policy_session_id: int | None = None
+    # A benchmark of a policy's launch: the engine run it measured, which holds
+    # the launch (its command, its pod) the benchmark itself never had.
+    launch_run_id: int | None = None
     started_at: datetime | None
     finished_at: datetime | None
     created_at: datetime

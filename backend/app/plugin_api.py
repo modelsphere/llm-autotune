@@ -62,6 +62,14 @@ from app.control.orchestrator.machine_queue import campaign_key, session_key
 from app.control.orchestrator.occupancy import Reservation, busy_reason, reservations_on
 from app.control.orchestrator.policy_lifecycle import settings_of as policy_settings_of
 from app.control.orchestrator.supervisor import Supervisor
+from app.control.recipe.check import recipe_problems
+from app.control.recipe.command import command_flags as recipe_command_flags
+from app.control.recipe.command import recipe_flags
+from app.control.recipe.importer import NotARecipe
+from app.control.recipe.importer import parse as parse_recipe
+from app.control.recipe.model import Recipe
+from app.control.recipe.shape import pod_gpus as recipe_pod_gpus
+from app.control.recipe.shape import shape as recipe_shape
 from app.control.run_nodes import run_ids_on_machine
 from app.control.search import CandidateConfig
 from app.control.search.space import (
@@ -84,6 +92,7 @@ from app.core.auth import (
     require_admin_principal,
 )
 from app.core.config import get_settings
+from app.core.platform_settings import LlmTarget, reports_llm
 from app.core.secrets import decrypt_secret, encrypt_secret
 from app.datasets import pinning
 from app.datasets.profiles import BuildInFlight, DatasetBuild, DatasetProfileError
@@ -98,6 +107,7 @@ from app.db.models import (
     Candidate,
     CandidateKind,
     CandidateStatus,
+    Cluster,
     Event,
     Machine,
     MachineGroup,
@@ -174,6 +184,7 @@ __all__ = [
     "AgentReport",
     "Baseline",
     "Campaign",
+    "Cluster",
     "CampaignStatus",
     "Candidate",
     "CandidateKind",
@@ -201,6 +212,9 @@ __all__ = [
     "get_current_user",
     "get_principal",
     "get_settings",
+    # The LLM endpoint an admin chose for report writing (Settings), or None.
+    "LlmTarget",
+    "reports_llm",
     "require_admin",
     "require_admin_principal",
     "sync_session_factory",
@@ -238,6 +252,15 @@ __all__ = [
     "space_errors",
     "tied_groups",
     "widest_cards",
+    # Recipes: a configuration as the chart and the catalog read it
+    "NotARecipe",
+    "Recipe",
+    "parse_recipe",
+    "recipe_command_flags",
+    "recipe_flags",
+    "recipe_pod_gpus",
+    "recipe_problems",
+    "recipe_shape",
     # Engines and configs
     "MODEL_MOUNT",
     "LaunchConfig",

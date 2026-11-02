@@ -5,7 +5,7 @@
 A **search space** lists the engine settings a campaign may change and the
 values each may take. Every combination is a **candidate**: one config the
 campaign may launch and measure. Search spaces are under
-**Automatic Tuning ▸ Search spaces**.
+**Library ▸ Search spaces**.
 
 A campaign copies the search space when it is created, so editing a space
 later does not change existing campaigns, and one space can seed many

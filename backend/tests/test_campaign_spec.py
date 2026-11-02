@@ -61,7 +61,8 @@ def test_a_spec_is_exactly_the_body_that_recreates_the_campaign():
         machine_names=[], node_names=[], extra_env={}, extra_volumes={}, verify_objective={},
         benchmark_slug="", service_port=28200, run_baseline_canary=True, share_machine=False,
         daily_start="", daily_end="", schedule_timezone="", max_run_minutes=150,
-        confirm_top_k=0, confirm_repeats=3, verify_benchmark_slug="", verify_top_k=0,
+        ready_timeout_minutes=120, confirm_top_k=0, confirm_repeats=3,
+        verify_benchmark_slug="", verify_top_k=0,
         verify_max_run_minutes=180, dataset_profile="", dataset_frozen="",
         dataset_policy="rebuild_at_start",
     )
@@ -250,3 +251,14 @@ async def test_a_built_in_objective_is_duplicated_into_an_editable_one(api):
         "Throughput (copy)", "Throughput (copy 2)")
     assert first.json()["is_builtin"] is False
     assert first.json()["redlines"] == [{"metric": "a.c", "op": ">=", "value": 1}]
+
+
+def test_a_name_longer_than_the_column_is_refused_up_front():
+    """Regression: a 129-character name passed validation and the insert
+    failed, a bare 500 instead of a 422 that says what is wrong."""
+    from pydantic import ValidationError
+
+    body = {"model_path": "/models/m", "search_space": {"grid": {}}}
+    CampaignCreate(name="x" * 128, **body)
+    with pytest.raises(ValidationError, match="at most 128 characters"):
+        CampaignCreate(name="x" * 129, **body)

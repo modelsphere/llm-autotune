@@ -19,6 +19,43 @@ api.interceptors.response.use(
   },
 )
 
+/** POST and read the answer as it arrives, one JSON object per line
+ *  (application/x-ndjson): for long checks that report as they go. Rejects
+ *  with the server's message on an error status. */
+export async function postLines(
+  url: string, onEvent: (event: any) => void, signal?: AbortSignal,
+): Promise<void> {
+  const token = localStorage.getItem('autotune_token')
+  const response = await fetch(`/api${url}`, {
+    method: 'POST',
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    signal,
+  })
+  if (!response.ok || !response.body) {
+    if (response.status === 401 && location.pathname !== '/login') {
+      localStorage.removeItem('autotune_token')
+      location.href = '/login'
+    }
+    let detail = `${response.status} ${response.statusText}`
+    try {
+      const body = await response.json()
+      detail = typeof body.detail === 'string' ? body.detail : JSON.stringify(body.detail)
+    } catch { /* not JSON: keep the status line */ }
+    throw new Error(detail)
+  }
+  const reader = response.body.pipeThrough(new TextDecoderStream()).getReader()
+  let pending = ''
+  for (;;) {
+    const { value, done } = await reader.read()
+    if (done) break
+    pending += value
+    const lines = pending.split('\n')
+    pending = lines.pop() ?? ''
+    for (const line of lines) if (line.trim()) onEvent(JSON.parse(line))
+  }
+  if (pending.trim()) onEvent(JSON.parse(pending))
+}
+
 // -- typed helpers -----------------------------------------------------------
 
 export interface Machine {
@@ -72,6 +109,9 @@ export interface Machine {
   cluster_id: number | null
   /** The cluster's name for display; '' = the default cluster. */
   cluster_name: string
+  /** How runs here are launched: llmservice, deployment or custom (the
+   *  cluster's workload kind) for k8s, ssh_docker otherwise. */
+  launch_kind: string
 }
 
 /** A Kubernetes GPU cluster the platform may launch onto. The kubeconfig is
@@ -87,11 +127,21 @@ export interface Cluster {
   has_kubeconfig: boolean
   context: string
   namespace: string
-  workload_kind: 'deployment' | 'custom'
+  /** llmservice: one LLMService per run. deployment/custom: deprecated. */
+  workload_kind: 'llmservice' | 'deployment' | 'custom'
+  /** llmservice: the engine chart repository ('' = the install's), its pull
+   *  secret, how the benchmark reaches a run, the image mirror, and chart
+   *  values (JSON) every run here gets. */
+  chart_repo: string
+  chart_credentials_secret: string
+  endpoint: 'dns' | 'nodeport'
+  image_mirror: string
+  site_values: string
   /** Host LLMBench is given for a run's NodePort endpoint. Empty = derive from
    *  a node InternalIP, which needs the cluster-scoped `nodes` read. */
   node_host: string
   gpu_resource: string
+  gpu_product_label: string
   runtime_class: string
   tolerate_gpu_taint: boolean
   tolerations: string
@@ -100,6 +150,8 @@ export interface Cluster {
   model_pvc_root: string
   shm_size_mb: number
   node_selector: string
+  /** Where a delegated policy pod runs here; "" = the install's setting. */
+  policy_node_selector: string
   service_nodeport: number
   run_ttl_seconds: number
   in_cluster: boolean
@@ -118,6 +170,9 @@ export interface Cluster {
   created_at: string | null
   /** How many machines name this cluster. */
   machine_count: number
+  /** Whether this is the cluster AutoTune runs in (told apart by its CA);
+   *  null when it cannot tell. A run's Service name resolves only there. */
+  same_cluster: boolean | null
 }
 
 /** The editable subset. `kubeconfig` is plaintext in, never out; '' on edit
@@ -130,8 +185,14 @@ export interface ClusterInput {
   context?: string
   namespace?: string
   workload_kind?: string
+  chart_repo?: string
+  chart_credentials_secret?: string
+  endpoint?: string
+  image_mirror?: string
+  site_values?: string
   node_host?: string
   gpu_resource?: string
+  gpu_product_label?: string
   runtime_class?: string
   tolerate_gpu_taint?: boolean
   tolerations?: string
@@ -140,6 +201,7 @@ export interface ClusterInput {
   model_pvc_root?: string
   shm_size_mb?: number
   node_selector?: string
+  policy_node_selector?: string
   service_nodeport?: number
   run_ttl_seconds?: number
   in_cluster?: boolean
@@ -321,6 +383,13 @@ export interface Campaign {
   model_path: string
   served_model_name: string
   search_space: Record<string, unknown>
+  /** The configuration every run starts from, as the engine chart reads it
+   *  ({engine, chart, values}); empty for a campaign built from its fields. */
+  recipe?: { engine?: string; chart?: { name?: string; version?: string }; values?: Record<string, unknown> }
+  /** The exact chart version every run renders; empty until it is pinned. */
+  chart_version?: string
+  /** The catalog variant the recipe was read from ("<model>/<variant>@<version>"). */
+  recipe_source?: string
   objective: Record<string, unknown>
   status: string
   /** The benchmark every candidate runs. Single-stage replay is the default:
@@ -352,6 +421,9 @@ export interface Campaign {
   /** Set by Force start: run regardless of the clock until this instant. */
   override_until: string | null
   max_run_minutes: number
+  /** How long a started engine may take to answer before its run fails as
+   *  ready_timeout. */
+  ready_timeout_minutes: number
   /** An external policy container (policy-as-code) that decides what to try.
    *  Null: the campaign tries every configuration in the space, in order. The
    *  platform launches, benchmarks and judges either way. */
@@ -455,6 +527,8 @@ export interface Run {
   error: string
   /** Set when a policy session drove this run — links to its container log. */
   policy_session_id: number | null
+  /** A benchmark of a policy's launch: the engine run it measured. */
+  launch_run_id?: number | null
   started_at: string | null
   finished_at: string | null
   created_at: string
@@ -546,11 +620,61 @@ export interface CatalogExportPreview {
   /** Where the perf report came from: "saved:<report id>"; "" when none ships. */
   report_source: string
   hf: string
+  /** A catalog server and its write key are set (Settings): Publish to catalog works. */
+  catalog_writable: boolean
+  catalog_url: string
   /** The metadata the server drafted (or was given), for the form to adopt. */
   display_name: string
   description: string
   family: string
   tags: string[]
+}
+
+/** POST /catalog-export/publish: the export written through the catalog
+ *  server's api/v2, as a dry run (nothing committed) or for real. */
+export interface CatalogPublishResult {
+  url: string
+  dry_run: boolean
+  ok: boolean
+  writes: {
+    path: string
+    /** add_model | add | replace | metadata */
+    action: string
+    /** ok | unchanged | failed */
+    status: string
+    commit: string | null
+    version: string
+    digest: string
+    message: string
+  }[]
+  message: string
+  /** The export as published: no report, so no tuning entry. */
+  export: CatalogExportPreview | null
+}
+
+/** GET /agent/v1/runs/{id}/launch: everything needed to run a config again. */
+export interface RunLaunch {
+  run_id: number
+  cards: number
+  config: {
+    engine: string
+    image: string
+    model_path: string
+    served_model_name: string
+    service_port: number
+    engine_args: Record<string, unknown>
+    extra_env: Record<string, string>
+    extra_volumes: Record<string, string>
+    gpu_type: string
+  }
+  rendered: {
+    /** Exactly what the platform applied (docker run, or the k8s manifest). */
+    docker_command: string
+    /** The in-container server command. */
+    engine_command: string
+    /** `sglang serve` / `vllm serve` on the real weights, one flag per line. */
+    serve_command: string
+  }
 }
 
 export interface LeaderboardEntry {
@@ -851,7 +975,54 @@ export interface Policy {
   /** Names of the encrypted secret variables; their values are never returned. */
   secret_env_keys?: string[]
   ports: number
+  /** The LLM endpoint (Settings) it calls: sets LLM_BASE_URL, LLM_MODEL and LLM_API_KEY. */
+  llm_endpoint_id?: number | null
   created_at: string | null
+}
+
+// -- settings (admin) -----------------------------------------------------------
+
+/** GET/PUT /settings. A URL left empty falls back to the install's value. */
+export interface PlatformSettings {
+  victorialogs_url: string
+  victorialogs_install: string
+  catalog_url: string
+  catalog_index_install: string
+  /** What the catalog export reads: <catalog_url>/index-v2.json, or the install's. */
+  catalog_index_url: string
+  catalog_has_token: boolean
+  catalog_writable: boolean
+  reports_llm_endpoint_id: number | null
+}
+
+export interface PlatformCheck {
+  ok: boolean
+  url: string
+  message: string
+  writable?: boolean | null
+  token_ok?: boolean | null
+  models?: number | null
+}
+
+/** An OpenAI-compatible endpoint, registered once; its key is never returned. */
+export interface LlmEndpoint {
+  id: number
+  name: string
+  description: string
+  base_url: string
+  model: string
+  has_api_key: boolean
+  /** "reports", and "policy:<name>" for each policy that uses it. */
+  used_by: string[]
+  created_at: string | null
+  updated_at: string | null
+}
+
+export interface LlmTest {
+  ok: boolean
+  message: string
+  seconds: number | null
+  reply: string
 }
 
 // -- logs ---------------------------------------------------------------------

@@ -214,6 +214,28 @@ def test_deployment_endpoint_falls_back_without_a_node_ip():
     assert driver._deployment_endpoint(_spec()) == _spec().endpoint_url
 
 
+def test_public_endpoint_with_a_fixed_nodeport_survives_reattach():
+    settings = _clone(
+        k8s_workload_kind="deployment", k8s_node_host="198.51.100.84",
+        k8s_service_nodeport=31080,
+    )
+    api = FakeK8sApi(settings)
+    driver = _driver(settings, api)
+    spec = _spec()
+    handle, _ = driver.launch(spec)
+    service = api.objects[("service", spec.container_name)]
+    assert service["spec"]["ports"][0]["nodePort"] == 31080
+    assert handle.endpoint_url == "http://198.51.100.84:31080"
+
+    # Editing the default port must not point this existing Service at a port
+    # it does not own, including after a worker rebuilds its driver.
+    changed = _driver(_clone(
+        k8s_workload_kind="deployment", k8s_node_host="198.51.100.84",
+        k8s_service_nodeport=31081,
+    ), api)
+    assert changed.attach(spec).endpoint_url == "http://198.51.100.84:31080"
+
+
 def test_endpoint_uses_node_host_when_nodes_are_unreadable():
     """The gpu-cluster-a reality: the scoped SA has no cluster-scoped `nodes` grant.
 
@@ -694,3 +716,31 @@ def test_a_restarted_containers_exit_is_its_last_state():
         "lastState": {"terminated": {"exitCode": 137, "reason": "OOMKilled"}},
     }]}}]
     assert driver.exit_info(handle) == (137, True)
+
+
+def test_an_engine_that_restarts_before_it_is_ready_has_crashed():
+    # An OOM at CUDA-graph capture exits 0; the Deployment restarts it, and each
+    # restart resets the container's startedAt, so the ready timeout never trips.
+    settings = _clone(k8s_workload_kind="deployment")
+    api = FakeK8sApi(settings)
+    driver = _driver(settings, api)
+    handle, _ = driver.launch(_spec())
+    def pods(ready, container):
+        conditions = [{"type": "Ready", "status": ready}]
+        return [{"status": {"conditions": conditions, "containerStatuses": [container]}}]
+
+    loading = {"state": {"running": {"startedAt": "2026-10-21T15:52:59Z"}}, "restartCount": 0}
+    api.pods = pods("False", loading)
+    assert driver.state(handle) == DeploymentState.STARTING
+    assert driver.failure_reason(handle) is None
+    exited = {"terminated": {"exitCode": 0, "reason": "Completed"}}
+    restarted = {**loading, "restartCount": 8, "lastState": exited}
+    api.pods = pods("False", restarted)
+    assert driver.state(handle) == DeploymentState.CRASHED
+    kind, message = driver.failure_reason(handle)
+    assert kind == "crash_loop"
+    assert "before it was ready" in message and "8 time(s)" in message
+    # Once serving, a restart is the supervisor's incarnation check, not a startup crash.
+    api.pods = pods("True", restarted)
+    assert driver.state(handle) == DeploymentState.READY
+    assert driver.failure_reason(handle) is None

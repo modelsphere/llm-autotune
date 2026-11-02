@@ -132,8 +132,18 @@ class Settings(BaseSettings):
     # the one thing the platform cannot infer about itself. Injected into every
     # policy container as AUTOTUNE_API_URL; the campaign preflight curls
     # <public_api_url>/api/health from the machine to prove the path exists
-    # before a night depends on it. Empty = policy campaigns refuse to start.
+    # before a night depends on it. Empty = policy campaigns refuse to start
+    # on any machine `internal_api_url` does not cover.
     public_api_url: str = ""
+    # The API's address inside its own cluster (its Service name), which the
+    # chart always sets. Handed to a policy on AutoTune's OWN cluster instead of
+    # `public_api_url`; a policy anywhere else (an external cluster, an ssh
+    # machine) cannot resolve it and gets `public_api_url`.
+    internal_api_url: str = ""
+    # Search policies registered on install when none has the name: a JSON list
+    # of {name, image, version?, description?, repoUrl?, gpusInContainer?,
+    # needsModel?}. The chart's `defaultPolicies` writes it.
+    default_policies: str = ""
     policy_heartbeat_interval_seconds: int = 30
     policy_heartbeat_timeout_seconds: int = 180
     # A wedged policy (silent but container alive) is failed at 2x the timeout;
@@ -143,17 +153,20 @@ class Settings(BaseSettings):
     # search_idle_timeout_s: how long a SEARCHING session may sit with nothing
     # running and no delegated request before earning an idle strike.
     policy_search_idle_seconds: int = 300
-    # Session tokens outlive their session by this grace, then die; hard cap
-    # regardless of session length.
+    # A session's token lasts until its window's end plus this grace (and
+    # follows the window when it moves), then dies; once the session ends, the
+    # grace counts from then. The max applies only to a session with no
+    # window to bound it.
     policy_token_grace_hours: int = 1
     policy_token_max_hours: int = 48
     policy_state_max_bytes: int = 16 * 1024 * 1024
     # Two clocks for a run that is coming up, because pulling a cold multi-GB
     # engine image is not the same failure as a wedged model load:
     #
-    #   ready_timeout_minutes — once the engine container is actually RUNNING,
-    #     how long it may take to answer /v1/models before it is called wedged.
-    #     Big models load for 5–15 min (per the prod deploy scripts).
+    #   the campaign's ready_timeout_minutes — once the engine container is
+    #     actually RUNNING, how long it may take to answer /v1/models before it
+    #     is called wedged. Per campaign, because it is the model that decides:
+    #     most load in 5–15 min, the biggest take well over an hour.
     #
     #   image_pull_timeout_minutes — while the pod is still scheduling or pulling
     #     its image (no container running yet), the more generous budget. A first
@@ -161,12 +174,28 @@ class Settings(BaseSettings):
     #     minutes, and a pod making that progress is not wedged. Kept separate so
     #     a slow pull does not eat the model-load budget and trip a false
     #     ready_timeout (which is exactly what bit a k8s node that had never
-    #     cached the image). Should be >= ready_timeout_minutes.
+    #     cached the image).
     #
     # Substrates that cannot distinguish the two phases (ssh_docker) fall back to
-    # the single ready_timeout, unchanged.
-    ready_timeout_minutes: int = 30
+    # the campaign's single ready timeout, unchanged.
     image_pull_timeout_minutes: int = 45
+    # How long a launched policy container may take to send its first
+    # heartbeat. A small image with no model in it: minutes, not the hours an
+    # engine may need.
+    policy_start_timeout_minutes: int = 30
+    # The engine vocabulary (control/engines/vocabulary_store.py): how long the
+    # job that reads an image's flags and env vars may take (it imports the
+    # engine, torch included), and where the engine's docs are fetched from to
+    # describe env vars the image's code does not ({version} is the engine's)
+    # when the platform does not ship that version's docs (engines/docs/).
+    # The fetch is optional: empty, unreachable or a missing page falls back
+    # to the nearest shipped version.
+    engine_vocab_timeout_seconds: int = 900
+    engine_docs_url_sglang: str = (
+        "https://raw.githubusercontent.com/sgl-project/sglang/v{version}"
+        "/docs/docs/references/environment_variables.mdx"
+    )
+    engine_docs_timeout_seconds: float = 10.0
     # Tearing a run's container down is graceful-then-forceful, verified by the
     # janitor rather than fire-and-forget: a SIGTERM first (let the engine
     # release GPU memory and NCCL cleanly), then this many seconds later a
@@ -184,7 +213,10 @@ class Settings(BaseSettings):
     # 512 reasoning tokens — which blew past the old hardcoded 60s and failed
     # every candidate at `health_check`. Generous on purpose: a genuinely wedged
     # model is already caught earlier by ready_timeout at the /v1/models stage,
-    # and the whole run is still bounded by max_run_minutes.
+    # and the whole run is still bounded by max_run_minutes. The budget covers
+    # the probe's retries through transient faults and the warm-up burst that
+    # follows it (app/evaluation/health.py). The check runs in the background,
+    # so this long a gate holds up only its own run, not the worker's tick.
     health_probe_timeout_seconds: float = 600.0
 
     ssh_connect_timeout: int = 15
@@ -226,10 +258,18 @@ class Settings(BaseSettings):
     # Never the admin kubeconfig.
     k8s_kubeconfig: str = ""
     # On an empty install with k8s_in_cluster set, register the cluster this
-    # process runs in as one machine pool, so a fresh deployment has somewhere
-    # to put its first run instead of an empty Resources page. Only ever when
-    # NO machine exists; it never touches a fleet someone has described.
+    # process runs in, so a fresh deployment has somewhere to put its first run
+    # instead of an empty Resources page: a cluster row carrying the k8s_*
+    # settings below (they describe THIS cluster, and no cluster added later),
+    # and, with auto_register_machine, one machine pool over all of its nodes.
+    # Only ever when NO cluster and NO machine exist; it never touches a fleet
+    # someone has described.
     auto_register_cluster: bool = True
+    # Off = the cluster row only: its GPU types or nodes are registered from
+    # Resources ▸ Clusters ▸ Nodes, which a cluster with several GPU types needs.
+    auto_register_machine: bool = True
+    # The registered cluster's name on Resources ▸ Clusters.
+    local_cluster_name: str = "local"
 
     # Set true ONLY when the backend runs as a pod INSIDE the GPU cluster, to
     # authenticate with that pod's own ServiceAccount (load_incluster_config)
@@ -239,13 +279,30 @@ class Settings(BaseSettings):
     k8s_in_cluster: bool = False
     # Which object the driver renders for one run. The cluster design is still
     # TBD, so this is a switch, not a commitment:
-    #   "deployment" — a plain Deployment + NodePort Service. The universal k8s
-    #                  primitive: works on any cluster, no CRD/operator needed,
-    #                  right for single-node. This is the concrete, non-speculative
-    #                  path we can run today.
-    #   "custom"     — a TuningRun the autotune-operator reconciles (fields below).
-    #                  Set this once the operator is deployed on the cluster.
-    k8s_workload_kind: str = "deployment"
+    #   "llmservice" — an LLMService per run (llm-operator installs the engine
+    #                  chart with the run's recipe), the object a production
+    #                  deploy uses. The default; the stack install brings it.
+    #   "deployment" — (deprecated) a plain Deployment + NodePort Service, for a
+    #                  cluster without llm-operator.
+    #   "custom"     — (deprecated) a TuningRun the autotune-operator reconciles.
+    k8s_workload_kind: str = "llmservice"
+    # "llmservice" mode: the engine chart an LLMService installs, and where it
+    # is pulled from. The default is the chart repository the stack install
+    # publishes to; a site with its own (an oci:// mirror) sets it.
+    # `k8s_chart_credentials_secret` names a Secret in the namespace with
+    # basic-auth `username`/`password` for that repository.
+    k8s_chart_repo: str = "https://modelsphere.github.io/helm-charts"
+    k8s_chart_credentials_secret: str = ""
+    # How the benchmark reaches a run: "dns" (the default: it runs in this
+    # cluster and dials the run's Service by name) or "nodeport" (opt-in: from
+    # outside the cluster, through a node at k8s_node_host).
+    k8s_endpoint: str = "dns"
+    # The site's engine-image mirror ("" = as written): an image is pulled as
+    # <mirror>/<last path component>, swiss's rule for the same images.
+    k8s_image_mirror: str = ""
+    # Chart values every engine on this cluster gets (JSON), under the run's
+    # own: resources a quota demands, securityContext, shm.
+    k8s_site_values: str = ""
     # The custom resource the operator reconciles (only used when
     # k8s_workload_kind="custom"). Defaults address the autotune-operator's
     # TuningRun CRD; override only if its group/kind changes. apiVersion is
@@ -273,6 +330,8 @@ class Settings(BaseSettings):
     # (which node, which devices) is the cluster's job, so the spec asks for a
     # count and never names an index.
     k8s_gpu_resource: str = "nvidia.com/gpu"
+    # Node label supplying the exact accelerator model for pools and comparisons.
+    k8s_gpu_product_label: str = "nvidia.com/gpu.product"
     # The RuntimeClass a GPU pod asks for. NVIDIA's device plugin requires the
     # nvidia runtime to be selected; ours is named `nvidia`, but a cluster that
     # names it differently (or has none) would reject the pod outright, so this
@@ -363,6 +422,11 @@ class Settings(BaseSettings):
     # Optional PriorityClass for policy pods. A controller costing 100m CPU
     # being preempted by production is a bad trade; empty = cluster default.
     k8s_policy_priority_class: str = ""
+    # Where a delegated-only policy pod may run, as "k=v,k2=v2"; empty = any
+    # node (the default: it asks for no cards). For a cluster where only some
+    # nodes reach what the policy calls, such as an agent policy's LLM
+    # endpoint. A self-serving policy follows its machine's selector instead.
+    k8s_policy_node_selector: str = ""
 
 
 @lru_cache

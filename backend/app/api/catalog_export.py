@@ -35,10 +35,13 @@ from app.control.catalog_export import (
     split_image,
 )
 from app.control.catalog_export.catalog_index import lookup
+from app.control.catalog_export.publish import publish
 from app.control.catalog_export.validation import validation_file
 from app.control.launch_config import LaunchConfig
+from app.control.recipe import Recipe
+from app.control.recipe.campaign import recipe_for
+from app.core import platform_settings
 from app.core.auth import Principal, get_principal
-from app.core.config import get_settings
 from app.datasets.pinning import dataset_of
 from app.db.base import get_async_session
 from app.db.models import (
@@ -58,6 +61,8 @@ from app.objective import direction, target_metric
 from app.schemas.catalog_export import (
     CatalogExportOut,
     CatalogExportRequest,
+    CatalogPublishOut,
+    CatalogPublishRequest,
     CatalogVariantIn,
     EnvCategoryIn,
     EnvCategoryOut,
@@ -122,6 +127,27 @@ async def _card_type(session: AsyncSession, run: Run) -> str:
     return normalize_gpu_type(card or "")
 
 
+_RECIPE_HASH = re.compile(r"autotune\.modelsphere\.dev/recipe-hash:\s*'?(sha256:[0-9a-f]{64})")
+
+
+def _launched_recipe(campaign: Campaign, candidate: Candidate, run: Run) -> Recipe | None:
+    """The recipe this run launched, when it launched one: a recipe campaign's,
+    or any run that went out as an LLMService. Refused (409) when it is no
+    longer the recipe the run measured, so a publish is always the measured
+    document."""
+    launched = _RECIPE_HASH.search(run.launch_command or "")
+    if not campaign.recipe and launched is None:
+        return None  # a deprecated driver's run: its config is converted
+    recipe = recipe_for(campaign, dict(candidate.config or {}))
+    if launched is not None and launched.group(1) != recipe.hash():
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"run {run.id} measured recipe {launched.group(1)[:19]}..., and this campaign's recipe "
+            "has changed since; publish a run of the current one",
+        )
+    return recipe
+
+
 async def _from_run(session: AsyncSession, item: CatalogVariantIn) -> tuple[VariantSource, str]:
     run = await session.get(Run, item.run_id)
     campaign = await session.get(Campaign, run.campaign_id) if run is not None else None
@@ -137,7 +163,9 @@ async def _from_run(session: AsyncSession, item: CatalogVariantIn) -> tuple[Vari
     value = result.objective_value
     if value is None:
         value = (result.metrics or {}).get(metric)
+    recipe = _launched_recipe(campaign, candidate, run)
     source = VariantSource(
+        recipe=recipe,
         config=LaunchConfig.from_campaign(
             campaign, dict(candidate.config or {}), gpu_type=await _card_type(session, run)
         ),
@@ -336,7 +364,11 @@ async def _saved_report(
     return "", "", ""
 
 
-async def _export(body: CatalogExportRequest, session: AsyncSession) -> CatalogExport:
+async def _export(
+    body: CatalogExportRequest, session: AsyncSession, *, with_report: bool = True
+) -> CatalogExport:
+    """The export. Without a report (with_report=False, as publishing has it:
+    the catalog server takes no report) no tuning entry is recorded."""
     sources: list[VariantSource] = []
     model_names: list[str] = []
     for item in body.variants:
@@ -347,19 +379,20 @@ async def _export(body: CatalogExportRequest, session: AsyncSession) -> CatalogE
 
     name = body.name.strip() or slug(next((n for n in model_names if n), ""))
     existing, note = (
-        await lookup(get_settings().catalog_index_url, name, body.hf.strip())
+        await lookup((await platform_settings.resolve(session)).catalog_index_url, name,
+                     body.hf.strip())
         if body.use_catalog
         else (None, "")
     )
     name = existing.name if existing is not None else name
     report_path = report_html = report_source = ""
     report_errors: list[str] = []
-    if body.report_id is not None:
+    if with_report and body.report_id is not None:
         report_path, report_html, report_errors = await _report_for(
             session, body.report_id, sources, name
         )
         report_source = f"saved:{body.report_id}"
-    else:
+    elif with_report:
         report_path, report_html, report_source = await _saved_report(session, sources, name)
     opts = CatalogOptions(
         name=name,
@@ -408,6 +441,20 @@ async def _export(body: CatalogExportRequest, session: AsyncSession) -> CatalogE
     return export
 
 
+def _out(export: CatalogExport, resolved: platform_settings.Resolved) -> CatalogExportOut:
+    meta = export.metadata or {}
+    return CatalogExportOut(
+        **export.payload(),
+        hf=(meta.get("source") or {}).get("hf", ""),
+        display_name=meta.get("displayName", ""),
+        description=meta.get("description", ""),
+        family=meta.get("family", ""),
+        tags=list(meta.get("tags") or []),
+        catalog_writable=resolved.catalog_writable,
+        catalog_url=resolved.catalog_url,
+    )
+
+
 @router.post("/preview", response_model=CatalogExportOut)
 async def preview_catalog_export(
     body: CatalogExportRequest,
@@ -417,15 +464,58 @@ async def preview_catalog_export(
     """The catalog files for the given runs, validated against the catalog's
     schemas and rules. Nothing is saved."""
     export = await _export(body, session)
-    meta = export.metadata or {}
-    return CatalogExportOut(
-        **export.payload(),
-        hf=(meta.get("source") or {}).get("hf", ""),
-        display_name=meta.get("displayName", ""),
-        description=meta.get("description", ""),
-        family=meta.get("family", ""),
-        tags=list(meta.get("tags") or []),
+    return _out(export, await platform_settings.resolve(session))
+
+
+@router.post("/publish", response_model=CatalogPublishOut)
+async def publish_catalog_export(
+    body: CatalogPublishRequest,
+    principal: Principal = Depends(get_principal),
+    session: AsyncSession = Depends(get_async_session),
+):
+    """Write the export to the catalog server set in Settings, through its
+    write API: a dry run of every write by default (dry_run=true), the commits
+    with dry_run=false. Without a report: the server takes none, so no tuning
+    entry is recorded; download the zip to ship one."""
+    resolved = await platform_settings.resolve(session)
+    if not resolved.catalog_writable:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "no catalog server to publish to: set its address and write key in Settings",
+        )
+    export = await _export(body, session, with_report=False)
+    out = _out(export, resolved)
+    if not export.valid:
+        return CatalogPublishOut(url=resolved.catalog_url, dry_run=body.dry_run, ok=False,
+                                 message="; ".join(export.errors), export=out)
+    result = await publish(
+        export, resolved.catalog_url, resolved.catalog_token, dry_run=body.dry_run,
+        message=body.message.strip(), transport=_publish_transport(),
     )
+    if not body.dry_run:
+        session.add(
+            Event(
+                actor=principal.actor,
+                kind="catalog_published",
+                payload={
+                    "model": export.name,
+                    "catalog": resolved.catalog_url,
+                    "ok": result.ok,
+                    "runs": [v.run_id for v in body.variants],
+                    "writes": [
+                        {"path": w.path, "status": w.status, "commit": w.commit}
+                        for w in result.writes
+                    ],
+                },
+            )
+        )
+        await session.commit()
+    return CatalogPublishOut(**result.payload(), export=out)
+
+
+def _publish_transport():
+    """Tests swap in a mock catalog server here."""
+    return None
 
 
 @router.post("/archive")

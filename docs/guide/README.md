@@ -19,14 +19,14 @@ running campaigns and reading the results. Installation is covered in
 | page | covers | location in the UI |
 |---|---|---|
 | [Machines and GPU clusters](machines.md) | adding GPU clusters and ssh machines, leases, smoke tests, node groups | **Resources** |
-| [Search spaces](search-spaces.md) | fixed, swept, ranged and tied parameters, conditions, YAML | **Automatic Tuning ▸ Search spaces** |
-| [Objectives](objectives.md) | target metric, direction, redlines; choosing a metric | **Automatic Tuning ▸ Objectives** |
-| [Datasets](datasets.md) | samples of production traffic for a Replay workload, and when they are refreshed | **Automatic Tuning ▸ Datasets** |
-| [Search policies](policies.md) | grid search and policies, `random-search`, registering a policy | **Automatic Tuning ▸ Policies** |
-| [Creating a campaign](campaigns.md) | each step of New campaign; drafting from a baseline; YAML | **Automatic Tuning ▸ Campaigns ▸ New campaign** |
+| [Search spaces](search-spaces.md) | fixed, swept, ranged and tied parameters, conditions, YAML | **Library ▸ Search spaces** |
+| [Objectives](objectives.md) | target metric, direction, redlines; choosing a metric | **Library ▸ Objectives** |
+| [Datasets](datasets.md) | samples of production traffic for a Replay workload, and when they are refreshed | **Datasets** (top menu) |
+| [Search policies](policies.md) | grid search and policies, `random-search`, registering a policy | **Library ▸ Policies** |
+| [Creating a campaign](campaigns.md) | each step of New campaign; drafting from a baseline; YAML | **Campaigns ▸ New campaign** |
 | [Running a campaign](running-campaigns.md) | statuses, run controls, schedules, pre-flight checks, the policy panel | a campaign's page |
 | [Reading results](results.md) | leaderboard, run details, configuration, candidates, report, deploying the winner | a campaign's tabs |
-| [Baselines](baselines.md) | recording production's config, comparing against it, Tune from this | **Automatic Tuning ▸ Baselines** |
+| [Baselines](baselines.md) | recording production's config, comparing against it, Tune from this | **Library ▸ Baselines** |
 | [Runs and failures](runs.md) | run states and failure kinds | **Runs** |
 | [Account, users and API keys](account.md) | roles, adding users, passwords, the published name, API keys | the user menu |
 | [Troubleshooting](troubleshooting.md) | symptoms and their usual causes | |
@@ -34,7 +34,7 @@ running campaigns and reading the results. Installation is covered in
 ## How the parts relate
 
 ```text
-                 Resources                        Automatic Tuning
+                 Resources                        Library  →  Campaigns
          ┌─────────────────────┐   ┌──────────────────────────────────────────┐
          │ GPU clusters        │   │ Search space   Objective   Policy (opt.) │
          │   └─ machines ──────┼─┐ │       └────────────┼───────────┘         │

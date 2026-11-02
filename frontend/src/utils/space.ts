@@ -130,7 +130,8 @@ export function sweptKeysOf(space: SpaceShape | null | undefined): string[] {
  *  config leaves out differs from one that sets it. */
 export function variedKeysOf(configs: Record<string, unknown>[]): string[] {
   const seen = new Map<string, Set<string>>()
-  const keys = new Set(configs.flatMap((c) => Object.keys(c ?? {})))
+  // `__baseline__` and the like mark a row; they are not engine flags.
+  const keys = new Set(configs.flatMap((c) => Object.keys(c ?? {})).filter((k) => !k.startsWith('__')))
   for (const key of keys) {
     seen.set(key, new Set(configs.map((c) => JSON.stringify((c ?? {})[key] ?? null))))
   }

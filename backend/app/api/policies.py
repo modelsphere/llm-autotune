@@ -23,6 +23,7 @@ from app.db.base import get_async_session
 from app.db.models import (
     Campaign,
     Event,
+    LlmEndpoint,
     Machine,
     Policy,
     PolicyContender,
@@ -65,6 +66,13 @@ async def policy_defaults(_user: User = Depends(get_current_user)):
     return {"forbidden_params": list(DEFAULT_FORBIDDEN_PARAMS)}
 
 
+async def _check_endpoint(db: AsyncSession, endpoint_id: int | None) -> None:
+    if endpoint_id is not None and await db.get(LlmEndpoint, endpoint_id) is None:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY, f"no LLM endpoint {endpoint_id}"
+        )
+
+
 @router.post("/policies", response_model=PolicyOut, status_code=status.HTTP_201_CREATED)
 async def create_policy(
     body: PolicyIn,
@@ -76,6 +84,7 @@ async def create_policy(
     ).scalar_one_or_none()
     if existing is not None:
         raise HTTPException(status.HTTP_409_CONFLICT, f"policy '{body.name}' already exists")
+    await _check_endpoint(db, body.llm_endpoint_id)
     policy = Policy(owner_id=user.id, **body.model_dump(exclude={"secret_env"}))
     policy.set_secret_env(body.secret_env or {})
     db.add(policy)
@@ -97,6 +106,7 @@ async def update_policy(
     policy = await db.get(Policy, policy_id)
     if policy is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "No such policy")
+    await _check_endpoint(db, body.llm_endpoint_id)
     for key, value in body.model_dump(exclude={"secret_env"}).items():
         setattr(policy, key, value)
     if body.secret_env is not None:

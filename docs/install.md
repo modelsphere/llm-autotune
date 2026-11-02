@@ -164,7 +164,7 @@ Then follow steps 3 to 5 at <http://localhost:8080>:
   loads a day of made-up gateway traffic into a VictoriaLogs store on the
   platform cluster. Run the install again with
   `VICTORIALOGS_URL=http://victorialogs.victorialogs:9428` to turn on
-  LLMBench's collector, then use **Automatic Tuning ▸ Datasets** and a
+  LLMBench's collector, then use **Datasets** (top menu) and a
   Replay workload.
 
 If the workstation uses a local proxy (`HTTPS_PROXY=http://127.0.0.1:…`),

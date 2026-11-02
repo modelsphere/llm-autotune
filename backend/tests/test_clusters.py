@@ -98,7 +98,9 @@ def _row(**over) -> SimpleNamespace:
         id=7, name="gpu-cluster-a", notes="", api_mode="client",
         kubeconfig_enc=encrypt_secret(_kubeconfig("https://cluster-a.example:6443", "h")),
         context="", namespace="gpu-test", workload_kind="deployment",
-        node_host="198.51.100.10", gpu_resource="nvidia.com/gpu", runtime_class="",
+        node_host="198.51.100.10", gpu_resource="nvidia.com/gpu",
+        gpu_product_label="nvidia.com/gpu.product",
+        runtime_class="",
         tolerate_gpu_taint=True, tolerations="", image_pull_secrets="",
         model_pvc="", model_pvc_root="", shm_size_mb=16384, node_selector="",
         service_nodeport=0, run_ttl_seconds=0, in_cluster=False,
@@ -127,6 +129,33 @@ def test_from_row_overrides_only_what_the_cluster_sets():
 def test_from_row_treats_empty_api_mode_as_unavailable():
     cluster = K8sClusterSettings.from_row(_row(api_mode=""), get_settings())
     assert cluster.k8s_api_mode == "unavailable"
+
+
+def test_npu_product_label_is_resolved_per_cluster():
+    defaults = get_settings().model_copy(update={
+        "k8s_gpu_product_label": "default.example/product",
+    })
+    cluster = K8sClusterSettings.from_row(_row(
+        gpu_resource="huawei.com/npu", gpu_product_label="node.kubernetes.io/npu.chip.name",
+        runtime_class="ascend",
+    ), defaults)
+    assert cluster.k8s_gpu_resource == "huawei.com/npu"
+    assert cluster.k8s_gpu_product_label == "node.kubernetes.io/npu.chip.name"
+    assert cluster.k8s_runtime_class == "ascend"
+    default_cluster = K8sClusterSettings.from_settings(defaults)
+    assert default_cluster.k8s_gpu_product_label == "default.example/product"
+
+
+def test_policy_node_selector_is_per_cluster_and_falls_back_to_the_install():
+    defaults = get_settings().model_copy(update={
+        "k8s_policy_node_selector": "kubernetes.io/hostname=cpu-a",
+    })
+    own = K8sClusterSettings.from_row(
+        _row(policy_node_selector="kubernetes.io/hostname=cpu-b"), defaults)
+    assert own.k8s_policy_node_selector == "kubernetes.io/hostname=cpu-b"
+    # A cluster that sets none keeps the install's pin.
+    inherited = K8sClusterSettings.from_row(_row(policy_node_selector=""), defaults)
+    assert inherited.k8s_policy_node_selector == "kubernetes.io/hostname=cpu-a"
 
 
 def test_driver_cache_separates_two_clusters(monkeypatch):
