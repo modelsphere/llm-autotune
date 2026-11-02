@@ -18,8 +18,9 @@ class CatalogVariantIn(BaseModel):
     label: str = ""
     id: str = ""  # variant id; derived (<engine>-<parallelism>-<card>-<role>) when empty
     description: str = ""  # derived from the measurement when empty
-    # Exact nvidia.com/gpu.product values (e.g. NVIDIA-H100-80GB-HBM3). The
-    # platform keeps only the normalized card name, so this is never guessed.
+    # requires.gpuProduct names as the catalog spells them (NVIDIA-H100-80GB-HBM3,
+    # Ascend-910B4); empty = the known names of the card the run measured. An
+    # error for a variant with requires.gpus 0, which the catalog refuses it on.
     gpu_product: list[str] = Field(default_factory=list)
     nodes: int | None = None  # pods per group; 1 when empty
     # The tag to publish when the run's image was named by digest alone.
@@ -38,8 +39,8 @@ class CatalogExportRequest(BaseModel):
     include_volumes: bool = False
     # Empty = 90 minutes, raised to 3x the measured load when that is longer.
     startup_minutes: int | None = Field(default=None, ge=1, le=240)
-    # nvidia.com/gpu.product labels for every variant without its own; empty =
-    # the known label of the card each config was measured on.
+    # gpuProduct names for every variant without its own (not applied to one
+    # with requires.gpus 0); empty = the known names of each variant's card.
     gpu_product: list[str] = Field(default_factory=list)
     # metadata.yaml for a model new to the catalog. source.hf is required then:
     # every site finds the weights by it.
@@ -90,6 +91,10 @@ class CatalogVariantOut(BaseModel):
     # A tuned variant's result: recorded | no_report | no_baseline; "" otherwise.
     tuning: str = ""
     uplift: float | None = None
+    # The card type the run measured, and the gpuProduct names written ([]
+    # when none are: an unknown card, or requires.gpus 0).
+    gpu_type: str = ""
+    gpu_product: list[str] = Field(default_factory=list)
 
 
 class EnvCategoryIn(BaseModel):
@@ -114,6 +119,9 @@ class CatalogExportOut(BaseModel):
     variants: list[CatalogVariantOut] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
     files: list[CatalogFileOut] = Field(default_factory=list)
+    # Every card type the platform knows a catalog name for, and its
+    # gpuProduct names: the choices for a gpuProduct field.
+    gpu_products: dict[str, list[str]] = Field(default_factory=dict)
     # What someone should look at before publishing.
     warnings: list[str] = Field(default_factory=list)
     # What the export did that needs no action.

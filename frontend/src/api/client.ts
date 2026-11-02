@@ -603,7 +603,14 @@ export interface CatalogExportPreview {
     tuning: string
     /** Its gain over the baseline, in percent, when measured. */
     uplift: number | null
+    /** The card type the run measured, and the gpuProduct names written
+     *  ([] when none are: an unknown card, or requires.gpus 0). */
+    gpu_type: string
+    gpu_product: string[]
   }[]
+  /** Card type -> its gpuProduct names as the catalog spells them: the
+   *  choices for the gpuProduct field. */
+  gpu_products: Record<string, string[]>
   metadata: Record<string, unknown>
   /** kind: variant | metadata | report | validation */
   files: { path: string; kind: string; text: string }[]

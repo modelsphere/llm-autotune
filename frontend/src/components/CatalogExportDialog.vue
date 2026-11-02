@@ -73,8 +73,8 @@ const includeEnv = ref(true)
 const includeVolumes = ref(false)
 /** null = automatic: 90 minutes, raised to 3x the measured load when longer. */
 const startupMinutes = ref<number | null>(null)
-/** Empty = the node label of the card each config was measured on. */
-const gpuProduct = ref('')
+/** Empty = the catalog names of the card each config was measured on. */
+const gpuProduct = ref<string[]>([])
 /** A saved report comparing exactly these runs; a tuning result needs one. */
 const reportId = ref<number | null>(null)
 const advanced = ref<string[]>([])
@@ -113,7 +113,7 @@ watch(
       field.value = ''
     }
     hf.value = props.hf?.trim() ?? ''
-    gpuProduct.value = ''
+    gpuProduct.value = []
     reportId.value = null
     startupMinutes.value = null
     defaultVariant.value = ''
@@ -164,7 +164,7 @@ function body() {
     include_env: includeEnv.value,
     include_volumes: includeVolumes.value,
     startup_minutes: startupMinutes.value || null,
-    gpu_product: list(gpuProduct.value),
+    gpu_product: gpuProduct.value.map((p) => p.trim()).filter(Boolean),
     report_id: reportId.value || null,
     env_categories: envCategories.value,
   }
@@ -202,6 +202,13 @@ async function load() {
 }
 
 const variantIds = computed(() => (preview.value?.variants ?? []).map((v) => v.id))
+/** Every gpuProduct name the server knows, the measured cards' first. */
+const gpuProductChoices = computed(() => {
+  const known = preview.value?.gpu_products ?? {}
+  const measured = (preview.value?.variants ?? []).map((v) => v.gpu_type)
+  const types = [...new Set([...measured, ...Object.keys(known)])]
+  return [...new Set(types.flatMap((type) => known[type] ?? []))]
+})
 
 /** Every env var and mount once: the variants of one export usually share them. */
 const inputs = computed(() => {
@@ -422,7 +429,10 @@ async function download() {
                 :placeholder="t('catalogExport.auto')" :value-on-clear="null" />
             </el-form-item>
             <el-form-item label="gpuProduct">
-              <el-input v-model="gpuProduct" class="mono field" :placeholder="t('catalogExport.auto')" />
+              <el-select v-model="gpuProduct" class="mono field" multiple filterable allow-create
+                default-first-option :placeholder="t('catalogExport.auto')">
+                <el-option v-for="p in gpuProductChoices" :key="p" :label="p" :value="p" />
+              </el-select>
             </el-form-item>
           </el-form>
         </el-collapse-item>

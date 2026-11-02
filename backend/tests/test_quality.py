@@ -148,3 +148,16 @@ def test_production_landing_judges_the_finalists_again(db):
     db.flush()
     db.refresh(stored)
     assert stored.feasible  # 0.66 >= 0.70 - 0.10
+
+
+def test_a_config_that_leaves_the_recipe_as_it_is_is_production(db):
+    """A space lists configs side by side with null for a flag one lacks;
+    the all-null row is production, a row that sets something is not."""
+    campaign = db.get(Campaign, 1)
+    null_row = Candidate(config={"speculative_algorithm": None, "dsa_decode_backend": None})
+    assert quality.is_production(null_row, campaign)
+    assert quality.is_production(Candidate(config={}), campaign)
+    assert not quality.is_production(Candidate(config={"speculative_algorithm": "NEXTN",
+                                                       "dsa_decode_backend": None}), campaign)
+    # Removing a flag the recipe does set is a change, not production.
+    assert not quality.is_production(Candidate(config={"tp": None}), campaign)

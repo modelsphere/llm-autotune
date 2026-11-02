@@ -630,7 +630,7 @@ def test_unknown_cards_and_dev_tags_are_flagged_not_guessed():
     out = build_catalog_entry([VariantSource(cfg)], _opts())
     v = _docs(out)[0]
     assert "gpuProduct" not in v["requires"]
-    assert any("no node label known for H20" in w for w in out.warnings)
+    assert any("no catalog name known for H20" in w for w in out.warnings)
     assert any("isn't a release tag and may move" in w for w in out.warnings)
     pinned = build_catalog_entry(
         [VariantSource(cfg, image_digest="sha256:" + "b" * 64)],

@@ -15,6 +15,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   skipped production, so every night's contenders were measured with no
   reference beside them, and a quality floor relative to production could
   never pass.
+- **Production is recognised in a listed set of configs.** A search space
+  that lists configs side by side writes `null` for a flag one of them lacks,
+  so production's row is all nulls rather than empty, and the quality floor
+  found no production score. A config is now production when applying it to
+  the recipe leaves the recipe as it is.
 - **A launch whose output is garbage fails before any benchmark.** A config
   that breaks the model's numerics still generates tokens at full speed, and
   the health gate passed any non-empty answer, so a benchmark that counts
@@ -456,6 +461,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Validate chosen configs in a finished campaign.** `POST
+  /api/campaigns/{id}/validate` with `configs` (best first), a leased
+  `machine`, `hours`, and optionally a `benchmark_slug` (e.g. the workload
+  plus a quality suite) and `quality_max_drop` (points below production). The
+  platform validates them as it validates a night's contenders, production
+  first, launched from their spec, and the results land in the campaign. No
+  search runs. For a night whose session ended before validating, or whose
+  contenders were not the ones worth keeping.
 - **Quality checked against production.** A campaign can check its
   finalists' quality: production and the finalists answer the same fixed
   questions (the first 100 of GPQA Diamond by default, once each at

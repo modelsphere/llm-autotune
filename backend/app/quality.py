@@ -50,12 +50,24 @@ def quality_floor(tasks: list[str], max_drop: float) -> list[dict]:
 def is_production(candidate: Candidate | None, campaign: Campaign) -> bool:
     """A measurement of production: the platform's reference (validation's
     production run, a baseline), or, in a recipe campaign, a config that
-    changes nothing in the recipe."""
+    leaves the recipe as it is: none at all, or one that only removes flags
+    the recipe never set (a search space lists configs side by side with
+    `null` for a flag one of them lacks)."""
     if candidate is None:
         return False
     if is_baseline_candidate(candidate):
         return True
-    return bool(getattr(campaign, "recipe", None)) and not (candidate.config or {})
+    if not getattr(campaign, "recipe", None):
+        return False
+    config = candidate.config or {}
+    if not config:
+        return True
+    from app.control.recipe.campaign import base_recipe, recipe_for
+
+    try:
+        return recipe_for(campaign, config).model_dump() == base_recipe(campaign).model_dump()
+    except Exception:
+        return False
 
 
 def production_scores(db: Session, campaign: Campaign, metrics: list[str]) -> dict[str, float]:
