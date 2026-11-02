@@ -4,7 +4,7 @@
 ARG BASE_IMAGE=python:3.12-slim
 FROM ${BASE_IMAGE}
 WORKDIR /opt/mock
-COPY mock_engine.py landscape.py ./
+COPY mock_engine.py landscape.py gsm8k_sanity.jsonl ./
 COPY sglang ./sglang
 COPY vllm /usr/local/bin/vllm
 # `sglang serve ...`, the command the engine charts run.

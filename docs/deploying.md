@@ -281,7 +281,11 @@ The ones installs usually reach for:
 | `AUTOTUNE_DEFAULT_MAX_RUN_MINUTES` | `240` | window a run reserves when its length can be neither measured nor estimated from its benchmark |
 | `AUTOTUNE_POLICY_START_TIMEOUT_MINUTES` | `30` | how long a policy container may take to send its first heartbeat (how long an engine may take to load is the campaign's **Model load limit**) |
 | `AUTOTUNE_IMAGE_PULL_TIMEOUT_MINUTES` | `45` | how long a pod may spend scheduling and pulling its image, and how long an ssh machine may spend pulling one |
-| `AUTOTUNE_HEALTH_PROBE_TIMEOUT_SECONDS` | `600` | how long the first chat completion may take |
+| `AUTOTUNE_HEALTH_PROBE_TIMEOUT_SECONDS` | `600` | how long the health gate's probe may take: the first chat completion and the warm-up |
+| `AUTOTUNE_HEALTH_SANITY_QUESTIONS` | `10` | grade-school math questions (bundled GSM8K items) asked before any benchmark; `0` turns the check off |
+| `AUTOTUNE_HEALTH_SANITY_PASS_RATE` | `0.5` | the share a launch must get right, or it fails as `garbage_output` |
+| `AUTOTUNE_HEALTH_SANITY_MAX_TOKENS` | `16384` | the answer budget per question, room for a reasoning model to think |
+| `AUTOTUNE_HEALTH_SANITY_TIMEOUT_SECONDS` | `900` | how long the questions may take; one not answered in time is not counted |
 | `AUTOTUNE_K8S_IMAGE_PULL_SECRETS` | — | pull secrets (comma-separated names) for engine and policy pods |
 | `AUTOTUNE_K8S_TOLERATIONS` | — | taints engine pods tolerate, e.g. `dedicated=ml:NoSchedule` |
 | `AUTOTUNE_K8S_ENGINE_CPU_REQUEST`, `_MEMORY_REQUEST`, `_CPU_LIMIT`, `_MEMORY_LIMIT` | — | engine container resources, for namespaces whose quota requires them |

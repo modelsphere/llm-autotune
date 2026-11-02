@@ -452,7 +452,11 @@ GET /api/policy/v1/launches/31
 `status`: `queued → launching → ready → serving`, or `failed` (with the same
 `failure_class` taxonomy campaigns use: `oom`, `bad_config`, engine crash —
 an OOM is information, learn from it), then `released` after the release
-below.
+below. `garbage_output` means the engine came up and answered, but its
+answers are garbage: in a loop, or most of a few grade-school math questions
+wrong. The config broke the model's output (a precision or kernel switch,
+typically); it would have benchmarked fast and meant nothing. `error` says
+what it answered.
 
 On a shared cluster a launch can go back from `launching` to `queued` (1.2):
 the cluster has no room for its pod yet. `waiting_reason` says what the

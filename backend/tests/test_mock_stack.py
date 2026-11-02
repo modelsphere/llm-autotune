@@ -446,3 +446,143 @@ def test_health_fails_when_the_burst_gets_no_answer(monkeypatch):
     outcome = _settle(evaluator, evaluator.start("http://x", "m", {}))
     assert outcome.status == EvalStatus.FAILED
     assert "warm-up" in outcome.error
+
+
+def test_health_fails_an_engine_that_answers_in_a_loop(monkeypatch):
+    """Regression: a config that broke the engine's numerics answered the
+    probe with 512 tokens of "_2.5.5.5…" in its reasoning and passed, and
+    its benchmark, which counts tokens, scored it the campaign's best."""
+    import httpx as _httpx
+
+    from app.evaluation import health as health_module
+
+    def answering(reasoning):
+        return lambda url, **kw: _httpx.Response(200, json={
+            "choices": [{"message": {"content": "", "reasoning_content": reasoning},
+                         "finish_reason": "length"}],
+            "usage": {"completion_tokens": 512},
+        })
+
+    monkeypatch.setattr(health_module.httpx, "get", _models)
+    monkeypatch.setattr(health_module.httpx, "post", answering("_2" + ".5" * 500))
+    evaluator = HealthEvaluator(timeout_seconds=30)
+    outcome = _settle(evaluator, evaluator.start("http://x", "m", {}))
+    assert outcome.status == EvalStatus.FAILED and "loop" in outcome.error
+
+    # Reasoning cut off at the token budget is still a healthy engine.
+    thinking = (
+        "The user wants me to reply with exactly the word OK. There is no trick here; "
+        "they asked for a single word, so I should not add punctuation, quotes or any "
+        "explanation around it. Let me make sure about the casing: they wrote OK in "
+        "capitals, which is the usual form, and replying in lower case could be read as "
+        "not following the instruction exactly. I will answer with the two capital "
+        "letters and nothing else, since anything more would break the instruction."
+    )
+    assert not health_module.looping(thinking)
+    monkeypatch.setattr(health_module.httpx, "post", answering(thinking))
+    evaluator = HealthEvaluator(timeout_seconds=30)
+    outcome = _settle(evaluator, evaluator.start("http://x", "m", {}))
+    assert outcome.status == EvalStatus.PASSED, outcome.error
+
+
+def test_the_mock_engine_knows_the_sanity_answers():
+    """The mock keeps its own copy of the questions it must answer."""
+    gate = Path(__file__).resolve().parents[1] / "app/evaluation/data/gsm8k_sanity.jsonl"
+    assert (MOCK_ENGINE_DIR / "gsm8k_sanity.jsonl").read_text() == gate.read_text()
+
+
+def test_the_mock_engine_passes_the_sanity_questions(mock_engine):
+    evaluator = HealthEvaluator(timeout_seconds=30, sanity_questions=10)
+    outcome = _settle(evaluator, evaluator.start(mock_engine, "mock-model", {}))
+    assert outcome.status == EvalStatus.PASSED, outcome.error
+    assert outcome.metrics["sanity_correct"] == outcome.metrics["sanity_asked"] == 10
+
+
+def test_an_engine_that_cannot_count_fails_as_garbage_output(monkeypatch):
+    """A config that broke the model's numerics answers the probe and the
+    warm-up, and writes fluent-looking text at full speed; asked grade-school
+    math, it gets it wrong. That fails the launch before any benchmark."""
+    import httpx as _httpx
+
+    from app.evaluation import health as health_module
+
+    answers = {q: a for q, a in health_module.sanity_questions()}
+
+    def post(url, **kw):
+        text = kw["json"]["messages"][-1]["content"]
+        expected = next((a for q, a in answers.items() if text.startswith(q)), None)
+        if expected is None:  # the probe and the warm-up
+            reply = "OK"
+        elif wrong:
+            reply = "Let me think step by step about the numbers.\n#### 7"
+        else:
+            reply = f"Working it out carefully.\n#### {int(expected):,}"
+        return _httpx.Response(200, json={
+            "choices": [{"message": {"content": reply}, "finish_reason": "stop"}],
+            "usage": {"completion_tokens": 9},
+        })
+
+    monkeypatch.setattr(health_module.httpx, "get", _models)
+    monkeypatch.setattr(health_module.httpx, "post", post)
+
+    wrong = False
+    evaluator = HealthEvaluator(timeout_seconds=30, sanity_questions=10)
+    outcome = _settle(evaluator, evaluator.start("http://x", "m", {}))
+    assert outcome.status == EvalStatus.PASSED, outcome.error
+    assert outcome.metrics["sanity_correct"] == 10
+
+    wrong = True
+    evaluator = HealthEvaluator(timeout_seconds=30, sanity_questions=10)
+    outcome = _settle(evaluator, evaluator.start("http://x", "m", {}))
+    assert outcome.status == EvalStatus.FAILED
+    assert outcome.raw["failure_class"] == health_module.GARBAGE_OUTPUT
+    assert "grade-school math" in outcome.error and "expected" in outcome.error
+
+
+def test_the_final_number_is_read_leniently():
+    from app.evaluation.health import final_number
+
+    assert final_number("so the total is\n#### 1,200") == 1200
+    assert final_number("The answer is $36.") == 36
+    assert final_number("", "thinking... 80% of 20 lost 4") == 4
+    assert final_number("no digits here") is None
+
+
+def test_a_slow_answer_is_not_a_wrong_one(monkeypatch):
+    """A question that times out is not counted against the engine: a slow
+    reasoning model is not a garbage one. Too few answered at all fails the
+    gate as slow, not as garbage."""
+    import httpx as _httpx
+
+    from app.evaluation import health as health_module
+
+    answers = {q: a for q, a in health_module.sanity_questions()}
+    slow: set[str] = set()
+
+    def post(url, **kw):
+        text = kw["json"]["messages"][-1]["content"]
+        expected = next((a for q, a in answers.items() if text.startswith(q)), None)
+        if expected is None:
+            reply = "OK"
+        elif any(text.startswith(q) for q in slow):
+            raise _httpx.ReadTimeout("thinking")
+        else:
+            reply = f"#### {int(expected)}"
+        return _httpx.Response(200, json={
+            "choices": [{"message": {"content": reply}, "finish_reason": "stop"}]})
+
+    monkeypatch.setattr(health_module.time, "sleep", lambda s: None)
+    monkeypatch.setattr(health_module.httpx, "get", _models)
+    monkeypatch.setattr(health_module.httpx, "post", post)
+
+    slow = set(list(answers)[:4])  # 6 of 10 answer, all right: passes
+    evaluator = HealthEvaluator(timeout_seconds=30, sanity_questions=10)
+    outcome = _settle(evaluator, evaluator.start("http://x", "m", {}))
+    assert outcome.status == EvalStatus.PASSED, outcome.error
+    assert outcome.metrics["sanity_answered"] == 6
+
+    slow = set(list(answers)[:8])  # 2 of 10 answer: too slow to judge
+    evaluator = HealthEvaluator(timeout_seconds=30, sanity_questions=10)
+    outcome = _settle(evaluator, evaluator.start("http://x", "m", {}))
+    assert outcome.status == EvalStatus.FAILED
+    assert "failure_class" not in outcome.raw and "2 of 10 answered" in outcome.error
