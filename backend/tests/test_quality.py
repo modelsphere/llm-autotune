@@ -44,7 +44,7 @@ def test_a_quality_check_is_a_second_module_on_fixed_questions():
     assert params["selected_benchmarks"] == ["gpqa_diamond"]
     assert params["sample_cap_gpqa"] == 100  # the first 100: the same every run
     assert params["force_temperature"] is False  # k = 1 runs greedy
-    assert params["max_tokens"] == 8192 and params["max_workers"] == 16
+    assert params["max_tokens"] == 16384 and params["max_workers"] == 16
     assert modules[1]["weight"] == 0.0
 
 

@@ -71,7 +71,9 @@ class QualitySpec(BaseModel):
 
     tasks: list[str] = Field(default_factory=lambda: list(DEFAULT_QUALITY_TASKS))
     questions: int = Field(default=100, ge=0, le=100_000)  # per task; 0 = all
-    max_tokens: int = Field(default=8192, ge=256, le=131_072)
+    # A reasoning model may think for many thousands of tokens on a hard
+    # question; an answer cut off there counts as wrong.
+    max_tokens: int = Field(default=16384, ge=256, le=131_072)
     workers: int = Field(default=16, ge=1, le=256)
     max_seconds: int = Field(default=7200, ge=60, le=43_200)
 
