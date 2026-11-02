@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The catalog export no longer replaces another deployment's variant.** A
+  derived variant id names a shape (engine, parallelism, card, role), so two
+  images or two sets of weights of one model derive the same id. When the catalog
+  already publishes that id for another deployment (another image, weights or
+  card count), the export now names the new variant after the published variant
+  its baseline was measured from (`<that id>-baseline`, `<that id>-optimized`),
+  or else after the weights' directory. Before, it published a new version
+  under the other deployment's id. An id the caller sets is kept.
+
 - **Production is recognised in a listed set of configs.** A search space
   that lists configs side by side writes `null` for a flag one of them lacks,
   so production's row is all nulls rather than empty, and the quality floor

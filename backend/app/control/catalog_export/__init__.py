@@ -864,6 +864,8 @@ def build_catalog_entry(sources: list[VariantSource], opts: CatalogOptions) -> C
         seen[base] = seen.get(base, 0) + 1
         if seen[base] > 1:
             body["id"] = f"{base[:60]}-{seen[base]}"
+    if existing is not None:
+        _own_lineage(bodies, sources, name, existing, details)
 
     exported: list[ExportedVariant] = []
     for body, src, ins in zip(bodies, sources, inputs, strict=True):
@@ -958,6 +960,75 @@ def build_catalog_entry(sources: list[VariantSource], opts: CatalogOptions) -> C
     )
 
 
+def _deployment(doc: dict[str, Any]) -> tuple[str, str, int, int]:
+    """What makes a variant another deployment rather than another version of
+    the same one: the image it runs, the weights it loads and the cards it
+    takes. Flags and env are what a new version changes."""
+    values = doc.get("values") or {}
+    requires = doc.get("requires") or {}
+    return (
+        str((doc.get("image") or {}).get("repository") or ""),
+        str((values.get("model") or {}).get("localPath") or ""),
+        int(requires.get("gpus") or 0),
+        int(requires.get("nodes") or 1),
+    )
+
+
+def _own_lineage(
+    bodies: list[dict[str, Any]],
+    sources: list[VariantSource],
+    name: str,
+    existing: CatalogModel,
+    details: list[str],
+) -> None:
+    """Rename a derived id that a published variant of another deployment
+    already holds. Its generic id (engine, parallelism, card, role) names a
+    shape, not a deployment: two images or two sets of weights of one model
+    derive the same one, and a new version under it would replace the other
+    deployment's file. The new id follows the published variant this export's
+    baseline is a near copy of (the recipe it was measured from), else the
+    weights' directory. An id the caller chose is theirs."""
+    clash = []
+    for body, src in zip(bodies, sources, strict=True):
+        published = existing.variants.get(body["id"])
+        old = (published or {}).get("document")
+        if src.id or not isinstance(old, dict):
+            continue
+        if _deployment(old) != _deployment(body):
+            clash.append((body, src))
+    if not clash:
+        return
+    lineage = ""
+    base = next(
+        (b for b, s in zip(bodies, sources, strict=True) if s.role == "baseline"), None
+    )
+    if base is not None:
+        doc = {"apiVersion": API_VERSION, "kind": "Variant", "model": name, **base}
+        lineage, _ = _published_twin(doc, existing, frozenset(b["id"] for b, _ in clash))
+    taken = set(existing.variants) | {b["id"] for b in bodies}
+    for body, src in clash:
+        weights = (
+            (body.get("values") or {}).get("model", {}).get("localPath")
+            or src.config.model_path
+            or ""
+        )
+        stem = lineage or "-".join(
+            p for p in (body["id"].removesuffix(f"-{src.role}") if src.role else body["id"],
+                        _id_slug(weights.rstrip("/").rsplit("/", 1)[-1])) if p
+        )
+        new = _id_slug("-".join(p for p in (stem, src.role) if p))[:63]
+        n = 2
+        while new in taken:
+            new = f"{new[:60]}-{n}"
+            n += 1
+        details.append(
+            f"{new}: not {body['id']}, which the catalog publishes for another deployment"
+            " (another image, weights or card count)"
+        )
+        taken.add(new)
+        body["id"] = new
+
+
 def _same_variant(old: dict[str, Any], new: dict[str, Any]) -> bool:
     """The same file but for its version: re-exporting it needs no new one."""
     strip = ("version",)
@@ -990,7 +1061,9 @@ def _serving(doc: dict[str, Any]) -> dict[str, Any]:
 TWIN_MAX_DIFFERENCES = 3
 
 
-def _published_twin(doc: dict[str, Any], existing: CatalogModel) -> tuple[str, list[str]]:
+def _published_twin(
+    doc: dict[str, Any], existing: CatalogModel, exclude: frozenset[str] = frozenset()
+) -> tuple[str, list[str]]:
     """The published variant closest to this one, and the paths they differ in,
     when it is within TWIN_MAX_DIFFERENCES of them ("", [] when none is)."""
     try:
@@ -999,6 +1072,8 @@ def _published_twin(doc: dict[str, Any], existing: CatalogModel) -> tuple[str, l
         return "", []
     best: tuple[str, list[str]] = ("", [])
     for vid, published in existing.variants.items():
+        if vid in exclude:
+            continue
         old = published.get("document")
         if not isinstance(old, dict):
             continue

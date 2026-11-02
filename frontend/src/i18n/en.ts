@@ -526,7 +526,7 @@ export default {
     },
     tuning: {
       recorded: 'tuned {uplift}, report attached',
-      no_report: 'no report, so the tuning result is not recorded',
+      no_report: 'no saved report, so the tuning result is not recorded, and the catalog refuses an optimized variant without one: save the report first',
       no_baseline: 'no baseline in this export',
     },
     pickReport: 'Pick a report',
