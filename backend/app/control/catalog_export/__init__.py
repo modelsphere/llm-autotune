@@ -93,15 +93,17 @@ SERVING_CONTRACT: dict[str, tuple[str, ...]] = {
     "sglang": ("enable_cache_report", "stream_response_default_include_usage"),
 }
 
-# nvidia.com/gpu.product values, as the catalog's own entries spell them. The
-# platform keeps only the normalized card name ("H100"), so this is the one
-# place a card is taught its node label; a card missing here gets no
-# gpuProduct and a warning, never a guessed label that matches no node.
+# requires.gpuProduct names, as the catalog's own entries spell them: the
+# nvidia.com/gpu.product value for NVIDIA, <Vendor>-<model> for the others. The
+# platform keeps only the normalized card name (app/hardware.py GPU_TYPES), so
+# this is the one place a card is taught its catalog name; a card missing here
+# gets no gpuProduct and a warning, never a guessed name that matches no node.
 GPU_PRODUCTS: dict[str, list[str]] = {
     "A100": ["NVIDIA-A100-SXM4-80GB"],
     "H100": ["NVIDIA-H100-80GB-HBM3"],
     "H800": ["NVIDIA-H800"],
     "B300": ["NVIDIA-B300-SXM6-AC"],
+    "ASCEND-910B4-1": ["Ascend-910B4"],
 }
 
 # Startup budget: the newest catalog entries give every model 90 minutes
@@ -241,6 +243,10 @@ class ExportedVariant:
     # report on these runs), no_baseline; "" for any other variant.
     tuning: str = ""
     uplift: float | None = None
+    # The card type the run measured, and the gpuProduct names written ([]
+    # when none are: an unknown card, or requires.gpus 0).
+    gpu_type: str = ""
+    gpu_product: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -289,9 +295,12 @@ class CatalogExport:
                     "inputs": [i.payload() for i in v.inputs],
                     "tuning": v.tuning,
                     "uplift": v.uplift,
+                    "gpu_type": v.gpu_type,
+                    "gpu_product": list(v.gpu_product),
                 }
                 for v in self.variants
             ],
+            "gpu_products": {k: list(v) for k, v in GPU_PRODUCTS.items()},
             "metadata": self.metadata,
             "files": [{"path": f.path, "kind": f.kind, "text": f.text} for f in self.files],
             "warnings": list(self.warnings),
@@ -612,14 +621,27 @@ def _variant_from_recipe(
         variant["image"] = image
     else:
         errors.append(f"{vid}: the recipe's image has no tag; the catalog names an image by tag")
-    products = src.gpu_product or opts.gpu_product or GPU_PRODUCTS.get(src.config.gpu_type, [])
-    if products:
-        requires["gpuProduct"] = list(dict.fromkeys(products))
+    if not requires.get("gpus"):
+        # The catalog reads gpus 0 as CPU only and refuses a gpuProduct beside
+        # it; an Ascend recipe sets 0 on purpose (swiss#41) and requests its
+        # cards under resources. The export-wide list simply does not apply.
+        if src.gpu_product:
+            errors.append(
+                f"{vid}: gpuProduct is set, but requires.gpus is 0, which the catalog reads"
+                " as CPU only and refuses a gpuProduct beside"
+            )
+        details.append(f"{vid}: no gpuProduct, as requires.gpus is 0")
     else:
-        warnings.append(
-            f"{vid}: no node label known for {src.config.gpu_type or 'this card'}: set gpuProduct"
-            " under Advanced"
+        products = (
+            src.gpu_product or opts.gpu_product or GPU_PRODUCTS.get(src.config.gpu_type, [])
         )
+        if products:
+            requires["gpuProduct"] = list(dict.fromkeys(products))
+        else:
+            warnings.append(
+                f"{vid}: no catalog name known for {src.config.gpu_type or 'this card'}: set"
+                " gpuProduct under Advanced"
+            )
     variant["requires"] = requires
     variant["values"] = body["values"]
     details.append(f"{vid}: the recipe the run measured, published unchanged")
@@ -683,7 +705,7 @@ def _variant(
         requires["gpuProduct"] = list(dict.fromkeys(products))
     else:
         warnings.append(
-            f"{vid}: no node label known for {cfg.gpu_type or 'this card'}: set gpuProduct"
+            f"{vid}: no catalog name known for {cfg.gpu_type or 'this card'}: set gpuProduct"
             " under Advanced"
         )
     variant["requires"] = requires
@@ -902,6 +924,8 @@ def build_catalog_entry(sources: list[VariantSource], opts: CatalogOptions) -> C
                 path=f"models/{name}/{doc['id']}.yaml",
                 document=doc,
                 inputs=ins,
+                gpu_type=src.config.gpu_type,
+                gpu_product=list((doc.get("requires") or {}).get("gpuProduct") or []),
             )
         )
 

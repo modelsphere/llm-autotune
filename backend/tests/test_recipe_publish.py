@@ -245,3 +245,31 @@ def test_a_tuning_result_is_added_to_the_published_metadata_without_touching_the
     assert "  # A ModelScope repo id; the build is not on Hugging Face.\n" in meta.text
     assert yaml.safe_load(meta.text) == out.metadata
     assert out.metadata["tuning"][0]["baseline"] == "vllm-dp2-tp8-910b4-2node@1.0.2"
+
+
+def test_gpus_0_gets_no_gpu_product_and_refuses_one_given_for_it():
+    _, recipe = _ascend(port=18000)
+    opts = CatalogOptions(
+        name="deepseek-v4.1-flash-1017-w8a8",
+        hf="Eco-Tech/DeepSeek-V4.1-Flash-1017-w8a8",
+        gpu_product=["NVIDIA-H100-80GB-HBM3"],
+    )
+    out = build_catalog_entry([_ascend_source(recipe)], opts)
+    assert out.errors == [], "the export-wide list does not apply to it"
+    (v,) = out.variants
+    assert "gpuProduct" not in v.document["requires"]
+    assert (v.gpu_type, v.gpu_product) == ("ASCEND-910B4-1", [])
+    assert not any("gpuProduct" in w for w in out.warnings), "nothing asks for one"
+    assert out.payload()["gpu_products"]["ASCEND-910B4-1"] == ["Ascend-910B4"]
+
+    source = _ascend_source(recipe)
+    source.gpu_product = ["Ascend-910B4"]
+    out = build_catalog_entry([source], opts)
+    assert any("requires.gpus is 0" in e for e in out.errors)
+
+
+def test_the_measured_cards_names_are_written_and_reported():
+    variant = yaml.safe_load(QWEN.read_text())
+    out = build_catalog_entry([_source(Recipe.from_variant(variant))], _opts())
+    (row,) = out.payload()["variants"]
+    assert (row["gpu_type"], row["gpu_product"]) == ("H100", ["NVIDIA-H100-80GB-HBM3"])
