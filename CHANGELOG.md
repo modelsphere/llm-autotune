@@ -17,8 +17,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is one short pattern repeated (`_2.5.5.5.5…`), or when it gets fewer than
   half of 10 grade-school math questions right. The questions are GSM8K test
   items bundled with the gate and asked at once after the probe, about a
-  minute per launch (`AUTOTUNE_HEALTH_SANITY_QUESTIONS`, `_PASS_RATE`,
-  `_MAX_TOKENS`). The mock engine knows their answers.
+  minute per launch, up to 16k tokens each for a reasoning model, in their own
+  15-minute budget; a question not answered in time is not counted, so a
+  slow engine is not called garbage (`AUTOTUNE_HEALTH_SANITY_QUESTIONS`,
+  `_PASS_RATE`, `_MAX_TOKENS`, `_TIMEOUT_SECONDS`). The mock engine knows
+  their answers.
 - **Per-GPU rates of a recipe campaign divide by the launch's cards.** A
   recipe campaign's config holds only what differs from the recipe, so it
   has no `tp`, and the per-GPU measures (`total_tpm_per_gpu` and the rest)

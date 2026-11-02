@@ -108,11 +108,14 @@ class HealthEvaluator(Evaluator):
         timeout_seconds: float = 60.0,
         sanity_questions: int = 0,
         sanity_pass_rate: float = 0.5,
-        sanity_max_tokens: int = 4096,
+        sanity_max_tokens: int = 16384,
+        sanity_timeout_seconds: float = 900.0,
     ):
-        # The whole gate's budget: the probe, its retries, the warm-up and the
-        # sanity questions.
+        # The probe's budget: the probe, its retries and the warm-up.
         self.timeout_seconds = timeout_seconds
+        # The sanity questions' own budget, from when they are asked: a
+        # reasoning model may think for thousands of tokens on each.
+        self.sanity_timeout_seconds = sanity_timeout_seconds
         # 0 = no sanity check (the probe and the warm-up only).
         self.sanity_count = sanity_questions
         self.sanity_pass_rate = sanity_pass_rate
@@ -310,23 +313,32 @@ class HealthEvaluator(Evaluator):
                 )
             sanity: dict[str, Any] = {}
             if self.sanity_count:
-                correct, asked, rows = self._sanity(url, served_model_name, deadline)
-                sanity = {"sanity_correct": correct, "sanity_asked": asked}
-                answered_any = [r for r in rows if "error" not in r]
-                if not answered_any:
-                    # Nothing came back at all: the engine is down or out of
-                    # time, which is not a verdict on its output.
+                correct, asked, rows = self._sanity(
+                    url, served_model_name, time.monotonic() + self.sanity_timeout_seconds
+                )
+                # Only questions that came back are judged: one that timed out
+                # says the engine is slow, not that its answers are wrong.
+                judged = [r for r in rows if "error" not in r]
+                sanity = {"sanity_correct": correct, "sanity_asked": asked,
+                          "sanity_answered": len(judged)}
+                if len(judged) < self.sanity_pass_rate * asked:
+                    # Too few came back to judge: down or too slow, which is
+                    # not a verdict on its output.
+                    error = next((r["error"] for r in rows if "error" in r), "")
                     return EvalOutcome(
                         status=EvalStatus.FAILED,
-                        error=f"sanity questions: none answered ({rows[0].get('error', '')})",
+                        error=f"sanity questions: {len(judged)} of {asked} answered within "
+                        f"{self.sanity_timeout_seconds:.0f}s ({error})",
+                        metrics=sanity,
                     )
-                if correct < self.sanity_pass_rate * asked:
-                    wrong = next((r for r in rows if not r.get("correct")), {})
+                if correct < self.sanity_pass_rate * len(judged):
+                    wrong = next((r for r in judged if not r.get("correct")), {})
                     return EvalOutcome(
                         status=EvalStatus.FAILED,
-                        error=f"the engine got {correct} of {asked} grade-school math questions "
-                        f"right (it needs {self.sanity_pass_rate * asked:.0f}; a working model "
-                        f"gets nearly all): its output is garbage, however fast it comes. "
+                        error=f"the engine got {correct} of {len(judged)} grade-school math "
+                        f"questions right (it needs {self.sanity_pass_rate * len(judged):.0f}; "
+                        f"a working model gets nearly all): its output is garbage, however "
+                        f"fast it comes. "
                         f"E.g. {wrong.get('question', '')!r}: expected {wrong.get('expected')}, "
                         f"got {wrong.get('given')} from {wrong.get('answer', '')[-80:]!r}",
                         metrics=sanity,

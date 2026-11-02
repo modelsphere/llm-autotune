@@ -271,6 +271,7 @@ class Supervisor:
             sanity_questions=gate.health_sanity_questions,
             sanity_pass_rate=gate.health_sanity_pass_rate,
             sanity_max_tokens=gate.health_sanity_max_tokens,
+            sanity_timeout_seconds=gate.health_sanity_timeout_seconds,
         )
         self.bench = bench_evaluator or LLMBenchEvaluator()
         # Built lazily: a platform with no pinned campaigns never calls it, and

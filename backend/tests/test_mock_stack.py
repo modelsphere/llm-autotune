@@ -546,3 +546,43 @@ def test_the_final_number_is_read_leniently():
     assert final_number("The answer is $36.") == 36
     assert final_number("", "thinking... 80% of 20 lost 4") == 4
     assert final_number("no digits here") is None
+
+
+def test_a_slow_answer_is_not_a_wrong_one(monkeypatch):
+    """A question that times out is not counted against the engine: a slow
+    reasoning model is not a garbage one. Too few answered at all fails the
+    gate as slow, not as garbage."""
+    import httpx as _httpx
+
+    from app.evaluation import health as health_module
+
+    answers = {q: a for q, a in health_module.sanity_questions()}
+    slow: set[str] = set()
+
+    def post(url, **kw):
+        text = kw["json"]["messages"][-1]["content"]
+        expected = next((a for q, a in answers.items() if text.startswith(q)), None)
+        if expected is None:
+            reply = "OK"
+        elif any(text.startswith(q) for q in slow):
+            raise _httpx.ReadTimeout("thinking")
+        else:
+            reply = f"#### {int(expected)}"
+        return _httpx.Response(200, json={
+            "choices": [{"message": {"content": reply}, "finish_reason": "stop"}]})
+
+    monkeypatch.setattr(health_module.time, "sleep", lambda s: None)
+    monkeypatch.setattr(health_module.httpx, "get", _models)
+    monkeypatch.setattr(health_module.httpx, "post", post)
+
+    slow = set(list(answers)[:4])  # 6 of 10 answer, all right: passes
+    evaluator = HealthEvaluator(timeout_seconds=30, sanity_questions=10)
+    outcome = _settle(evaluator, evaluator.start("http://x", "m", {}))
+    assert outcome.status == EvalStatus.PASSED, outcome.error
+    assert outcome.metrics["sanity_answered"] == 6
+
+    slow = set(list(answers)[:8])  # 2 of 10 answer: too slow to judge
+    evaluator = HealthEvaluator(timeout_seconds=30, sanity_questions=10)
+    outcome = _settle(evaluator, evaluator.start("http://x", "m", {}))
+    assert outcome.status == EvalStatus.FAILED
+    assert "failure_class" not in outcome.raw and "2 of 10 answered" in outcome.error

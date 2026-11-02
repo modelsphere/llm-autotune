@@ -223,10 +223,13 @@ class Settings(BaseSettings):
     # health_sanity_pass_rate of them right fails as `garbage_output` before
     # any benchmark: a config that breaks the model's numerics still makes
     # tokens fast, and a benchmark that counts tokens would rank it first.
-    # 0 questions turns it off. Max tokens leave a reasoning model room to think.
+    # 0 questions turns it off. Max tokens leave a reasoning model room to
+    # think; the questions have their own time budget, and one that is not
+    # answered in it is not counted (a slow engine is not a garbage one).
     health_sanity_questions: int = 10
     health_sanity_pass_rate: float = 0.5
-    health_sanity_max_tokens: int = 4096
+    health_sanity_max_tokens: int = 16384
+    health_sanity_timeout_seconds: float = 900.0
 
     ssh_connect_timeout: int = 15
     # Kill switch only. GPU flags are normally decided per machine (a machine
