@@ -1299,6 +1299,7 @@ async def test_an_operator_validates_chosen_configs_in_a_finished_campaign(night
     async with http.db() as session:
         campaign = await session.get(Campaign, 1)
         campaign.status = CampaignStatus.DONE.value
+        campaign.node_names = ["the-node-it-searched-on"]  # elsewhere now
         machine = await session.get(Machine, 1)
         machine.lease_state = "active"
         await session.commit()
@@ -1330,6 +1331,7 @@ async def test_an_operator_validates_chosen_configs_in_a_finished_campaign(night
         assert {tuple(sorted(c.config.items())) for c in candidates if not c.is_baseline} == {
             (("tp_size", 2),), (("tp_size", 4),)}
         campaign = await session.get(Campaign, 1)
+        assert campaign.node_names == []  # the machine places the runs
         assert campaign.verify_benchmark_slug == "replay-and-gpqa"
         floor = [r for r in campaign.verify_objective["redlines"] if r.get("relative_to")]
         assert floor == [{"metric": "opencompass/accuracy[gpqa_diamond]", "op": ">=",
