@@ -3,6 +3,7 @@
 Verifies the supervisor drives a run pending → … → succeeded, releases the
 machine, records results, and that a crashing container is classified."""
 
+import time
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import create_engine, select
@@ -242,6 +243,44 @@ def test_instantly_ready_service_skips_waiting_state():
 
     supervisor.tick()  # health passes -> benching
     assert _run_status(factory) == RunStatus.BENCHING.value
+
+
+def test_a_slow_health_check_does_not_hold_up_the_tick():
+    """The health gate can take minutes (a slow first answer, retries, the
+    warm-up). Regression: it ran inside the tick, so one slow engine stalled
+    every campaign for that long. Now the tick starts it and moves on."""
+    import threading
+
+    from app.evaluation import HealthEvaluator
+
+    release = threading.Event()
+    starts = []
+
+    class SlowHealth(HealthEvaluator):
+        def _check(self, endpoint_url, served_model_name):
+            starts.append(endpoint_url)
+            release.wait(timeout=30)
+            return EvalOutcome(status=EvalStatus.PASSED)
+
+    supervisor, factory = make_supervisor(instant_ready=True)
+    supervisor.health = SlowHealth(timeout_seconds=30)
+    supervisor.tick()  # launch
+    supervisor.tick()  # ready -> health_check
+    for _ in range(3):
+        t0 = time.monotonic()
+        supervisor.tick()  # the check runs; the tick does not wait for it
+        assert time.monotonic() - t0 < 5
+        assert _run_status(factory) == RunStatus.HEALTH_CHECK.value
+    assert len(starts) == 1  # started once, polled since
+
+    release.set()
+    deadline = time.monotonic() + 10
+    while _run_status(factory) == RunStatus.HEALTH_CHECK.value:
+        assert time.monotonic() < deadline
+        time.sleep(0.05)
+        supervisor.tick()
+    assert _run_status(factory) == RunStatus.BENCHING.value
+    assert supervisor._health_refs == {}
 
 
 def test_a_paused_campaign_freezes_its_expired_lease():

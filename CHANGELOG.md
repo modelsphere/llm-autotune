@@ -22,6 +22,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a node an admin cordoned for it.
 - **A draft with a one-off window says it does not start by itself.**
 
+- **A slow health check no longer stalls every campaign.** The health gate
+  ran inside the worker's tick, and a gate can take minutes (a slow first
+  answer, retries, the warm-up burst), up to `health_probe_timeout_seconds`
+  (600 s). For that long no other run on the platform advanced: no launch,
+  no readiness poll, no benchmark started or read. The check now runs in the
+  background; the tick starts it, polls it on later ticks and moves on.
 - **The health gate warms the engine up before the benchmark.** After its
   probe answers, it sends 8 short requests at once, so every data-parallel
   rank behind the API has served before the benchmark starts. One probe warmed

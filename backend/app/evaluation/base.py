@@ -3,8 +3,8 @@
 Start/poll split so the supervisor tick loop never blocks: start() kicks off an
 evaluation and returns an external reference string (stored on the run row —
 this is what makes crash recovery re-attachable); poll() checks progress.
-Fast evaluators (health checks) simply complete within start() and return a
-terminal outcome from the first poll().
+Neither may block for long: the health check, too, runs in the background and
+reads RUNNING until it is done.
 """
 
 from abc import ABC, abstractmethod

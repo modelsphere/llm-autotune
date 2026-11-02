@@ -126,6 +126,7 @@ from app.db.models import (
     is_in_place_baseline,
 )
 from app.evaluation import (
+    EvalOutcome,
     EvalStatus,
     Evaluator,
     EvaluatorBusy,
@@ -280,6 +281,9 @@ class Supervisor:
         # Runs whose final log was read on the way to _finish (a crash, a failed
         # benchmark), so _finish does not read it a second time.
         self._final_logs: set[int] = set()
+        # Health checks in flight, by run: the check runs in the background
+        # and is polled on later ticks (_health_outcome).
+        self._health_refs: dict[int, str] = {}
 
     @property
     def datasets(self) -> DatasetProfileClient:
@@ -1825,8 +1829,9 @@ class Supervisor:
 
         elif run.status == RunStatus.HEALTH_CHECK.value:
             campaign = run.campaign
-            ref = self.health.start(run.endpoint_url, campaign.served_model_name, {})
-            outcome = self.health.poll(ref)
+            outcome = self._health_outcome(run, campaign.served_model_name)
+            if outcome is None:
+                return
             self._record_result(session, run, "health", outcome)
             if outcome.status != EvalStatus.PASSED:
                 self._fail(session, run, "health_check", outcome.error)
@@ -1892,6 +1897,20 @@ class Supervisor:
                 if now is not None and now != run.engine_incarnation:
                     self._fail_restarted(session, run, driver, handle, now)
 
+    def _health_outcome(self, run: Run, served_model: str) -> EvalOutcome | None:
+        """The run's health check: started on the first tick that asks, its
+        outcome on the tick it is done, None in between. Up to
+        health_probe_timeout_seconds pass in between; the ticks go on."""
+        ref = self._health_refs.get(run.id)
+        if ref is None:
+            ref = self.health.start(run.endpoint_url, served_model, {"run_id": run.id})
+            self._health_refs[run.id] = ref
+        outcome = self.health.poll(ref)
+        if outcome.status == EvalStatus.RUNNING:
+            return None
+        del self._health_refs[run.id]
+        return outcome
+
     def _fail_restarted(self, session: Session, run: Run, driver, handle, now: str) -> None:
         """A serving engine came back as a new process. Which way decides
         whose fault it was: a process that exited and was restarted in its pod
@@ -1928,8 +1947,9 @@ class Supervisor:
         served_model = campaign.served_model_name
 
         if run.status == RunStatus.HEALTH_CHECK.value:
-            ref = self.health.start(run.endpoint_url, served_model, {})
-            outcome = self.health.poll(ref)
+            outcome = self._health_outcome(run, served_model)
+            if outcome is None:
+                return
             if outcome.status != EvalStatus.PASSED and _looks_unreachable(outcome.error):
                 # Nothing is listening yet — an engine that has just come up
                 # loads its weights for minutes. Wait, as an experiment waiting
@@ -2273,6 +2293,9 @@ class Supervisor:
             self._capture_engine_log(session, run)
             cleaned = self._begin_teardown(session, run)
         self._final_logs.discard(run.id)
+        ref = self._health_refs.pop(run.id, None)
+        if ref is not None:
+            self.health.cancel(ref)
         if error:
             run.error = error
         run.finished_at = _now()
