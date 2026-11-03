@@ -1027,7 +1027,10 @@ class PolicySessionEngine:
         the contenders are judged against (`is_baseline` keeps it out of the
         ranking). Returns False, changing nothing, when the session has no
         free cards or port for it yet."""
-        if not config:
+        # An empty config is nothing to launch, except production in a recipe
+        # campaign: there it is the recipe as it is, and skipping it left
+        # every night without its reference.
+        if not config and (contender is not None or not getattr(campaign, "recipe", None)):
             if contender is not None:
                 contender.status = ContenderStatus.SKIPPED.value
                 contender.skip_reason = "the platform cannot launch this contender's spec"

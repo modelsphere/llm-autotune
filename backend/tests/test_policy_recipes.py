@@ -238,3 +238,51 @@ def test_a_recipe_campaigns_launch_config_is_its_recipe():
     assert cfg.engine_args["chunked_prefill_size"] == 8192
     assert cfg.extra_env["PYTORCH_ALLOC_CONF"] == "expandable_segments:True"
     assert (cfg.model_path, cfg.gpu_type) == ("/models/m", "H100")
+
+
+def test_production_of_a_recipe_campaign_is_validated():
+    """Production's config in a recipe campaign is empty (it is the recipe as
+    it is). Regression: validation took the empty config for one it could not
+    launch and skipped production, so a night's contenders had no reference."""
+    from datetime import UTC, datetime, timedelta
+
+    from sqlalchemy import create_engine, select
+    from sqlalchemy.orm import sessionmaker
+
+    from app.control.orchestrator.policy_session import PolicySessionEngine
+    from app.control.orchestrator.supervisor import Supervisor
+    from app.db.base import Base
+    from app.db.models import (
+        Campaign,
+        Candidate,
+        Machine,
+        MachineState,
+        Policy,
+        PolicySession,
+        User,
+    )
+
+    engine = create_engine("sqlite://")
+    Base.metadata.create_all(engine)
+    factory = sessionmaker(engine, expire_on_commit=False)
+    now = datetime.now(UTC)
+    with factory() as db:
+        db.add(User(id=1, username="u", password_hash="x"))
+        db.add(Policy(id=1, owner_id=1, name="p", image="i:1"))
+        db.add(Machine(id=1, name="gpu-1", host="h", gpu_count=8, gpu_type="H100",
+                       state=MachineState.AVAILABLE.value))
+        campaign = Campaign(
+            id=1, owner_id=1, name="c", engine="sglang", image="img", model_path="/m",
+            served_model_name="m", search_space={}, recipe=_glm_recipe(),
+            window_start=now, window_end=now + timedelta(hours=4), policy_id=1,
+        )
+        db.add(campaign)
+        session = PolicySession(id=1, campaign_id=1, policy_id=1, machine_id=1,
+                                window_start=now, status="validating",
+                                gpu_indices=list(range(8)), ports=[])
+        db.add(session)
+        db.flush()
+        runner = PolicySessionEngine(Supervisor(session_factory=factory))
+        assert runner._launch_validation_run(db, session, campaign, None, {})
+        (production,) = db.scalars(select(Candidate)).all()
+        assert production.is_baseline and production.config == {}
