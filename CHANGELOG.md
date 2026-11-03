@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A run on a fixed NodePort reaches its ready state.** Pointing the run's
+  port Service at the chart's front door kept the Service's cluster IP, and
+  the client transport tried to create it first: the server refused the IP as
+  taken before saying the Service existed, and the run failed with a
+  supervisor error. A Service that names its cluster IP is now replaced.
+
 - **The catalog export no longer replaces another deployment's variant.** A
   derived variant id names a shape (engine, parallelism, card, role), so two
   images or two sets of weights of one model derive the same id. When the catalog
