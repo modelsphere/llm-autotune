@@ -85,6 +85,12 @@ class K8sError(RuntimeError):
     driver's timeouts."""
 
 
+def port_taken(error: object) -> bool:
+    """A Service refused for a NodePort that another Service already holds,
+    in any namespace: the cluster says so in these words, whoever holds it."""
+    return "provided port is already allocated" in str(error)
+
+
 class K8sUnavailable(K8sError):
     """The k8s substrate was used but never configured. Distinct from a
     transient cluster error: this one never succeeds on retry."""

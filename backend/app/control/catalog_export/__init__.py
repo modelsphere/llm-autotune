@@ -55,6 +55,7 @@ from app.control.engines.base import MODEL_MOUNT
 from app.control.engines.flags import negated_flag, render_flag
 from app.control.launch_config import LaunchConfig
 from app.control.recipe import Recipe
+from app.hardware import hardware_tags
 
 from .portability import ENV_ACTIONS, Input, classify_env, plan_mounts
 
@@ -92,6 +93,9 @@ _CONTEXT_KEYS = ("context_length", "max_model_len")
 SERVING_CONTRACT: dict[str, tuple[str, ...]] = {
     "sglang": ("enable_cache_report", "stream_response_default_include_usage"),
 }
+# requires.vendor values (version.schema.json); nvidia is the catalog's default
+# and is left unwritten.
+VENDORS = ("nvidia", "ascend", "cambricon", "hygon", "amd")
 
 # requires.gpuProduct names, as the catalog's own entries spell them: the
 # nvidia.com/gpu.product value for NVIDIA, <Vendor>-<model> for the others. The
@@ -558,8 +562,18 @@ def _describe(
     return text[:512]
 
 
-def runtime_env() -> dict[str, str]:
-    """Env every launch driver sets under a config's own extra_env."""
+def card_vendor(gpu_type: str) -> str:
+    """requires.vendor for a card: what decides the extended resource a pod
+    requests (nvidia.com/gpu, huawei.com/Ascend910, ...). "" for an unknown card."""
+    tags = hardware_tags(gpu_type)
+    return next((v for v in VENDORS if v in tags), "")
+
+
+def runtime_env(vendor: str = "nvidia") -> dict[str, str]:
+    """Env every launch driver sets under a config's own extra_env. Both
+    defaults are CUDA ones the k8s driver sets only on NVIDIA cards."""
+    if vendor not in ("", "nvidia"):
+        return {}
     from app.control.launch import k8s, ssh_docker
 
     return {**ssh_docker.DEFAULT_ENV, **k8s.DEFAULT_ENV}
@@ -659,7 +673,17 @@ def _variant(
 ) -> dict[str, Any]:
     if src.recipe is not None:
         return _variant_from_recipe(src, opts, reference, warnings, errors, details)
-    cfg = src.config
+    # Keys as a pasted command spells them (max-model-len) would slip past
+    # every check below that reads the canonical snake_case key.
+    cfg = src.config.model_copy(
+        update={
+            "engine_args": {
+                str(k).lstrip("-").replace("-", "_"): v
+                for k, v in (src.config.engine_args or {}).items()
+            }
+        }
+    ).normalized()
+    vendor = card_vendor(cfg.gpu_type)
     nodes = max(1, int(src.nodes or 1))
     total = max(1, cfg.cards)
     gpus = total // nodes if total % nodes == 0 else total
@@ -700,6 +724,8 @@ def _variant(
         requires.update({"nodes": nodes, "topology": "lws", "rdma": True})
     else:
         requires["topology"] = "single-node"
+    if vendor not in ("", "nvidia"):
+        requires["vendor"] = vendor
     products = src.gpu_product or opts.gpu_product or GPU_PRODUCTS.get(cfg.gpu_type, [])
     if products:
         requires["gpuProduct"] = list(dict.fromkeys(products))
@@ -746,7 +772,7 @@ def _variant(
     # The env the run actually had: the launch driver's defaults under the
     # config's own. A config measured without extra_env still ran with the
     # defaults, and an entry that drops them is not what was measured.
-    env = {**runtime_env(), **cfg.extra_env}
+    env = {**runtime_env(vendor), **cfg.extra_env}
     # A mount an env var points into is kept only when that env var itself
     # could be: one named for this site's setup takes its files with it.
     readers = {
@@ -808,11 +834,13 @@ def _variant(
         "failureThreshold": math.ceil(minutes * 60 / PROBE_PERIOD_SECONDS),
     }
     values["terminationGracePeriodSeconds"] = 3600
-    values["lifecycle"] = {
-        "preStop": {"drainSeconds": 600, "pollIntervalSeconds": 5},
-        "forceShutdown": True,
-        "preStopKill": True,
-    }
+    lifecycle: dict[str, Any] = {"preStop": {"drainSeconds": 600, "pollIntervalSeconds": 5}}
+    if cfg.engine == "sglang":
+        # sglang's switch; the vllm chart has no such key and already aborts
+        # on SIGTERM (its shutdownTimeout defaults to 0), draining only in preStop.
+        lifecycle["forceShutdown"] = True
+    lifecycle["preStopKill"] = True
+    values["lifecycle"] = lifecycle
     values["hangWatcher"] = {"enabled": True}
     variant["values"] = values
     return variant

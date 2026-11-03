@@ -215,6 +215,35 @@ def test_a_config_without_extra_env_still_exports_the_env_it_ran_with():
     ], "the config's own value wins over the default"
 
 
+def test_a_vllm_config_on_ascend_exports_what_the_vllm_chart_and_ascend_take():
+    cfg = _config(
+        engine="vllm",
+        image="quay.io/ascend/vllm-ascend:v0.23.0",
+        # Spelled as a pasted command spells them.
+        engine_args={"tensor-parallel-size": 4, "max-model-len": 32768, "port": 8000},
+        extra_env={},
+        extra_volumes={},
+        gpu_type="ASCEND-910B4-1",
+    )
+    out = build_catalog_entry([VariantSource(cfg, role="baseline")], _opts())
+    assert out.errors == []
+    doc = _docs(out)[0]
+    values = doc["values"]
+    assert "forceShutdown" not in values["lifecycle"], "an sglang-chart key the vllm chart refuses"
+    assert values["lifecycle"]["preStopKill"] is True
+    assert doc["requires"]["vendor"] == "ascend", "else the pod asks for nvidia.com/gpu"
+    assert doc["requires"]["gpus"] == 4
+    assert "env" not in values, "both runtime defaults are CUDA ones"
+    assert values["extraArgs"] == ["--tensor-parallel-size=4"]
+    assert values["model"]["contextLength"] == "32768"
+
+
+def test_an_sglang_config_on_nvidia_keeps_force_shutdown_and_no_vendor():
+    doc = _docs(build_catalog_entry([VariantSource(_config(), role="baseline")], _opts()))[0]
+    assert list(doc["values"]["lifecycle"]) == ["preStop", "forceShutdown", "preStopKill"]
+    assert "vendor" not in doc["requires"], "nvidia is the catalog's default"
+
+
 def test_a_draft_model_a_flag_reads_is_kept_where_sites_keep_weights():
     cfg = _config(
         engine_args={

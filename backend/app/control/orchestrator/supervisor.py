@@ -76,6 +76,7 @@ from app.control.orchestrator.lifecycle import (
     now as _now,
 )
 from app.control.orchestrator.machine_queue import campaign_key, session_key, waiter_key
+from app.control.orchestrator.node_ports import port_busy_reason
 from app.control.orchestrator.occupancy import holds, reservations_on
 from app.control.orchestrator.packing import Placement, choose_next, free_indices
 from app.control.orchestrator.states import can_transition
@@ -1222,6 +1223,11 @@ class Supervisor:
                 busy.add(machine.id)
                 continue
             reserved_cards = sum(r.cards for r in held)
+            # Free cards are no use while the cluster's one fixed NodePort is
+            # held elsewhere: the run would only wait for it on these cards.
+            if port_busy_reason(session, machine):
+                busy.add(machine.id)
+                continue
 
             # A machine deployed as part of a live multi-node run is closed to
             # single-node work even on cards the gang is not using: its ranks
@@ -1766,6 +1772,13 @@ class Supervisor:
         driver = self._driver_for(spec.machine)
 
         if run.status == RunStatus.PENDING.value:
+            # The cluster's one fixed NodePort, held by a run on any machine of
+            # it: wait as for cards, rather than have k8s refuse the Service.
+            machine = session.get(Machine, run.machine_id) if run.machine_id else None
+            held = port_busy_reason(session, machine, exclude_run=run.id) if machine else None
+            if held:
+                self._note_placement(session, run, held)
+                return
             try:
                 handle, launch_commands = driver.launch_nodes(spec)
             except LaunchDeferred as exc:

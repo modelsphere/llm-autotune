@@ -17,6 +17,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   its baseline was measured from (`<that id>-baseline`, `<that id>-optimized`),
   or else after the weights' directory. Before, it published a new version
   under the other deployment's id. An id the caller sets is kept.
+- **A cluster's fixed NodePort is waited for, not fought over.** With a fixed
+  node port, every run on the cluster is reached on that one port, but runs
+  were placed by cards alone: the second one's Service was refused ("provided
+  port is already allocated") and the run failed at once, even when the holder
+  was a run on the same cluster registered a second time. A run now waits
+  until the port is free, and a port held outside the platform defers the
+  launch with its reason instead of failing it.
 
 - **A GPQA score is read as the share it is.** The opencompass module reports
   83 of 100 right as 0.83; AutoTune divided every score by 100, as for the older
