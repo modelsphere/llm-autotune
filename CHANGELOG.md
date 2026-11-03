@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A recipe campaign's production is validated next to its contenders.**
+  Production's config there is empty (production is the recipe as it is),
+  and validation took an empty config for one it could not launch: it
+  skipped production, so every night's contenders were measured with no
+  reference beside them, and a quality floor relative to production could
+  never pass.
 - **Production is recognised in a listed set of configs.** A search space
   that lists configs side by side writes `null` for a flag one of them lacks,
   so production's row is all nulls rather than empty, and the quality floor
