@@ -516,6 +516,42 @@ def test_a_republished_variant_is_its_next_version_or_no_file_at_all():
     }, "the result names the versions measured"
 
 
+def test_a_derived_id_another_deployment_holds_follows_the_recipe_it_came_from():
+    # The catalog publishes sglang-tp2-h100-* for this model on another image,
+    # and "prod" is the variant the baseline was measured from, on a newer tag.
+    first = build_catalog_entry(_pair(), _opts(name="qwen3.5-35b-a3b"))
+    def other(doc):
+        image = {**doc["image"], "repository": "registry.example/other/sglang"}
+        return {"version": "1.0.1", "document": {**doc, "image": image}}
+    prod_doc = first.variants[0].document | {"id": "prod", "description": "production"}
+    prod_doc["image"] = {**prod_doc["image"], "tag": "v0.0.1"}
+    published = _published(**{
+        "sglang-tp2-h100-baseline": other(first.variants[0].document),
+        "sglang-tp2-h100-optimized": other(first.variants[1].document),
+        "prod": {"version": "1.0.0", "document": prod_doc},
+    })
+    out = build_catalog_entry(_pair(), _opts(existing=published))
+    assert out.errors == [], out.errors
+    assert [(v.id, v.status, v.version) for v in out.variants] == [
+        ("prod-baseline", "new", "1.0.0"),
+        ("prod-optimized", "new", "1.0.0"),
+    ], "the other deployment's files are left alone"
+    assert out.metadata["tuning"][-1]["optimized"] == "prod-optimized@1.0.0"
+    assert any("which the catalog publishes for another deployment" in d for d in out.details)
+
+    # The same deployment under its derived id is still its next version.
+    same = {"version": "1.0.1", "document": first.variants[1].document | {"description": "x"}}
+    again = build_catalog_entry(
+        _pair(), _opts(existing=_published(**{"sglang-tp2-h100-optimized": same})))
+    assert [(v.id, v.status) for v in again.variants][1] == ("sglang-tp2-h100-optimized", "updated")
+
+    # Without a published recipe to follow, the weights name the deployment.
+    del published.variants["prod"]
+    named = build_catalog_entry(_pair(), _opts(existing=published))
+    assert all(v.id.startswith("sglang-tp2-h100-") and v.id != f"sglang-tp2-h100-{v.role}"
+               and v.id.endswith(v.role) for v in named.variants), [v.id for v in named.variants]
+
+
 def test_a_model_still_in_the_v1_format_is_refused():
     published = _published()
     published.metadata["apiVersion"] = "catalog.swiss/v1"
