@@ -615,7 +615,7 @@ export interface CatalogExportPreview {
     path: string
     /** Each env var and mount the run had, and what the export did with it. */
     inputs: CatalogInput[]
-    /** A tuned variant's result: recorded | no_report | no_baseline; '' otherwise. */
+    /** A tuned variant's result: recorded | no_report (recorded, no report to link) | no_baseline; '' otherwise. */
     tuning: string
     /** Its gain over the baseline, in percent, when measured. */
     uplift: number | null

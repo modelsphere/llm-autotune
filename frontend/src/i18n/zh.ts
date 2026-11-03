@@ -523,7 +523,7 @@ const zh: typeof en = {
     },
     tuning: {
       recorded: '调优 {uplift}，已附报告',
-      no_report: '没有已保存的报告，调优结果不会写入；catalog 不接受没有调优记录的 optimized variant，请先保存报告',
+      no_report: '已写入调优结果，但没有报告：这些 run 没有已保存的报告，结果显示时不带链接；保存报告后可加上链接',
       no_baseline: '本次导出没有 baseline',
     },
     pickReport: '选择报告',

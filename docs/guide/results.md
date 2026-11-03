@@ -171,12 +171,20 @@ and the model's `metadata.yaml`.
     which every site finds the weights by. A repo id read off the weights path
     is offered as a suggestion, never filled in for you. The rest of
     `metadata.yaml` is drafted and can be edited.
-- **Report:** a tuned variant's result goes into `metadata.yaml` as a
-  `tuning` entry (the gain over the baseline, per workload), which the catalog
-  wants with the perf report beside it. The export ships the newest saved
-  report that compares exactly these runs, or the one picked under
-  **Advanced**. Without a report it still exports, with no `tuning` entry and
-  a warning: the catalog's check asks for one before the pull request passes.
+- **Result:** a tuned variant's result goes into `metadata.yaml` as a
+  `tuning` entry: the gain over the baseline, per workload, and the measure it
+  is of (`metric`, when the campaign's objective is one the catalog takes,
+  such as `output_tpm_per_gpu` or `ttft_ms@p90`). The export ships the newest
+  saved report that compares exactly these runs, or the one picked under
+  **Advanced**, and links the entry to it. Without a report the entry is
+  recorded without a link.
+- **Origins:** `metadata.yaml`'s `origins` says where each variant came from.
+  Production is `manual`, the recipe as people wrote it. A config the campaign
+  found is `autotune`, with the campaign owner (`by`), the campaign's page
+  (`url`, when `AUTOTUNE_PUBLIC_UI_URL` is set), the search policy that found
+  it (`policy`, as `<name>@<version>`), and the baseline it was tuned from
+  (`from`). A plugin that launched the run can say otherwise (see
+  [plugins](../plugins.md#runs-in-the-agent-api)).
   A shipped report keeps the measurements and leaves out where they were
   taken: run and campaign names, machines, host paths and links into the
   platform.

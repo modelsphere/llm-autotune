@@ -153,9 +153,17 @@ def test_the_metadata_records_the_tuning_result_and_preselects_it():
 
 
 def test_a_tuned_variant_exports_without_its_report_and_says_what_is_missing():
+    """The result is recorded without a report: it shows without a link."""
     no_report = build_catalog_entry(_pair(), _opts(report_file=""))
     assert no_report.errors == [], "a missing report never blocks the export"
-    assert "tuning" not in no_report.metadata
+    assert no_report.metadata["tuning"] == [
+        {
+            "baseline": "sglang-tp2-h100-baseline@1.0.0",
+            "optimized": "sglang-tp2-h100-optimized@1.0.0",
+            "uplift": 25.0,
+        }
+    ]
+    assert validate(no_report.metadata, "metadata.v2") == []
     assert no_report.variants[1].tuning == "no_report" and no_report.variants[1].uplift == 25.0
     assert no_report.warnings == [], "the variant's own status says it; nothing to read twice"
     alone = build_catalog_entry(_pair()[1:], _opts())
@@ -993,3 +1001,78 @@ async def test_a_saved_report_on_the_same_runs_is_used_before_writing_one(stack)
     assert "Hand-written" in report["text"]
     meta = yaml.safe_load(out["files"][2]["text"])
     assert meta["tuning"][0]["report"] == "qwen3.5-35b-a3b-h800-report.html"
+
+
+def test_metadata_records_where_each_variant_came_from_and_what_the_uplift_measures():
+    """origins: production as people wrote it, the tuned config as the campaign
+    found it -- by whom, where, with which policy, from which baseline. The
+    tuning entry names its measure when the catalog knows it."""
+    base, tuned = _pair()
+    base.made = {"tool": "manual"}
+    tuned.made = {
+        "tool": "autotune",
+        "by": "alice",
+        "url": "http://autotune.example/campaigns/90",
+        "policy": "llm-agent@1.7",
+    }
+    for src in (base, tuned):
+        src.evidence = {**src.evidence, "metric": "output_tpm_per_gpu"}
+    out = build_catalog_entry([base, tuned], _opts())
+    assert out.errors == [], out.errors
+    meta = out.metadata
+    assert meta["origins"] == [
+        {"variant": "sglang-tp2-h100-baseline@1.0.0", "tool": "manual"},
+        {
+            "variant": "sglang-tp2-h100-optimized@1.0.0",
+            "tool": "autotune",
+            "by": "alice",
+            "url": "http://autotune.example/campaigns/90",
+            "policy": "llm-agent@1.7",
+            "from": "sglang-tp2-h100-baseline@1.0.0",
+        },
+    ]
+    assert meta["tuning"][0]["metric"] == "output_tpm_per_gpu"
+    assert list(meta).index("origins") == list(meta).index("tuning") - 1
+    assert validate(meta, "metadata.v2") == []
+
+    # A measure the catalog does not take is left out, not guessed at; a
+    # policy is only an autotune origin's.
+    tuned.evidence = {**tuned.evidence, "metric": "score"}
+    base.evidence = {**base.evidence, "metric": "score"}
+    base.made = {"tool": "baseline-hub", "by": "bob", "policy": "llm-agent@1.7"}
+    out = build_catalog_entry([base, tuned], _opts())
+    assert "metric" not in out.metadata["tuning"][0]
+    assert out.metadata["origins"][0] == {
+        "variant": "sglang-tp2-h100-baseline@1.0.0",
+        "tool": "baseline-hub",
+        "by": "bob",
+    }
+
+    # Nothing known: nothing recorded.
+    base.made, tuned.made = {}, {}
+    assert "origins" not in build_catalog_entry([base, tuned], _opts()).metadata
+
+
+def test_an_export_replaces_its_own_variant_s_recorded_origin_and_keeps_the_others():
+    base, tuned = _pair()
+    tuned.made = {"tool": "autotune", "policy": "random-search@0.1.1"}
+    published = {
+        "apiVersion": "catalog.swiss/v2",
+        "name": "q",
+        "source": {"hf": HF},
+        "origins": [
+            {"variant": "sglang-tp2-h100-optimized@1.0.0", "tool": "manual"},
+            {"variant": "other@1.0.0", "tool": "manual"},
+        ],
+    }
+    existing = CatalogModel(name="q", metadata=published)
+    out = build_catalog_entry([base, tuned], _opts(existing=existing))
+    assert out.metadata["origins"] == [
+        {"variant": "other@1.0.0", "tool": "manual"},
+        {
+            "variant": "sglang-tp2-h100-optimized@1.0.0",
+            "tool": "autotune",
+            "policy": "random-search@0.1.1",
+            "from": "sglang-tp2-h100-baseline@1.0.0",
+        },
+    ]

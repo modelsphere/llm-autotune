@@ -190,6 +190,11 @@ says replaces what the platform would build from its own rows. That covers:
   benchmark has `drifted` since;
 - the `group` the run belongs to.
 
+The model-catalog export reads three `origin` keys, when a plugin sets them,
+to say where the run's config came from: `catalog_tool` (the catalog's
+`origins[].tool`, such as `baseline-hub`), `submitted_by` (who submitted it),
+and `page_path` (its page in the web UI, linked from the catalog).
+
 Runs of one group compare by the group's rules: two runs of the same group
 are comparable whatever else differs, and runs of two groups are not
 (`group_differs`). A saved report records the group of the runs it compares,
