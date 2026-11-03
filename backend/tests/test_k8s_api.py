@@ -109,3 +109,38 @@ def test_an_api_error_says_what_the_server_refused():
     assert "spec.chart.repo" in _why(refused)
     assert _why(SimpleNamespace(reason="Forbidden", body="not json")) == "Forbidden"
     assert _why(SimpleNamespace(reason="Not Found", body=None)) == "Not Found"
+
+
+def test_a_service_that_names_its_cluster_ip_is_replaced_not_created():
+    """The fixed-port Service is pointed at the front door with its own
+    cluster IP kept. Created, the server refused that IP as taken (422) before
+    reporting the name as existing (409), so the update never happened."""
+    from types import SimpleNamespace as NS
+
+    class Refused(Exception):
+        def __init__(self, status):
+            self.status, self.reason, self.body = status, "Unprocessable Entity", None
+
+    class FakeCore:
+        def __init__(self):
+            self.calls = []
+
+        def create_namespaced_service(self, ns, item):
+            self.calls.append("create")
+            raise Refused(422)
+
+        def replace_namespaced_service(self, name, ns, item):
+            self.calls.append(("replace", item["metadata"]["resourceVersion"]))
+
+        def read_namespaced_service(self, name, ns):
+            return NS(metadata=NS(resource_version="41"))
+
+    api = ClientApi(_s(k8s_namespace="runs"))
+    core = FakeCore()
+    api._core = core
+    api._ApiException = Refused
+    api._ensure = lambda: None
+    api._sanitize = lambda obj: {"metadata": {"resourceVersion": obj.metadata.resource_version}}
+    api.apply({"kind": "Service", "metadata": {"name": "r-np"},
+               "spec": {"clusterIP": "10.96.0.9", "selector": {"app": "front"}}})
+    assert core.calls == [("replace", "41")]

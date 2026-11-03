@@ -450,6 +450,20 @@ class ClientApi(K8sApi):
         kind = item.get("kind", "")
         name = (item.get("metadata") or {}).get("name")
         create, replace = self._writers(kind)
+        spec = item.get("spec") or {}
+        if spec.get("clusterIP") or spec.get("clusterIPs"):
+            # A Service that names its address is an update of the one holding
+            # it: created, the server refuses the address as taken (422) before
+            # it would say the name exists (409), so replace it at once.
+            current = self.get(self._resource_for_kind(kind), name)
+            if current is not None:
+                rv = (current.get("metadata") or {}).get("resourceVersion")
+                item.setdefault("metadata", {})["resourceVersion"] = rv
+                try:
+                    replace(name, item)
+                except self._ApiException as exc:
+                    raise K8sError(f"client apply {kind}/{name} failed: {_why(exc)}") from exc
+                return
         try:
             create(item)
         except self._ApiException as exc:
