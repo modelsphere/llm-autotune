@@ -142,5 +142,5 @@ def test_a_service_that_names_its_cluster_ip_is_replaced_not_created():
     api._ensure = lambda: None
     api._sanitize = lambda obj: {"metadata": {"resourceVersion": obj.metadata.resource_version}}
     api.apply({"kind": "Service", "metadata": {"name": "r-np"},
-               "spec": {"clusterIP": "10.233.46.67", "selector": {"app": "front"}}})
+               "spec": {"clusterIP": "10.96.0.9", "selector": {"app": "front"}}})
     assert core.calls == [("replace", "41")]
