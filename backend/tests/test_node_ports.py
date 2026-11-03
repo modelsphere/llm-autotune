@@ -169,26 +169,36 @@ def test_a_deployment_waits_for_a_port_held_elsewhere_with_nothing_left_running(
     assert ("deployment", "autotune-run-7") in api.deleted
 
 
-def test_an_llmservice_claims_the_port_before_its_engine_is_applied():
+def test_an_llmservice_claims_the_port_owned_by_its_engine():
+    """The claim is owned by the LLMService from the start, so it goes with
+    the run however the run ends (a crash, the janitor), not only through
+    the driver's own teardown."""
     from app.control.launch.llmservice import LLMServiceDriver
     from tests.test_llmservice_driver import LlmsvcApi, _settings, _spec
 
     settings = _settings(k8s_endpoint="nodeport", k8s_node_host="10.1.1.1",
                          k8s_service_nodeport=31080)
-    api = _refusing(LlmsvcApi, settings)
+
+    class WithUid(LlmsvcApi):
+        def apply(self, manifest):
+            super().apply(manifest)
+            if manifest.get("kind") == "LLMService":
+                manifest.setdefault("metadata", {})["uid"] = "u"
+
+    api = _refusing(WithUid, settings)
     with pytest.raises(LaunchDeferred, match="node port 31080"):
         LLMServiceDriver(api=api, settings=settings).launch_nodes(_spec())
-    assert not any(m["kind"] == "LLMService" for m in api.applied)
+    assert (LLMSVC_RESOURCE, "autotune-run-7") in api.deleted, "the engine is withdrawn"
 
-    api = LlmsvcApi(settings)
+    api = WithUid(settings)
     driver = LLMServiceDriver(api=api, settings=settings)
     driver.launch_nodes(_spec())
-    claim, engine = api.applied[:2]
-    assert claim["metadata"]["name"] == "autotune-run-7-np" and engine["kind"] == "LLMService"
+    engine, claim = api.applied[:2]
+    assert engine["kind"] == "LLMService" and claim["metadata"]["name"] == "autotune-run-7-np"
     assert claim["spec"]["ports"][0]["nodePort"] == 31080
+    assert claim["metadata"]["ownerReferences"][0]["uid"] == "u"
     assert "app" not in claim["spec"]["selector"], "selects nothing until the front door exists"
     # Once the chart's Service is there, the claim is pointed at what it selects.
-    api.objects[(LLMSVC_RESOURCE, "autotune-run-7")] = {"metadata": {"uid": "u"}}
     api.objects[("service", "autotune-run-7")] = {"spec": {
         "selector": {"app": "front"}, "ports": [{"port": 30000}]}}
     api.objects[("service", "autotune-run-7-np")]["spec"]["clusterIP"] = "10.96.0.9"
@@ -197,6 +207,30 @@ def test_an_llmservice_claims_the_port_before_its_engine_is_applied():
     assert moved["spec"]["selector"] == {"app": "front"}
     assert moved["spec"]["clusterIP"] == "10.96.0.9"
     assert moved["metadata"]["ownerReferences"][0]["uid"] == "u"
+
+
+def test_a_port_service_that_will_not_update_does_not_keep_a_run_from_teardown():
+    """attach() is how a teardown finds the run: raising there left the
+    engine to the janitor, whose path never deleted the port Service."""
+    from app.control.launch.llmservice import LLMServiceDriver
+    from tests.test_llmservice_driver import LlmsvcApi, _settings, _spec
+
+    settings = _settings(k8s_endpoint="nodeport", k8s_node_host="10.1.1.1",
+                         k8s_service_nodeport=31080)
+    api = LlmsvcApi(settings)
+    driver = LLMServiceDriver(api=api, settings=settings)
+    driver.launch_nodes(_spec())
+    api.objects[("service", "autotune-run-7")] = {"spec": {
+        "selector": {"app": "front"}, "ports": [{"port": 30000}]}}
+
+    def refuse(manifest):
+        raise K8sError("client apply Service/autotune-run-7-np failed: Unprocessable Entity")
+
+    api.apply = refuse
+    handle = driver.attach(_spec())
+    assert handle is not None and handle.endpoint_url == ""
+    driver.teardown(handle)
+    assert (LLMSVC_RESOURCE, "autotune-run-7") in api.deleted
 
 
 # -- the supervisor: a run waits for the port as for cards ----------------------

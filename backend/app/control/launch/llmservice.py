@@ -167,11 +167,12 @@ class LLMServiceDriver(K8sDriver):
 
     def launch(self, spec: LaunchSpec) -> tuple[DeploymentHandle, str]:
         recipe, obj = self.manifest(spec)
-        if self._fixed_port_mode():
-            # Claimed before the engine exists: refused, the run waits with
-            # nothing applied, instead of finding out once its cards are taken.
-            self._claim_port(spec, service_port(recipe))
         self.api.apply(obj)
+        if self._fixed_port_mode():
+            # Claimed at once, owned by the LLMService so it goes with the run
+            # whichever way the run ends: refused, the engine is withdrawn and
+            # the run waits, instead of finding out once its cards are taken.
+            self._claim_port(spec, service_port(recipe))
         handle = DeploymentHandle(
             driver=self.name,
             container_name=spec.container_name,
@@ -334,7 +335,14 @@ class LLMServiceDriver(K8sDriver):
         svc = self.api.get("service", name)
         host = self.settings.k8s_node_host or self._first_node_ip()
         if svc is not None and self._fixed_port_mode():
-            node_port = self._fixed_port(spec, svc, port)
+            try:
+                node_port = self._fixed_port(spec, svc, port)
+            except K8sError as exc:
+                # Not raised: attach() is how a teardown finds the run, and a
+                # port Service that will not update must not keep it running.
+                logger.warning("fixed port of %s not pointed at its front door: %s",
+                               spec.container_name, exc)
+                return ""
         else:
             ports = ((svc or {}).get("spec") or {}).get("ports") or []
             node_port = ports[0].get("nodePort") if ports else None
@@ -350,13 +358,17 @@ class LLMServiceDriver(K8sDriver):
         )
 
     def _claim_port(self, spec: LaunchSpec, port: int) -> None:
-        """Take the cluster's fixed NodePort before the engine is applied, on a
-        Service that selects nothing yet. Held by anything else, in any
-        namespace, the launch is deferred rather than failed."""
+        """Take the cluster's fixed NodePort on a Service that selects nothing
+        yet, owned by the run's LLMService. Held by anything else, in any
+        namespace, the engine is withdrawn and the launch deferred."""
+        owner = self.api.get(self._resource, spec.container_name) or {}
         try:
-            self.api.apply(self._port_service(spec, port, {RUN_LABEL: str(spec.run_id),
-                                                           _CLAIM_LABEL: "true"}))
+            self.api.apply(self._port_service(
+                spec, port, {RUN_LABEL: str(spec.run_id), _CLAIM_LABEL: "true"},
+                (owner.get("metadata") or {}).get("uid", ""),
+            ))
         except K8sError as exc:
+            self.api.delete(self._resource, spec.container_name)
             if not port_taken(exc):
                 raise
             raise LaunchDeferred(node_port_taken(self.settings)) from exc
