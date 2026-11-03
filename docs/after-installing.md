@@ -181,8 +181,12 @@ and removed with the run. A public NAT entry must forward that port to the
 same node port.
 
 Use `0` for automatic port allocation when running concurrently. A fixed
-NodePort is shared cluster-wide and can belong to only one Service, so fixed
-ports require serial runs and cleanup of the previous Service. Fixed ports
+NodePort is shared cluster-wide and can belong to only one Service, so on a
+cluster with a fixed port one run at a time is reachable: the platform holds
+the next run until the previous one's Service is gone, as it would for cards.
+That holds across clusters registered here that are one cluster underneath
+(the same API server, or the same public host). A port held by something
+outside the platform holds the run too, until it is free. Fixed ports
 must be in the cluster's configured range (normally `30000–32767`). Public host
 and fixed port settings here do not override an Operator's endpoint in
 **custom** mode. Worker processes adopt edits within the settings cache TTL

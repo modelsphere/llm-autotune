@@ -52,6 +52,7 @@ from app.control.launch.base import (
     DeploymentDriver,
     DeploymentHandle,
     DeploymentState,
+    LaunchDeferred,
     LaunchSpec,
     MachineInfo,
     SmokeSteps,
@@ -62,7 +63,7 @@ from app.control.launch.base import (
 )
 from app.control.launch.clusters import K8sClusterSettings, as_cluster, resolve_cluster
 from app.control.launch.failures import TRANSIENT_PLACEMENT_FAILURES
-from app.control.launch.k8s_api import K8sApi, get_k8s_api
+from app.control.launch.k8s_api import K8sApi, K8sError, get_k8s_api, port_taken
 from app.control.launch.locality import ANOTHER_CLUSTER, same_cluster, unreachable_by_name
 from app.core.config import Settings, get_settings
 from app.hardware import normalize_gpu_type
@@ -463,6 +464,15 @@ def _render_deployment(spec: LaunchSpec, settings: Settings) -> dict:
             },
         },
     }
+
+
+def node_port_taken(settings: K8sClusterSettings | Settings) -> str:
+    """Why a run waits for its cluster's fixed NodePort."""
+    return (
+        f"node port {settings.k8s_service_nodeport} on cluster "
+        f"{getattr(settings, 'cluster_name', 'default')} is held by another Service; "
+        "the run launches once it is free"
+    )
 
 
 def _render_service(spec: LaunchSpec, settings: Settings) -> dict:
@@ -928,8 +938,24 @@ class K8sDriver(DeploymentDriver):
     def launch(self, spec: LaunchSpec) -> tuple[DeploymentHandle, str]:
         manifests = render_workload(spec, self.settings)
         # apply, not create: idempotent, so a relaunch of the same run replaces
-        # any stale objects rather than colliding on the name.
-        self.api.apply(manifests)
+        # any stale objects rather than colliding on the name. A Service on the
+        # cluster's fixed NodePort goes first: refused, nothing else is applied.
+        fixed = self._mode == "deployment" and bool(self.settings.k8s_service_nodeport)
+        ordered = (
+            sorted(manifests, key=lambda m: m.get("kind") != "Service") if fixed else manifests
+        )
+        try:
+            self.api.apply(ordered)
+        except K8sError as exc:
+            if not (fixed and port_taken(exc)):
+                raise
+            # A transport that applies the set in one call may have made the
+            # Deployment anyway; it must not hold cards while the run waits.
+            self.teardown(DeploymentHandle(
+                driver=self.name, container_name=spec.container_name, machine=spec.machine,
+                endpoint_url="",
+            ))
+            raise LaunchDeferred(node_port_taken(self.settings)) from exc
         handle = DeploymentHandle(
             driver=self.name,
             container_name=spec.container_name,
