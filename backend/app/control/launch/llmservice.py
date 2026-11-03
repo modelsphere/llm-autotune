@@ -31,9 +31,15 @@ from typing import Any
 
 import yaml
 
-from app.control.launch.base import DeploymentHandle, DeploymentState, LaunchSpec
-from app.control.launch.k8s import RUN_LABEL, K8sDriver, _node_selector, _tolerations
-from app.control.launch.k8s_api import LLMSVC_RESOURCE
+from app.control.launch.base import DeploymentHandle, DeploymentState, LaunchDeferred, LaunchSpec
+from app.control.launch.k8s import (
+    RUN_LABEL,
+    K8sDriver,
+    _node_selector,
+    _tolerations,
+    node_port_taken,
+)
+from app.control.launch.k8s_api import LLMSVC_RESOURCE, K8sError, port_taken
 from app.control.recipe import Recipe
 from app.control.recipe.check import recipe_problems
 from app.control.recipe.compose import (
@@ -54,6 +60,10 @@ logger = logging.getLogger(__name__)
 # The engine container's name in each chart's pod (`sglang`/`vllm`); the
 # others are the hang-watcher sidecar and, under pd, the router.
 _ENGINE_CONTAINERS = ("sglang", "vllm")
+
+# On the fixed-port Service while it only holds the port: no pod carries it,
+# so the Service selects nothing until the chart's front door exists.
+_CLAIM_LABEL = "autotune.modelsphere.dev/port-claim"
 
 
 def recipe_of(spec: LaunchSpec) -> Recipe:
@@ -157,6 +167,10 @@ class LLMServiceDriver(K8sDriver):
 
     def launch(self, spec: LaunchSpec) -> tuple[DeploymentHandle, str]:
         recipe, obj = self.manifest(spec)
+        if self._fixed_port_mode():
+            # Claimed before the engine exists: refused, the run waits with
+            # nothing applied, instead of finding out once its cards are taken.
+            self._claim_port(spec, service_port(recipe))
         self.api.apply(obj)
         handle = DeploymentHandle(
             driver=self.name,
@@ -319,7 +333,7 @@ class LLMServiceDriver(K8sDriver):
             return f"http://{name}.{self.settings.k8s_namespace}.svc:{port}"
         svc = self.api.get("service", name)
         host = self.settings.k8s_node_host or self._first_node_ip()
-        if svc is not None and self.settings.k8s_service_nodeport:
+        if svc is not None and self._fixed_port_mode():
             node_port = self._fixed_port(spec, svc, port)
         else:
             ports = ((svc or {}).get("spec") or {}).get("ports") or []
@@ -330,41 +344,70 @@ class LLMServiceDriver(K8sDriver):
         # re-resolves once the run is ready.
         return ""
 
+    def _fixed_port_mode(self) -> bool:
+        return (self.settings.k8s_endpoint or "dns") == "nodeport" and bool(
+            self.settings.k8s_service_nodeport
+        )
+
+    def _claim_port(self, spec: LaunchSpec, port: int) -> None:
+        """Take the cluster's fixed NodePort before the engine is applied, on a
+        Service that selects nothing yet. Held by anything else, in any
+        namespace, the launch is deferred rather than failed."""
+        try:
+            self.api.apply(self._port_service(spec, port, {RUN_LABEL: str(spec.run_id),
+                                                           _CLAIM_LABEL: "true"}))
+        except K8sError as exc:
+            if not port_taken(exc):
+                raise
+            raise LaunchDeferred(node_port_taken(self.settings)) from exc
+
     def _fixed_port(self, spec: LaunchSpec, front: dict[str, Any], port: int) -> int:
         """The cluster's fixed NodePort, on a Service of AutoTune's own: the
         engine charts take no `nodePort`, so the one a firewall lets through
-        cannot be asked of theirs. It selects what the chart's front door
-        selects (the leader under lws, the routers under pd) and is owned by
-        the LLMService, so it goes when the run does. One run at a time holds
-        the port; another waits until it is free."""
-        name = fixed_port_service(spec.container_name)
+        cannot be asked of theirs. Claimed at launch, it is pointed here at
+        what the chart's front door selects (the leader under lws, the routers
+        under pd) and handed to the LLMService, so it goes when the run does."""
         node_port = int(self.settings.k8s_service_nodeport)
-        if self.api.get("service", name) is not None:
+        selector = dict((front.get("spec") or {}).get("selector") or {})
+        current = self.api.get("service", fixed_port_service(spec.container_name))
+        if current is not None and (current.get("spec") or {}).get("selector") == selector:
             return node_port
         owner = self.api.get(self._resource, spec.container_name) or {}
-        meta = owner.get("metadata") or {}
-        self.api.apply({
+        self.api.apply(self._port_service(
+            spec, port, selector, (owner.get("metadata") or {}).get("uid", ""), current,
+        ))
+        return node_port
+
+    def _port_service(
+        self, spec: LaunchSpec, port: int, selector: dict[str, str],
+        owner_uid: str = "", current: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        body: dict[str, Any] = {
+            "type": "NodePort",
+            "selector": selector,
+            "ports": [{
+                "name": "http-inference", "port": port, "targetPort": port,
+                "nodePort": int(self.settings.k8s_service_nodeport),
+            }],
+        }
+        # An update keeps the address the claim was given.
+        for key in ("clusterIP", "clusterIPs"):
+            if ((current or {}).get("spec") or {}).get(key):
+                body[key] = current["spec"][key]
+        return {
             "apiVersion": "v1",
             "kind": "Service",
             "metadata": {
-                "name": name,
+                "name": fixed_port_service(spec.container_name),
                 "namespace": self.settings.k8s_namespace,
                 "labels": {RUN_LABEL: str(spec.run_id), MANAGED_LABEL: "true"},
                 "ownerReferences": [{
                     "apiVersion": API_VERSION, "kind": KIND,
-                    "name": spec.container_name, "uid": meta.get("uid", ""),
-                }] if meta.get("uid") else [],
+                    "name": spec.container_name, "uid": owner_uid,
+                }] if owner_uid else [],
             },
-            "spec": {
-                "type": "NodePort",
-                "selector": dict((front.get("spec") or {}).get("selector") or {}),
-                "ports": [{
-                    "name": "http-inference", "port": port, "targetPort": port,
-                    "nodePort": node_port,
-                }],
-            },
-        })
-        return node_port
+            "spec": body,
+        }
 
 
 def fixed_port_service(release: str) -> str:

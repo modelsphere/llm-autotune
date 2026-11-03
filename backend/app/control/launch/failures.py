@@ -133,7 +133,11 @@ def classify_failure(log_text: str) -> str:
         # Before port_conflict: the GPU-busy message is worded to avoid the
         # "already in use" needle so the two never cross-classify.
         ("gpu_busy", ("gpu busy on", "gpus busy on")),
-        ("port_conflict", ("address already in use", "already in use on")),
+        # k8s's wording for a NodePort another Service holds.
+        (
+            "port_conflict",
+            ("address already in use", "already in use on", "provided port is already allocated"),
+        ),
         (
             "image_missing",
             (

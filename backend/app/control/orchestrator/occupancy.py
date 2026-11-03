@@ -29,6 +29,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.control.orchestrator.lifecycle import live_runs_on, teardown_pending_on
+from app.control.orchestrator.node_ports import port_busy_reason
 from app.db.models import Campaign, Machine
 
 logger = logging.getLogger(__name__)
@@ -82,6 +83,8 @@ def busy_reason(
     """Why a run of `cards` per node cannot go on this machine right now, or
     None if it can. Only occupancy: whether the machine is usable at all
     (leased, cleared, the right hardware) is the caller's question."""
+    if (port := port_busy_reason(session, machine)) is not None:
+        return port
     live = [r for r in live_runs_on(session, machine) if r.campaign_id != campaign_id]
     dying = teardown_pending_on(session, machine)
     held = reservations_on(session, machine, exclude_campaign=campaign_id)
