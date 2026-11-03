@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The quality check answers each question once.** It left the opencompass
+  module's own sample counts in place, so GPQA was answered 8 times (avg@8),
+  at a sampling temperature, which took 8 times as long. A benchmark with a
+  quality check gets a new slug, so one created with the old counts is not
+  reused.
+
 - **A recipe campaign's production is validated next to its contenders.**
   Production's config there is empty (production is the recipe as it is),
   and validation took an empty config for one it could not launch: it
