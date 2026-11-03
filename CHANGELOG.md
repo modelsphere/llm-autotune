@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A GPQA score is read as the share it is.** The opencompass module reports
+  83 of 100 right as 0.83; AutoTune divided every score by 100, as for the older
+  percentage form, so production scored 0.0083 and a quality floor relative to it
+  passed every config. Scores above 1 are still read as percentages.
+
 - **The quality check answers each question once.** It left the opencompass
   module's own sample counts in place, so GPQA was answered 8 times (avg@8),
   at a sampling temperature, which took 8 times as long. A benchmark with a
