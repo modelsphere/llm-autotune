@@ -14,6 +14,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   percentage form, so production scored 0.0083 and a quality floor relative to it
   passed every config. Scores above 1 are still read as percentages.
 
+- **The quality check answers each question once.** It left the opencompass
+  module's own sample counts in place, so GPQA was answered 8 times (avg@8),
+  at a sampling temperature, which took 8 times as long. A benchmark with a
+  quality check gets a new slug, so one created with the old counts is not
+  reused.
+
+- **A recipe campaign's production is validated next to its contenders.**
+  Production's config there is empty (production is the recipe as it is),
+  and validation took an empty config for one it could not launch: it
+  skipped production, so every night's contenders were measured with no
+  reference beside them, and a quality floor relative to production could
+  never pass.
 - **Production is recognised in a listed set of configs.** A search space
   that lists configs side by side writes `null` for a flag one of them lacks,
   so production's row is all nulls rather than empty, and the quality floor

@@ -47,16 +47,17 @@ _REPLAY_FALLBACK_METRICS = [
 
 
 QUALITY_MODULE = "opencompass"
-# The quality suites the opencompass module runs, and the name of each one's
-# sample-cap parameter there. hle needs a judge model, so it is not offered.
+# The quality suites the opencompass module runs, and the suffix of each one's
+# parameters there (sample_cap_<s>, avg_k_<s>, pass_k_<s>). hle needs a judge
+# model, so it is not offered.
 QUALITY_TASKS: dict[str, str] = {
-    "gpqa_diamond": "sample_cap_gpqa",
-    "mmlu_pro": "sample_cap_mmlu",
-    "aime2025": "sample_cap_aime",
-    "ifeval": "sample_cap_ifeval",
-    "livecodebench_v6": "sample_cap_lcb",
-    "simpleqa": "sample_cap_simpleqa",
-    "longbench_v2": "sample_cap_longbench",
+    "gpqa_diamond": "gpqa",
+    "mmlu_pro": "mmlu",
+    "aime2025": "aime",
+    "ifeval": "ifeval",
+    "livecodebench_v6": "lcb",
+    "simpleqa": "simpleqa",
+    "longbench_v2": "longbench",
 }
 DEFAULT_QUALITY_TASKS = ["gpqa_diamond"]
 
@@ -152,7 +153,10 @@ class BenchmarkSpec(BaseModel):
                 out["dataset_frozen"] = self.dataset_frozen.strip()
         # Likewise only when set.
         if self.quality is not None:
-            out["quality"] = self.quality.model_dump()
+            # "once": a benchmark made before each question was answered once
+            # (avg@8 for GPQA) is not this one, and LLMBench keeps a slug's
+            # document as first created.
+            out["quality"] = {**self.quality.model_dump(), "once": True}
         return out
 
     @property
@@ -254,7 +258,13 @@ def quality_module(quality: QualitySpec) -> dict:
         "stream": True,
     }
     for task in quality.tasks:
-        params[QUALITY_TASKS[task]] = quality.questions
+        suffix = QUALITY_TASKS[task]
+        params[f"sample_cap_{suffix}"] = quality.questions
+        # The module's own defaults sample some suites many times (GPQA avg@8,
+        # AIME avg@32): eight to thirty-two times the requests, and at a
+        # sampling temperature. Once each is what this check is.
+        params[f"avg_k_{suffix}"] = 1
+        params[f"pass_k_{suffix}"] = 1
     return {
         "module_name": QUALITY_MODULE,
         "params": params,
