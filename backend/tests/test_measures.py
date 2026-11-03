@@ -288,6 +288,14 @@ def test_opencompass_tasks_are_accuracies_and_its_output_tps_is_per_request():
     assert value("accuracy[gen_tokens]", scenarios) is None
 
 
+def test_an_opencompass_score_given_as_a_share_stays_a_share():
+    # Current releases report 83 of 100 right as 0.83, older ones as 83.0.
+    assert value("accuracy[gpqa_diamond]",
+                 measures_of({"opencompass.gpqa_diamond": 0.83})) == pytest.approx(0.83)
+    assert value("accuracy[gpqa_diamond]",
+                 measures_of({"opencompass.gpqa_diamond": 83.0})) == pytest.approx(0.83)
+
+
 def test_quality_modules_and_an_unknown_module_keep_their_score():
     metrics = {
         "functional_acceptance.pass_rate": 0.98,

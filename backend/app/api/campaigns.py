@@ -1192,6 +1192,12 @@ async def validate_configs(
             body.quality_tasks, body.quality_max_drop / 100)
         campaign.verify_objective = base
 
+    # The campaign's node pin names the nodes it searched on, and a run's pod
+    # follows it over the machine's own selector: kept, these would run on
+    # the old node, not on the machine asked for. The machine places them.
+    unpinned = list(campaign.node_names or [])
+    campaign.node_names = []
+
     now = datetime.now(UTC)
     until = now + timedelta(hours=body.hours)
     campaign.status = CampaignStatus.ACTIVE.value
@@ -1227,7 +1233,7 @@ async def validate_configs(
         payload={"session_id": policy_session.id, "configs": len(body.configs),
                  "machine": machine.name, "until": until.isoformat(),
                  "benchmark": campaign.verify_benchmark_slug,
-                 "quality_max_drop": body.quality_max_drop},
+                 "quality_max_drop": body.quality_max_drop, "unpinned_nodes": unpinned},
     ))
     await session.commit()
     await session.refresh(campaign)
