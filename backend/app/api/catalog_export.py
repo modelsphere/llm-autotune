@@ -51,10 +51,12 @@ from app.db.models import (
     CatalogEnvCategory,
     Event,
     Machine,
+    Policy,
     Result,
     Run,
     RunStatus,
     User,
+    is_baseline_candidate,
 )
 from app.hardware import normalize_gpu_type
 from app.objective import direction, target_metric
@@ -194,7 +196,40 @@ async def _from_run(session: AsyncSession, item: CatalogVariantIn) -> tuple[Vari
     group = bundle.overlay.group if bundle and bundle.overlay else None
     if group is not None and group.kind == "track" and group.slug:
         source.origin["track_slug"] = group.slug
+    source.made = await _made(session, campaign, candidate, bundle.overlay if bundle else None)
     return source, campaign.served_model_name
+
+
+_POLICY_REF = re.compile(r"[a-z0-9][a-z0-9._-]*@[0-9A-Za-z][0-9A-Za-z._+-]*")
+
+
+async def _made(session: AsyncSession, campaign: Campaign, candidate: Candidate, overlay) -> dict:
+    """Where a run's config came from, for the catalog's origins. A plugin that
+    launched the run says so (its overlay's catalog_tool, submitted_by and
+    page_path); otherwise production is the recipe as people wrote it, and any
+    other config was found by the campaign."""
+    from app.core.config import get_settings
+
+    ui = get_settings().public_ui_url.rstrip("/")
+    extra = dict(overlay.origin or {}) if overlay is not None else {}
+    if extra.get("catalog_tool"):
+        made = {"tool": str(extra["catalog_tool"]), "by": str(extra.get("submitted_by") or "")}
+        if ui and extra.get("page_path"):
+            made["url"] = ui + "/" + str(extra["page_path"]).lstrip("/")
+        return {k: v for k, v in made.items() if v}
+    if is_baseline_candidate(candidate) or not candidate.config:
+        return {"tool": "manual"}
+    owner = await session.get(User, campaign.owner_id) if campaign.owner_id else None
+    made = {"tool": "autotune", "by": owner.username if owner is not None else ""}
+    if ui:
+        made["url"] = f"{ui}/campaigns/{campaign.id}"
+    policy = await session.get(Policy, campaign.policy_id) if campaign.policy_id else None
+    if policy is not None:
+        tag = policy.image.rsplit(":", 1)[1] if ":" in policy.image.rsplit("/", 1)[-1] else ""
+        ref = f"{policy.name.strip().lower()}@{(policy.version or tag).strip()}"
+        if _POLICY_REF.fullmatch(ref):
+            made["policy"] = ref
+    return {k: v for k, v in made.items() if v}
 
 
 # Quality run fields that are timings or token counts, not scores.

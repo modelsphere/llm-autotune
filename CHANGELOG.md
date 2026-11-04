@@ -16,6 +16,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   what it waits for (cards, the node port, its image) instead of always
   *waiting for cards*. `GET /api/campaigns/{id}` has `queue`; a run has
   `waiting_for` and `waiting_reason`.
+- **The catalog export says where each variant came from, and what its gain
+  is of.** `metadata.yaml` gets `origins`: production is `manual`; a config a
+  campaign found is `autotune`, with the campaign's owner, its page, the
+  search policy that found it (`llm-agent@1.7`) and the baseline it was tuned
+  from. A plugin that launched the run can name its own (`baseline-hub`). The
+  tuning entry names its measure (`metric: output_tpm_per_gpu`). Both follow
+  model-catalog's v2 schema, vendored here.
+
+### Changed
+
+- **A tuned result without a report is recorded.** It was left out of
+  `metadata.yaml`, so publishing to a catalog server, which takes no report,
+  never recorded a gain. It is now written without a report link.
 
 ### Fixed
 
