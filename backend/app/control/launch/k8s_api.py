@@ -537,6 +537,8 @@ class ClientApi(K8sApi):
                 resp = self._core.list_namespaced_pod(self._ns, **kwargs)
             elif resource == "events":
                 resp = self._core.list_namespaced_event(self._ns, **kwargs)
+            elif resource == "service":
+                resp = self._core.list_namespaced_service(self._ns, **kwargs)
             elif resource == "nodes":
                 resp = self._core.list_node(**kwargs)
             elif resource == "resourcequotas":

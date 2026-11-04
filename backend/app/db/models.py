@@ -825,6 +825,10 @@ class Run(Base):
     waiting_since: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # While waiting_since is set: which resource (launch.WaitingFor), and what the
+    # cluster or the queue last said about it. Empty the rest of the time.
+    waiting_for: Mapped[str] = mapped_column(String(16), default="")
+    waiting_reason: Mapped[str] = mapped_column(Text, default="")
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     # -- multi-node placement ------------------------------------------------
     #
@@ -1320,6 +1324,35 @@ class Event(Base):
     campaign_id: Mapped[int | None] = mapped_column(ForeignKey("campaigns.id"), nullable=True)
     run_id: Mapped[int | None] = mapped_column(ForeignKey("runs.id"), nullable=True)
     payload: Mapped[dict] = mapped_column(JsonCol, default=dict)
+
+
+class QueueTicket(Base):
+    """A waiter's place in the machine queue (orchestrator/queue_tickets.py).
+
+    Taken the first time the scheduler sees a waiter, kept until it is served,
+    so its place cannot drift while it waits. Order is (arrival, rank, ident),
+    frozen at issue; `id` breaks what is left. The scheduler rewrites
+    position, waiting_for and reason on every pass, for people to read."""
+
+    __tablename__ = "queue_tickets"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    # "campaign:12", "session:3", "plugin:<name>:89": one ticket per waiter.
+    waiter: Mapped[str] = mapped_column(String(96), unique=True)
+    label: Mapped[str] = mapped_column(String(255), default="")
+    campaign_id: Mapped[int | None] = mapped_column(
+        ForeignKey("campaigns.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    arrival: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    rank: Mapped[int] = mapped_column(Integer, default=0)
+    ident: Mapped[int] = mapped_column(Integer, default=0)
+    issued_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    # The last pass that saw it waiting: a ticket unseen for a while is let go.
+    seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    # 1 for the front of the line for what it waits for; 0 before its first pass.
+    position: Mapped[int] = mapped_column(Integer, default=0)
+    waiting_for: Mapped[str] = mapped_column(String(16), default="")
+    reason: Mapped[str] = mapped_column(Text, default="")
 
 
 # -- policy-as-code -----------------------------------------------------------

@@ -1258,6 +1258,13 @@ const stall = computed<{ title: string; lines: string[] } | null>(() => {
   if (!candidates.value.some((x) => x.status === 'valid')) return null
   if (runs.value.some((r) => isLive(r.status))) return null
 
+  if (c.queue) {
+    return {
+      title: t(c.queue.waiting_for === 'node_port' ? 'campaign.queue.port' : 'campaign.queue.cards',
+        { n: c.queue.position }),
+      lines: [`${c.queue.reason} · ${t('campaign.queue.since', { when: relativeTime(c.queue.since) })}`],
+    }
+  }
   const pinned = c.machine_names ?? []
   const usable = machines.value.filter((m) => !pinned.length || pinned.includes(m.name))
   if (!usable.length) {

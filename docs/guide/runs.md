@@ -28,7 +28,7 @@ the configs it interrupts are queued again.)
 
 | status | what is happening |
 |---|---|
-| **pending** | waiting for a machine with enough free GPUs, inside the window |
+| **pending** | placed, and waiting to start: for free GPUs, the cluster's node port or its image ([Waiting in line](running-campaigns.md#waiting-in-line)) |
 | **launching** | starting the engine: on Kubernetes, creating the pod and pulling the image |
 | **waiting ready** | the engine is loading the model; the platform waits until it answers |
 | **health check** | a short check that it answers requests correctly |

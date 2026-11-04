@@ -249,6 +249,10 @@ const zh: typeof en = {
     cards: '{n} 张卡',
     waitingCards: '等待 GPU',
     waitingCardsHint: '集群暂时没有空闲的卡；有卡空出来时会自动开始。Run 日志里有集群给出的原因。',
+    waitingPort: '等待 NodePort',
+    waitingPortHint: '集群的 NodePort 同一时间只能给一个 run 使用；端口空出来时会自动开始。',
+    waitingImage: '拉取镜像中',
+    waitingImageHint: '镜像还在拉取到机器上；拉取完成后会自动开始。',
     endpoint: 'Endpoint',
     started: '开始于',
     took: '耗时',
@@ -332,6 +336,11 @@ const zh: typeof en = {
     redlinesHeld: '红线全部满足',
     redlinesCrossed: '越过红线',
     fullConfig: '完整配置',
+    queue: {
+      cards: '排队中 — 等待 GPU 的第 {n} 位',
+      port: '排队中 — 等待集群 NodePort 的第 {n} 位',
+      since: '{when}开始排队',
+    },
     fact: {
       model: '模型',
       search: '搜索',

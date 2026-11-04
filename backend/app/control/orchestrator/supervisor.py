@@ -29,6 +29,7 @@ from app.control.launch import (
     LaunchSpec,
     MachineInfo,
     NodeAssignment,
+    WaitingFor,
     get_driver,
     merge_volumes,
 )
@@ -76,9 +77,10 @@ from app.control.orchestrator.lifecycle import (
     now as _now,
 )
 from app.control.orchestrator.machine_queue import campaign_key, session_key, waiter_key
-from app.control.orchestrator.node_ports import port_busy_reason
-from app.control.orchestrator.occupancy import holds, reservations_on
+from app.control.orchestrator.node_ports import port_busy_reason, port_siblings
+from app.control.orchestrator.occupancy import busy_reason, holds, reservations_on
 from app.control.orchestrator.packing import Placement, choose_next, free_indices
+from app.control.orchestrator.queue_tickets import Entry, TicketBook, place_in_line
 from app.control.orchestrator.states import can_transition
 from app.control.recipe.campaign import base_recipe, config_cards, recipe_for, split_flat
 from app.control.run_nodes import machine_hosts_live_gang, nodes_of, run_ids_on_machine
@@ -801,10 +803,21 @@ class Supervisor:
             except Exception:
                 logger.exception("teardown reap for run %d failed to attach", run.id)
                 continue
-            if handle is None:
-                self._confirm_teardown(session, run)
-                continue
             elapsed = (_now() - (_as_utc(run.finished_at) or _now())).total_seconds()
+            if handle is None:
+                # The container is gone; what can outlive it (a fixed NodePort's
+                # Service) must be too before the run stops holding the port.
+                try:
+                    released = driver.release_leftovers(spec)
+                except Exception:
+                    logger.exception("releasing what run %d left behind failed", run.id)
+                    released = False
+                if released or elapsed >= giveup:
+                    if not released:
+                        logger.warning("run %d: confirmed gone with leftovers after %ds",
+                                       run.id, int(elapsed))
+                    self._confirm_teardown(session, run)
+                continue
             if elapsed >= giveup:
                 # It has ignored SIGTERM and repeated forced removals for the
                 # whole budget. Stop hammering and hold the box out of rotation
@@ -1055,21 +1068,26 @@ class Supervisor:
     # -------------------------------------------------------------- schedule
 
     def _schedule(self, session: Session) -> None:
-        """The machine queue: everything waiting to run, oldest first, one run
-        per turn.
+        """The machine queue: everything waiting to run, in ticket order, one
+        run per turn (orchestrator/queue_tickets.py).
 
         Waiters are every ACTIVE campaign with a run ready to place, every
         pending policy session without a machine, and whatever enabled plugins
-        add (`Plugin.queue_waiters`). A campaign that places a run goes to the
-        back, so two campaigns on one machine alternate run by run in arrival
-        order rather than whichever the database lists first draining the queue.
+        add (`Plugin.queue_waiters`). Each keeps a ticket while it waits. A
+        campaign that places a run gives its ticket up and goes to the back,
+        so two campaigns on one machine alternate run by run in arrival order
+        rather than whichever the database lists first draining the queue.
 
-        No queue-jumping: a waiter that cannot fit on a machine it could use
-        (busy, or not enough free cards) holds that machine for the rest of the
-        pass, and nobody behind it may take the cards it is waiting for. That
-        is what lets an 8-card ask ever start next to a stream of 2-card ones.
+        No queue-jumping: a waiter that cannot be served on a machine it could
+        use (busy, or not enough free cards) holds that machine for the rest of
+        the pass, and nobody behind it may take the cards it is waiting for.
+        That is what lets an 8-card ask ever start next to a stream of 2-card
+        ones. One whose runs take a cluster's fixed NodePort holds every
+        machine sharing that port too, so the port goes in ticket order as
+        well, whichever registration of the cluster a later waiter would use.
         """
-        waiting: list[tuple[tuple, str, object]] = []
+        book = TicketBook(session)
+        entries: list[Entry] = []
         campaigns = session.scalars(
             select(Campaign).where(Campaign.status == CampaignStatus.ACTIVE.value)
         ).all()
@@ -1094,50 +1112,143 @@ class Supervisor:
             # Measure the production reference by launching it, as one more
             # config the pipeline screens (and later verifies).
             self._ensure_relaunch_baseline(session, campaign)
-            waiting.append((campaign_key(session, campaign), "campaign", campaign))
+            ticket = book.take(
+                f"campaign:{campaign.id}", campaign_key(session, campaign),
+                label=f"campaign “{campaign.name}”", campaign_id=campaign.id,
+            )
+            entries.append(Entry(ticket, "campaign", campaign))
 
         for plugin in plugins.enabled():
             if plugin.queue_waiters is None:
                 continue
+            prefix = f"plugin:{plugin.name}:"
             try:
                 for waiter in plugin.queue_waiters(self, session):
-                    waiting.append((waiter_key(waiter), "plugin", waiter))
+                    ticket = book.take(
+                        f"{prefix}{waiter.ident}", waiter_key(waiter), label=waiter.label,
+                    )
+                    entries.append(Entry(ticket, "plugin", waiter))
             except Exception:
                 logger.exception("plugin %s: listing queue waiters failed", plugin.name)
+                book.keep(prefix)
         engine = self._sessions()
         for row in engine.waiting(session):
-            waiting.append((session_key(row), "session", row))
+            ticket = book.take(
+                f"session:{row.id}", session_key(row),
+                label=f"policy session #{row.id}", campaign_id=row.campaign_id,
+            )
+            entries.append(Entry(ticket, "session", row, needs_port=False))
 
-        queue = deque(sorted(waiting, key=lambda entry: entry[0]))
+        ordered = book.order(entries)
+        queue = deque(ordered)
         blocked: set[int] = set()
+        held_by: dict[int, Entry] = {}  # machine id -> the first waiter holding it
         while queue:
-            key, kind, item = queue.popleft()
+            entry = queue.popleft()
             busy: set[int] = set()
-            if kind == "plugin":
+            if entry.kind == "plugin":
                 # A plugin's waiter takes its turn like any other: admitted, it
                 # holds what it took (a reservation, say); not, it holds the
                 # machines it reported busy against everyone behind it.
                 try:
                     with session.begin_nested():
-                        admitted = item.try_admit(session, blocked, busy)
+                        admitted = entry.item.try_admit(session, blocked, busy)
                 except Exception:
-                    logger.exception("queue waiter %s failed", item.label)
+                    logger.exception("queue waiter %s failed", entry.item.label)
                     admitted = False
-                if not admitted:
-                    blocked |= busy
-                continue
-            if kind == "session":
+            elif entry.kind == "session":
                 # Reserved = the session holds its machine and cards; the
                 # pending step launches its container next tick.
-                if not engine.try_reserve(session, item, blocked, busy):
-                    blocked |= busy
-                continue
-            if self._start_one(session, item, blocked=blocked, busy=busy):
-                # Keep placing until the machines are full — but its next run
-                # waits behind everyone already waiting, not in front of them.
-                queue.append((key, kind, item))
+                admitted = engine.try_reserve(session, entry.item, blocked, busy)
             else:
-                blocked |= busy
+                admitted = self._start_one(session, entry.item, blocked=blocked, busy=busy)
+            if admitted:
+                book.served(entry)
+                if entry.kind == "campaign":
+                    # Keep placing until the machines are full — but its next
+                    # run waits behind everyone already waiting.
+                    queue.append(entry)
+                continue
+            held = set(busy)
+            if entry.needs_port:
+                held |= port_siblings(session, busy)
+            if not entry.served:
+                entry.busy |= busy
+                entry.held |= held
+            for machine_id in held:
+                held_by.setdefault(machine_id, entry)
+            blocked |= held
+
+        places = place_in_line(ordered)
+        for entry in ordered:
+            if entry.served:
+                continue
+            waiting_for, reason = self._why_queued(session, entry, held_by)
+            book.record(
+                entry, position=places.get(entry.ticket.id, 0),
+                waiting_for=waiting_for, reason=reason,
+            )
+        book.sweep()
+
+    def _why_queued(
+        self, session: Session, entry: Entry, held_by: dict[int, Entry]
+    ) -> tuple[str, str]:
+        """What an unserved waiter waits for, and why, as a person reads it:
+        the first machine it could use, and what holds it there — the
+        cluster's port, an earlier ticket, or the cards themselves."""
+        if not entry.busy:
+            return ("", "")  # no machine it may use; the campaign page says why
+        machines = sorted(
+            (m for m in (session.get(Machine, mid) for mid in entry.busy) if m is not None),
+            key=lambda m: m.id,
+        )
+        if not machines:
+            return ("", "")
+        campaign_id = (
+            entry.item.id if entry.kind == "campaign"
+            else getattr(entry.item, "campaign_id", None)
+        )
+        for machine in machines:
+            if entry.needs_port:
+                port = port_busy_reason(session, machine, campaign_id=campaign_id)
+                if port is not None:
+                    return (WaitingFor.NODE_PORT, port)
+        machine = machines[0]
+        ahead = held_by.get(machine.id)
+        if ahead is not None and ahead is not entry:
+            if machine.id not in ahead.busy:
+                # Held for its port: the earlier waiter needs the same cluster's
+                # port, on another of its machines.
+                return (WaitingFor.NODE_PORT, (
+                    f"behind {ahead.ticket.label}: the node port {machine.name} shares "
+                    "goes to it first"
+                ))
+            return (
+                WaitingFor.CARDS, f"behind {ahead.ticket.label}, which waits for {machine.name}",
+            )
+        why = self._occupancy_reason(session, entry, machine, campaign_id)
+        return (WaitingFor.CARDS, f"{machine.name}: {why}" if why else
+                f"no room on {machine.name} yet")
+
+    def _occupancy_reason(
+        self, session: Session, entry: Entry, machine: Machine, campaign_id: int | None
+    ) -> str | None:
+        if entry.kind != "campaign":
+            return None
+        campaign = entry.item
+        pending = session.scalars(
+            select(Candidate).where(
+                Candidate.campaign_id == campaign.id,
+                Candidate.status == CandidateStatus.VALID.value,
+            )
+        ).all()
+        if not pending:
+            return None
+        cards = min(config_cards(campaign, c.config) for c in pending)
+        return busy_reason(
+            session, machine, cards=cards, share=bool(campaign.share_machine),
+            campaign_id=campaign_id,
+        )
 
     def _sessions(self):
         if self._policy_engine is None:
@@ -1225,7 +1336,7 @@ class Supervisor:
             reserved_cards = sum(r.cards for r in held)
             # Free cards are no use while the cluster's one fixed NodePort is
             # held elsewhere: the run would only wait for it on these cards.
-            if port_busy_reason(session, machine):
+            if port_busy_reason(session, machine, campaign_id=campaign.id):
                 busy.add(machine.id)
                 continue
 
@@ -1536,6 +1647,16 @@ class Supervisor:
             for run in runs:
                 if run.kind in (RunKind.BASELINE.value, RunKind.EXTERNAL.value):
                     continue  # not ours to withdraw
+                if (
+                    run.status == RunStatus.PENDING.value
+                    and run.waiting_for == WaitingFor.NODE_PORT
+                    and run.kind != RunKind.POLICY_LAUNCH.value
+                ):
+                    # Placed, never launched, waiting for the cluster's port:
+                    # it holds the port and its cards for a campaign a human
+                    # has stopped. Nothing was started, so nothing is lost.
+                    self._release_to_queue(session, run)
+                    continue
                 try:
                     spec = self._spec_for(session, run)
                     driver = self._driver_for(spec.machine)
@@ -1777,14 +1898,17 @@ class Supervisor:
             machine = session.get(Machine, run.machine_id) if run.machine_id else None
             held = port_busy_reason(session, machine, exclude_run=run.id) if machine else None
             if held:
-                self._note_placement(session, run, held)
+                self._note_placement(session, run, held, WaitingFor.NODE_PORT)
                 return
             try:
                 handle, launch_commands = driver.launch_nodes(spec)
             except LaunchDeferred as exc:
-                # On its way (an image still pulling onto the machine): the run
-                # keeps its cards and says why; the next tick tries again.
-                self._note_placement(session, run, str(exc))
+                # On its way (an image still pulling onto the machine, the
+                # cluster's port still held): the run keeps its cards and says
+                # what it waits for; the next tick tries again.
+                self._note_placement(session, run, str(exc), exc.waiting_for)
+                if exc.waiting_for == WaitingFor.NODE_PORT and exc.holder_run:
+                    self._reclaim_orphan_port(session, run, driver, exc)
                 return
             except RuntimeError as exc:
                 # e.g. port already in use, docker run rejected — classify from
@@ -1797,6 +1921,9 @@ class Supervisor:
             run.launch_command = launch_commands[0] if launch_commands else ""
             self._record_node_launches(session, run, spec, launch_commands)
             run.endpoint_url = handle.endpoint_url
+            # Waited for the port or its image, it has them now: placed. One the
+            # cluster then holds for cards waits again, as that.
+            self._note_placement(session, run, "")
             self._transition(session, run, RunStatus.LAUNCHING)
             return
 
@@ -1839,7 +1966,9 @@ class Supervisor:
                     # before the status transition, so a run that has been
                     # waiting since 19:40 reads as waiting and not as a launch
                     # that has been LAUNCHING for three hours.
-                    self._note_placement(session, run, waiting)
+                    self._note_placement(
+                        session, run, waiting, WaitingFor.CARDS if waiting else "",
+                    )
                     if run.status == RunStatus.LAUNCHING.value:
                         self._transition(session, run, RunStatus.WAITING_READY)
                 # STARTING within budget → keep waiting
@@ -2266,26 +2395,66 @@ class Supervisor:
         elif target == RunStatus.SUCCEEDED:
             timing.record_finished(session, run, stage_of_run(run), _now())
 
-    def _note_placement(self, session: Session, run: Run, waiting: str) -> None:
-        """Keep `runs.waiting_since` true, and announce each edge once.
+    def _reclaim_orphan_port(
+        self, session: Session, run: Run, driver: DeploymentDriver, exc: LaunchDeferred
+    ) -> None:
+        """The cluster refused the port, and what holds it is a Service this
+        platform made for a run that is over and torn down: left behind (a
+        crash between the two deletes, a teardown that gave up). Nothing else
+        will ever release it, so it is released here, by name and only while
+        it carries that run's labels; the next tick claims the port. Anything
+        else — another namespace, a run still live or tearing down, a run this
+        database does not know — is waited for, not touched."""
+        holder = session.get(Run, exc.holder_run)
+        if holder is None or holder.id == run.id:
+            return
+        if holder.status not in {s.value for s in TERMINAL_RUN_STATES} or holder.teardown_pending:
+            return
+        try:
+            released = driver.release_orphan_port(exc.holder_service, holder.id)
+        except Exception:
+            logger.exception("releasing the port run %d left behind failed", holder.id)
+            return
+        if released:
+            logger.warning(
+                "released %s, left by finished run %d and holding the port run %d needs",
+                exc.holder_service, holder.id, run.id,
+            )
+            self._event(
+                session, "orphan_port_released", campaign_id=run.campaign_id, run_id=run.id,
+                payload={"service": exc.holder_service, "left_by_run": holder.id},
+            )
+
+    def _note_placement(
+        self, session: Session, run: Run, waiting: str, waiting_for: str = ""
+    ) -> None:
+        """Keep `runs.waiting_since`, what the run waits for and why true, and
+        announce each edge once.
 
         Only the transitions are events: a run queued overnight would otherwise
         write one row per tick for eight hours, and the interesting facts are
-        exactly two — the cluster started saying no, and it stopped.
+        few — the cluster started saying no, what it is waiting for changed (a
+        port, then cards), and it stopped.
         """
         if waiting:
-            if run.waiting_since is None:
-                run.waiting_since = _now()
+            if run.waiting_since is None or run.waiting_for != waiting_for:
+                if run.waiting_since is None:
+                    run.waiting_since = _now()
                 self._event(
                     session, "run_waiting_for_cluster",
                     campaign_id=run.campaign_id, run_id=run.id,
-                    payload={"reason": waiting[:2000]},
+                    payload={"reason": waiting[:2000], "waiting_for": waiting_for},
                 )
-                logger.info("run %d is queued for cluster capacity: %s", run.id, waiting)
+                logger.info("run %d is queued for %s: %s", run.id, waiting_for or "the cluster",
+                            waiting)
+            run.waiting_for = waiting_for
+            run.waiting_reason = waiting[:2000]
             return
         if run.waiting_since is not None:
             waited = _now() - _as_utc(run.waiting_since)
             run.waiting_since = None
+            run.waiting_for = ""
+            run.waiting_reason = ""
             # The run starts now that it has cards: its startup clocks (image
             # pull, model load) and its measured startup time count from here,
             # not from the hours it may have spent queued.
@@ -2386,12 +2555,15 @@ class Supervisor:
             logger.exception("teardown setup for run %d failed", run.id)
             run.teardown_pending = True  # cannot reach it; let the janitor retry
             return False
-        if handle is None:
-            return True  # nothing running under this run's name
         try:
-            driver.request_stop(handle)
-            if driver.is_gone(handle):
-                return True
+            if handle is None:
+                # Nothing running under this run's name; what can outlive it?
+                if driver.release_leftovers(spec):
+                    return True
+            else:
+                driver.request_stop(handle)
+                if driver.is_gone(handle) and driver.release_leftovers(spec):
+                    return True
         except Exception:
             logger.exception("graceful stop for run %d failed", run.id)
         run.teardown_pending = True

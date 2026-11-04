@@ -577,6 +577,8 @@ async def _waiting_reason(db: AsyncSession, run: Run) -> str:
     """What the cluster last said about a run it has not placed."""
     if run.waiting_since is None:
         return ""
+    if run.waiting_reason:
+        return run.waiting_reason
     payload = (
         await db.execute(
             select(Event.payload)

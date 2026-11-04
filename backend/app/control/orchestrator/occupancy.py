@@ -83,7 +83,7 @@ def busy_reason(
     """Why a run of `cards` per node cannot go on this machine right now, or
     None if it can. Only occupancy: whether the machine is usable at all
     (leased, cleared, the right hardware) is the caller's question."""
-    if (port := port_busy_reason(session, machine)) is not None:
+    if (port := port_busy_reason(session, machine, campaign_id=campaign_id)) is not None:
         return port
     live = [r for r in live_runs_on(session, machine) if r.campaign_id != campaign_id]
     dying = teardown_pending_on(session, machine)

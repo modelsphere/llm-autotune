@@ -51,11 +51,26 @@ def claim_of(session: Session, machine: Machine) -> NodePortClaim | None:
     if (machine.driver or "") != "k8s":
         return None
     row = session.get(Cluster, machine.cluster_id) if machine.cluster_id else None
-    settings = (
-        K8sClusterSettings.from_row(row, get_settings())
-        if row is not None
-        else K8sClusterSettings.from_settings(get_settings())
+    if row is None:
+        return _claim_from(K8sClusterSettings.from_settings(get_settings()))
+    # Asked for every machine on every pass of the queue: a kubeconfig is
+    # decrypted and parsed only when a column the answer reads has changed.
+    key = (
+        row.id, row.workload_kind, row.endpoint, row.node_host,
+        getattr(row, "service_nodeport", 0), getattr(row, "in_cluster", False),
+        row.context, row.kubeconfig_enc,
     )
+    if key not in _CLAIMS:
+        if len(_CLAIMS) > 256:
+            _CLAIMS.clear()
+        _CLAIMS[key] = _claim_from(K8sClusterSettings.from_row(row, get_settings()))
+    return _CLAIMS[key]
+
+
+_CLAIMS: dict[tuple, NodePortClaim | None] = {}
+
+
+def _claim_from(settings: K8sClusterSettings) -> NodePortClaim | None:
     port = int(settings.k8s_service_nodeport or 0)
     if not port:
         return None
@@ -91,34 +106,41 @@ def _api_server(settings: K8sClusterSettings) -> str:
 def port_holder(
     session: Session, machine: Machine, *, exclude_run: int | None = None
 ) -> Run | None:
-    """The launched run holding the fixed NodePort this machine's runs need,
-    on any machine of the same cluster, or None when the port is free.
+    """The run holding the fixed NodePort this machine's runs need, on any
+    machine of the same cluster, or None when the port is free.
 
-    A run holds it from launch until its teardown is confirmed. A pending run
-    does not hold it yet (two waiters must not block each other), and a
-    benchmark of an endpoint the platform did not launch never asks for it."""
+    The port is handed out with the cards: a run holds it from the moment it
+    is placed until its teardown is confirmed, launched or not. So the
+    scheduler, which asks with no `exclude_run`, never places a second run
+    for the port. A pending run asking for itself (`exclude_run`) waits only
+    for runs placed before it, which keeps runs placed outside the queue (a
+    policy's launches) in the order they were made rather than each blocking
+    the other. A benchmark of an endpoint the platform did not launch never
+    asks for it."""
     claim = claim_of(session, machine)
     if claim is None:
         return None
-    runs = session.scalars(
+    holding = or_(
+        Run.status.not_in([s.value for s in TERMINAL_RUN_STATES]),
+        Run.teardown_pending.is_(True),
+    )
+    query = (
         select(Run)
         .join(Machine, Machine.id == Run.machine_id)
         .where(
             Machine.driver == "k8s",
             Run.kind.not_in([RunKind.BASELINE.value, RunKind.EXTERNAL.value]),
-            or_(
-                Run.status.not_in(
-                    [s.value for s in TERMINAL_RUN_STATES] + [RunStatus.PENDING.value]
-                ),
-                Run.teardown_pending.is_(True),
-            ),
+            holding,
         )
         .order_by(Run.id)
-    ).all()
+    )
+    if exclude_run is not None:
+        query = query.where(
+            Run.id != exclude_run,
+            or_(Run.status != RunStatus.PENDING.value, Run.id < exclude_run),
+        )
     claims: dict[int, NodePortClaim | None] = {machine.id: claim}
-    for run in runs:
-        if run.id == exclude_run:
-            continue
+    for run in session.scalars(query).all():
         if run.machine_id not in claims:
             claims[run.machine_id] = claim_of(session, session.get(Machine, run.machine_id))
         theirs = claims[run.machine_id]
@@ -127,16 +149,69 @@ def port_holder(
     return None
 
 
-def port_busy_reason(
-    session: Session, machine: Machine, *, exclude_run: int | None = None
+def port_siblings(session: Session, machine_ids: set[int]) -> set[int]:
+    """Every machine whose runs take the same fixed NodePort as one of these:
+    the machines one waiter's hold on the port closes to everyone behind it."""
+    if not machine_ids:
+        return set()
+    k8s = session.scalars(select(Machine).where(Machine.driver == "k8s")).all()
+    claims = {m.id: claim_of(session, m) for m in k8s}
+    wanted = [claims[mid] for mid in machine_ids if claims.get(mid) is not None]
+    return {
+        mid for mid, claim in claims.items()
+        if claim is not None and any(claim.collides(w) for w in wanted)
+    }
+
+
+def _reserved_for(
+    session: Session, machine: Machine, campaign_id: int | None
 ) -> str | None:
-    """Why a run cannot launch on this machine for its cluster's fixed port,
-    or None when the port is free."""
-    holder = port_holder(session, machine, exclude_run=exclude_run)
-    if holder is None:
-        return None
+    """Who holds the port by an admission whose run is not placed yet: a
+    campaign admitted to a machine of the same cluster (occupancy.py), as
+    surely as that run would hold it once placed."""
+    from app.control.orchestrator.occupancy import reservations_on
+
     claim = claim_of(session, machine)
-    return (
-        f"node port {claim.port} is held by run {holder.id} (campaign {holder.campaign_id}); "
-        "the cluster lets one run be reached at a time"
-    )
+    for other in session.scalars(select(Machine).where(Machine.driver == "k8s")).all():
+        theirs = claim_of(session, other)
+        if theirs is None or not claim.collides(theirs):
+            continue
+        held = reservations_on(session, other, exclude_campaign=campaign_id)
+        if held:
+            return held[0].label
+    return None
+
+
+def port_busy_reason(
+    session: Session,
+    machine: Machine,
+    *,
+    exclude_run: int | None = None,
+    campaign_id: int | None = None,
+) -> str | None:
+    """Why a run cannot be placed on (or, with `exclude_run`, launch on) this
+    machine for its cluster's fixed port, or None when the port is free.
+    `campaign_id` is whose admission is asking: its own does not count."""
+    claim = claim_of(session, machine)
+    if claim is None:
+        return None
+    holder = port_holder(session, machine, exclude_run=exclude_run)
+    if holder is not None:
+        if holder.status == RunStatus.PENDING.value and exclude_run is not None:
+            return (
+                f"node port {claim.port} goes to run {holder.id} (campaign "
+                f"{holder.campaign_id}) first, placed before it; the cluster lets one run "
+                "be reached at a time"
+            )
+        return (
+            f"node port {claim.port} is held by run {holder.id} (campaign "
+            f"{holder.campaign_id}); the cluster lets one run be reached at a time"
+        )
+    if exclude_run is None:
+        label = _reserved_for(session, machine, campaign_id)
+        if label is not None:
+            return (
+                f"node port {claim.port} is held for {label}, admitted before it; the "
+                "cluster lets one run be reached at a time"
+            )
+    return None

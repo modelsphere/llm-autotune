@@ -467,6 +467,18 @@ export interface Campaign {
   /** Row-only lease findings about this campaign's pinned machines, computed at
    *  read time. Empty when every pinned machine is leased with enough runway. */
   machine_warnings: MachineWarning[]
+  /** Its place in the machine queue while it waits to place a run. */
+  queue?: QueueTicket | null
+}
+
+/** A campaign's ticket in the machine queue. Cards and a cluster's fixed
+ *  NodePort are handed out in ticket order. */
+export interface QueueTicket {
+  /** 1 = next for what it waits for. */
+  position: number
+  waiting_for: '' | 'cards' | 'node_port'
+  reason: string
+  since: string
 }
 
 /** A row-only finding about a machine a run is pinned to — no ssh, just the
@@ -532,8 +544,12 @@ export interface Run {
   started_at: string | null
   finished_at: string | null
   created_at: string
-  /** Set while the cluster has no room for the run's pod. */
+  /** Set while the run is queued. */
   waiting_since?: string | null
+  /** What it waits for: cards, the cluster's one fixed NodePort, or its image. */
+  waiting_for?: '' | 'cards' | 'node_port' | 'image'
+  /** What the cluster or the queue last said about it. */
+  waiting_reason?: string
   /** The k8s node its pod landed on, once it did. */
   node?: string
   /** Filled by the runs list (GET /runs), which spans every campaign. */

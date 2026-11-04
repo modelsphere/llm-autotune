@@ -6,6 +6,7 @@ from app.control.launch.base import (
     LaunchSpec,
     MachineInfo,
     NodeAssignment,
+    WaitingFor,
     merge_volumes,
 )
 from app.control.launch.k8s import K8sDriver
@@ -50,6 +51,7 @@ __all__ = [
     "MachineInfo",
     "NodeAssignment",
     "SshDockerDriver",
+    "WaitingFor",
     "get_driver",
     "merge_volumes",
 ]

@@ -20,7 +20,7 @@ from app.control import managed
 from app.control.baseline import resolve_baseline
 from app.control.launch import MachineInfo, get_driver
 from app.control.launch import preflight as pf
-from app.control.orchestrator import lifecycle, policy_lifecycle, timing
+from app.control.orchestrator import lifecycle, policy_lifecycle, queue_tickets, timing
 from app.control.orchestrator import schedule as sched
 from app.control.recipe.campaign import config_cards
 from app.control.search.parity import missing_flags
@@ -48,6 +48,7 @@ from app.db.models import (
     PolicySession,
     PolicySessionStatus,
     PolicyState,
+    QueueTicket,
     Result,
     Run,
     User,
@@ -71,6 +72,7 @@ from app.schemas.core import (
     LeaderboardEntry,
     MachineWarningOut,
     ManagedByOut,
+    QueueOut,
     RunOut,
     served_name_for,
 )
@@ -502,7 +504,29 @@ async def _campaign_out(session: AsyncSession, campaign: Campaign) -> CampaignOu
                 finish_by=lifecycle.as_utc(campaign.window_end),
             )
         ]
+        out.queue = await _queue_of(session, campaign)
     return out
+
+
+async def _queue_of(session: AsyncSession, campaign: Campaign) -> QueueOut | None:
+    """Its ticket in the machine queue, while a recent pass saw it waiting."""
+    cutoff = lifecycle.now() - queue_tickets.FRESH
+    tickets = (
+        await session.execute(
+            select(QueueTicket).where(QueueTicket.campaign_id == campaign.id)
+        )
+    ).scalars().all()
+    fresh = [
+        t for t in tickets
+        if t.position > 0 and (lifecycle.as_utc(t.seen_at) or cutoff) >= cutoff
+    ]
+    ticket = min(fresh, key=lambda t: t.position, default=None)
+    if ticket is None:
+        return None
+    return QueueOut(
+        position=ticket.position, waiting_for=ticket.waiting_for, reason=ticket.reason,
+        since=ticket.issued_at,
+    )
 
 
 @router.put("/{campaign_id}/status", response_model=CampaignOut)

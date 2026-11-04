@@ -399,6 +399,18 @@ class ManagedByOut(BaseModel):
     link: str = ""
 
 
+class QueueOut(BaseModel):
+    """A campaign's place in the machine queue while it waits to place a run."""
+
+    # 1 = next for what it waits for.
+    position: int
+    # "cards" or "node_port" (the cluster's one fixed NodePort); "" when unknown.
+    waiting_for: str = ""
+    reason: str = ""
+    # When it took its ticket: how long it has waited for this turn.
+    since: datetime
+
+
 class CampaignOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: int
@@ -468,6 +480,8 @@ class CampaignOut(BaseModel):
     # read time (never an ORM column). Empty when every pinned machine is leased
     # with enough runway.
     machine_warnings: list[MachineWarningOut] = Field(default_factory=list)
+    # Set while it waits in the machine queue for a run to be placed.
+    queue: QueueOut | None = None
     # What enabled plugins keep about this campaign, by plugin name; read at
     # read time from each plugin (never an ORM column).
     extensions: dict[str, dict[str, Any]] = Field(default_factory=dict)
@@ -523,9 +537,12 @@ class RunOut(BaseModel):
     started_at: datetime | None
     finished_at: datetime | None
     created_at: datetime
-    # Set while the cluster has no room for the run's pod; the run starts on
-    # its own once cards free up.
+    # Set while the run is queued; it starts on its own once what it waits for
+    # frees up: "cards", "node_port" (the cluster's one fixed NodePort) or
+    # "image", and what the cluster or the queue last said about it.
     waiting_since: datetime | None = None
+    waiting_for: str = ""
+    waiting_reason: str = ""
     # The k8s node the run's pod landed on, once it did.
     node: str = ""
     # The campaign's name and its owner's username. Filled by the runs list,
