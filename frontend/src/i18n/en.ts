@@ -250,6 +250,10 @@ export default {
     cards: '{n} card(s)',
     waitingCards: 'waiting for cards',
     waitingCardsHint: 'The cluster has no room for it yet; it starts on its own when cards free up. The run log has what the cluster said.',
+    waitingPort: 'waiting for the node port',
+    waitingPortHint: 'The cluster lets one run be reached at a time on its node port; this one starts on its own once the port is free.',
+    waitingImage: 'pulling the image',
+    waitingImageHint: 'Its image is still being pulled onto the machine; it starts on its own once the image is there.',
     endpoint: 'Endpoint',
     started: 'Started',
     took: 'Took',
@@ -335,6 +339,11 @@ export default {
     redlinesHeld: 'Redlines held',
     redlinesCrossed: 'Redlines crossed',
     fullConfig: 'Full config',
+    queue: {
+      cards: 'Queued — #{n} in line for cards',
+      port: 'Queued — #{n} in line for the cluster\'s node port',
+      since: 'queued {when}',
+    },
     fact: {
       model: 'Model',
       search: 'Search',

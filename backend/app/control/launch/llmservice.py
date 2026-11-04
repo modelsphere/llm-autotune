@@ -31,13 +31,16 @@ from typing import Any
 
 import yaml
 
-from app.control.launch.base import DeploymentHandle, DeploymentState, LaunchDeferred, LaunchSpec
+from app.control.launch.base import (
+    DeploymentHandle,
+    DeploymentState,
+    LaunchSpec,
+)
 from app.control.launch.k8s import (
     RUN_LABEL,
     K8sDriver,
     _node_selector,
     _tolerations,
-    node_port_taken,
 )
 from app.control.launch.k8s_api import LLMSVC_RESOURCE, K8sError, port_taken
 from app.control.recipe import Recipe
@@ -167,12 +170,22 @@ class LLMServiceDriver(K8sDriver):
 
     def launch(self, spec: LaunchSpec) -> tuple[DeploymentHandle, str]:
         recipe, obj = self.manifest(spec)
-        self.api.apply(obj)
-        if self._fixed_port_mode():
-            # Claimed at once, owned by the LLMService so it goes with the run
-            # whichever way the run ends: refused, the engine is withdrawn and
-            # the run waits, instead of finding out once its cards are taken.
+        fixed = self._fixed_port_mode()
+        if fixed:
+            # The port first: refused, nothing else is applied and the run
+            # waits. Applying the engine first would create and withdraw an
+            # LLMService on every tick of the wait.
             self._claim_port(spec, service_port(recipe))
+        try:
+            self.api.apply(obj)
+            if fixed:
+                # Owned by the LLMService from here, so it goes with the run
+                # whichever way the run ends.
+                self._own_port(spec, service_port(recipe))
+        except BaseException:
+            if fixed:
+                self.api.delete("service", fixed_port_service(spec.container_name))
+            raise
         handle = DeploymentHandle(
             driver=self.name,
             container_name=spec.container_name,
@@ -184,13 +197,14 @@ class LLMServiceDriver(K8sDriver):
         ) + "EOF"
 
     def attach(self, spec: LaunchSpec) -> DeploymentHandle | None:
-        if self.api.get(self._resource, spec.container_name) is None:
+        obj = self.api.get(self._resource, spec.container_name)
+        if obj is None:
             return None
         return DeploymentHandle(
             driver=self.name,
             container_name=spec.container_name,
             machine=spec.machine,
-            endpoint_url=self._endpoint(spec, recipe_of(spec)),
+            endpoint_url=self._endpoint(spec, recipe_of(spec), obj),
         )
 
     def state(self, handle: DeploymentHandle) -> DeploymentState:
@@ -247,9 +261,27 @@ class LLMServiceDriver(K8sDriver):
         if self.api.get(self._resource, handle.container_name) is not None:
             return False
         try:
-            return not self.api.list("pods", self._run_selector(handle))
+            if self.api.list("pods", self._run_selector(handle)):
+                return False
         except Exception:
             return False  # unproven: the cards stay held
+        return self._port_released(handle.container_name)
+
+    def release_leftovers(self, spec: LaunchSpec) -> bool:
+        """The fixed-port Service, which k8s would collect with its LLMService
+        in its own time: deleted now, and gone before the port reads as free."""
+        if not self._fixed_port_mode():
+            return True
+        self.api.delete("service", fixed_port_service(spec.container_name))
+        return self._port_released(spec.container_name)
+
+    def _port_released(self, release: str) -> bool:
+        if not self.settings.k8s_service_nodeport:
+            return True
+        try:
+            return self.api.get("service", fixed_port_service(release)) is None
+        except Exception:
+            return False  # unproven: the port stays held
 
     def environment(self, handle: DeploymentHandle) -> dict[str, Any]:
         snapshot: dict[str, Any] = {}
@@ -327,7 +359,9 @@ class LLMServiceDriver(K8sDriver):
         chart = (spec.get("chart") or {}).get("name") or "sglang"
         return Recipe(engine=chart, chart={"name": chart}, values=catalog.get("values") or {})
 
-    def _endpoint(self, spec: LaunchSpec, recipe: Recipe) -> str:
+    def _endpoint(
+        self, spec: LaunchSpec, recipe: Recipe, owner: dict[str, Any] | None = None
+    ) -> str:
         name = service_name(recipe, spec.container_name)
         port = service_port(recipe)
         if (self.settings.k8s_endpoint or "dns") != "nodeport":
@@ -336,7 +370,7 @@ class LLMServiceDriver(K8sDriver):
         host = self.settings.k8s_node_host or self._first_node_ip()
         if svc is not None and self._fixed_port_mode():
             try:
-                node_port = self._fixed_port(spec, svc, port)
+                node_port = self._fixed_port(spec, svc, port, owner)
             except K8sError as exc:
                 # Not raised: attach() is how a teardown finds the run, and a
                 # port Service that will not update must not keep it running.
@@ -359,34 +393,58 @@ class LLMServiceDriver(K8sDriver):
 
     def _claim_port(self, spec: LaunchSpec, port: int) -> None:
         """Take the cluster's fixed NodePort on a Service that selects nothing
-        yet, owned by the run's LLMService. Held by anything else, in any
-        namespace, the engine is withdrawn and the launch deferred."""
-        owner = self.api.get(self._resource, spec.container_name) or {}
+        yet. Held by anything else, in any namespace, the launch is deferred
+        with nothing applied, naming the holder when it is in our namespace.
+        A claim this run already has (an attempt that stopped before its
+        engine was applied) is kept as it is."""
+        if self.api.get("service", fixed_port_service(spec.container_name)) is not None:
+            return
         try:
             self.api.apply(self._port_service(
                 spec, port, {RUN_LABEL: str(spec.run_id), _CLAIM_LABEL: "true"},
-                (owner.get("metadata") or {}).get("uid", ""),
             ))
         except K8sError as exc:
-            self.api.delete(self._resource, spec.container_name)
             if not port_taken(exc):
                 raise
-            raise LaunchDeferred(node_port_taken(self.settings)) from exc
+            raise self._port_refused() from exc
 
-    def _fixed_port(self, spec: LaunchSpec, front: dict[str, Any], port: int) -> int:
+    def _own_port(self, spec: LaunchSpec, port: int) -> None:
+        """Hand the claim to the LLMService just applied, keeping its address."""
+        owner = self.api.get(self._resource, spec.container_name) or {}
+        uid = (owner.get("metadata") or {}).get("uid", "")
+        current = self.api.get("service", fixed_port_service(spec.container_name))
+        if not uid or current is None:
+            return
+        selector = dict((current.get("spec") or {}).get("selector") or {})
+        self.api.apply(self._port_service(spec, port, selector, uid, current))
+
+    def _fixed_port(
+        self, spec: LaunchSpec, front: dict[str, Any], port: int,
+        owner: dict[str, Any] | None = None,
+    ) -> int | None:
         """The cluster's fixed NodePort, on a Service of AutoTune's own: the
         engine charts take no `nodePort`, so the one a firewall lets through
         cannot be asked of theirs. Claimed at launch, it is pointed here at
         what the chart's front door selects (the leader under lws, the routers
-        under pd) and handed to the LLMService, so it goes when the run does."""
+        under pd). None when the claim is gone.
+
+        Only ever repointed, never made: attach() runs on every tick of a
+        teardown too, and a claim made again here, after teardown deleted it
+        and while the LLMService waits on its finalizer, held the port after
+        the run was over."""
         node_port = int(self.settings.k8s_service_nodeport)
-        selector = dict((front.get("spec") or {}).get("selector") or {})
         current = self.api.get("service", fixed_port_service(spec.container_name))
-        if current is not None and (current.get("spec") or {}).get("selector") == selector:
+        if current is None:
+            return None
+        selector = dict((front.get("spec") or {}).get("selector") or {})
+        if (current.get("spec") or {}).get("selector") == selector:
             return node_port
-        owner = self.api.get(self._resource, spec.container_name) or {}
+        owner = owner if owner is not None else self.api.get(self._resource, spec.container_name)
+        meta = (owner or {}).get("metadata") or {}
+        if not meta or meta.get("deletionTimestamp"):
+            return node_port  # going: nothing to point at
         self.api.apply(self._port_service(
-            spec, port, selector, (owner.get("metadata") or {}).get("uid", ""), current,
+            spec, port, selector, meta.get("uid", ""), current,
         ))
         return node_port
 

@@ -117,6 +117,18 @@ const logSources = computed<LogSource[]>(() =>
   })),
 )
 
+// What a queued run waits for, as its tag reads; the tooltip adds what the
+// cluster or the queue last said.
+const WAITING = { cards: 'runs.waitingCards', node_port: 'runs.waitingPort', image: 'runs.waitingImage' }
+function waitingLabel(run: Run): string {
+  return t(WAITING[run.waiting_for || 'cards'] ?? 'runs.waitingCards')
+}
+function waitingHint(run: Run): string {
+  const hint = run.waiting_for === 'node_port' ? t('runs.waitingPortHint')
+    : run.waiting_for === 'image' ? t('runs.waitingImageHint') : t('runs.waitingCardsHint')
+  return run.waiting_reason ? `${hint} ${run.waiting_reason}` : hint
+}
+
 function metricCount(metrics: Record<string, unknown> | undefined): number {
   return Object.keys(metrics ?? {}).length
 }
@@ -149,9 +161,9 @@ defineExpose({ reload: load })
         <template #default="{ row }">
           <el-tag :type="runStatus(row.status).type" size="small">{{ runLabel(row.status) }}</el-tag>
           <el-tooltip v-if="row.waiting_since && isLive(row.status)"
-            :content="t('runs.waitingCardsHint')" placement="top">
+            :content="waitingHint(row)" placement="top">
             <el-tag size="small" type="warning" effect="plain" class="waiting">
-              {{ t('runs.waitingCards') }}</el-tag>
+              {{ waitingLabel(row) }}</el-tag>
           </el-tooltip>
         </template>
       </el-table-column>
@@ -201,9 +213,9 @@ defineExpose({ reload: load })
           <div v-else-if="selectedRun.gpu_indices?.length"><span class="muted">{{ t('runs.gpus') }}</span>
             <span class="mono">{{ selectedRun.gpu_indices.join(',') }}</span></div>
           <div v-if="selectedRun.waiting_since && isLive(selectedRun.status)">
-            <el-tag size="small" type="warning" effect="plain">{{ t('runs.waitingCards') }}</el-tag>
+            <el-tag size="small" type="warning" effect="plain">{{ waitingLabel(selectedRun) }}</el-tag>
             <span class="muted tiny"> {{ relativeTime(selectedRun.waiting_since) }} ·
-              {{ t('runs.waitingCardsHint') }}</span></div>
+              {{ waitingHint(selectedRun) }}</span></div>
           <div><span class="muted">{{ t('runs.started') }}</span>
             <span :title="exactTime(selectedRun.started_at)">
               {{ relativeTime(selectedRun.started_at) }}</span>

@@ -7,7 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **A place in line.** Everything waiting for a machine (campaigns, policy
+  sessions, plugins' waiters) keeps a ticket while it waits, so its place
+  cannot drift, and the campaign page shows it: *Queued — #2 in line for the
+  cluster's node port*, and why. A run that is placed but cannot start yet says
+  what it waits for (cards, the node port, its image) instead of always
+  *waiting for cards*. `GET /api/campaigns/{id}` has `queue`; a run has
+  `waiting_for` and `waiting_reason`.
+
 ### Fixed
+
+- **A cluster's fixed NodePort is handed out in order, with the GPUs.** A run
+  now holds the port from the moment it is placed, not from its launch, and a
+  waiter that cannot start yet holds the port against later ones as it holds
+  GPUs. Before, two runs could be placed for the one port, and runs waiting
+  for it retried every tick, whichever claimed it first going next. A run
+  waiting for the port no longer creates and withdraws its engine on every
+  try: the port is claimed first.
+- **A finished run no longer keeps the port.** Reattaching to a run being torn
+  down made its port Service again while its LLMService waited to be deleted,
+  and the teardown was confirmed without the Service being gone, so the next
+  run waited for a port nothing was using. The port Service is now only ever
+  repointed after launch, a run is torn down only once it is gone, and one
+  left behind by a crash is deleted when the next run needs the port. A paused
+  campaign gives back a run that was only waiting for the port.
 
 - **A run on a fixed NodePort reaches its ready state.** Pointing the run's
   port Service at the chart's front door kept the Service's cluster IP, and

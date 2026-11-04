@@ -267,10 +267,40 @@ class DeploymentHandle(BaseModel):
         return [self, *self.node_handles]
 
 
+class WaitingFor(StrEnum):
+    """What a queued run waits for: the resource it starts on once freed."""
+
+    CARDS = "cards"
+    # The cluster's one fixed NodePort (`service_nodeport`), held by another run
+    # or another Service.
+    NODE_PORT = "node_port"
+    # Its image, still pulling onto the machine.
+    IMAGE = "image"
+
+
 class LaunchDeferred(RuntimeError):
     """The launch cannot start yet, and is on its way: an image still pulling
-    onto the machine. The run stays pending and says why; the next tick tries
-    again. Anything that will not resolve by waiting is a plain RuntimeError."""
+    onto the machine, or the cluster's fixed NodePort still held. The run stays
+    pending and says why; the next tick tries again. Anything that will not
+    resolve by waiting is a plain RuntimeError.
+
+    `waiting_for` names the resource (a WaitingFor value), which is what the
+    run is shown as waiting for and what the queue orders it by."""
+
+    def __init__(
+        self,
+        message: str,
+        waiting_for: str = WaitingFor.IMAGE,
+        *,
+        holder_service: str = "",
+        holder_run: int | None = None,
+    ):
+        super().__init__(message)
+        self.waiting_for = waiting_for
+        # For the port: the Service holding it, when the driver could read it,
+        # and the AutoTune run it was made for, when it carries one's labels.
+        self.holder_service = holder_service
+        self.holder_run = holder_run
 
 
 class DeploymentDriver(ABC):
@@ -402,6 +432,20 @@ class DeploymentDriver(ABC):
         waits for before it frees the cards. Default: derived from state(),
         which every driver already reports GONE for a missing container."""
         return self.state(handle) == DeploymentState.GONE
+
+    def release_orphan_port(self, service: str, run_id: int) -> bool:
+        """Delete a Service this platform made for run `run_id` that still
+        holds the cluster's fixed port after the run is over, if it still
+        carries that run's labels. True when it is gone. Default: a substrate
+        without such Services has nothing to release."""
+        return False
+
+    def release_leftovers(self, spec: LaunchSpec) -> bool:
+        """Once a run's container is gone (attach() finds nothing): remove what
+        can outlive it and hold something the next run needs, and say whether
+        it is gone too. The janitor confirms a teardown only on True. Default:
+        nothing outlives a container."""
+        return True
 
     def gpus_in_use(self, machine: MachineInfo, indices: list[int]) -> list[int]:
         """Which of `indices` are physically busy right now, read from the

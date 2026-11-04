@@ -56,6 +56,7 @@ from app.control.launch.base import (
     LaunchSpec,
     MachineInfo,
     SmokeSteps,
+    WaitingFor,
     WorkloadSpec,
     WorkloadState,
     merge_volumes,
@@ -466,11 +467,16 @@ def _render_deployment(spec: LaunchSpec, settings: Settings) -> dict:
     }
 
 
-def node_port_taken(settings: K8sClusterSettings | Settings) -> str:
-    """Why a run waits for its cluster's fixed NodePort."""
+def node_port_taken(settings: K8sClusterSettings | Settings, holder: str = "") -> str:
+    """Why a run waits for its cluster's fixed NodePort, naming the Service
+    that holds it when that is known."""
+    by = (
+        f"Service {settings.k8s_namespace}/{holder}" if holder
+        else "a Service outside AutoTune's runs"
+    )
     return (
         f"node port {settings.k8s_service_nodeport} on cluster "
-        f"{getattr(settings, 'cluster_name', 'default')} is held by another Service; "
+        f"{getattr(settings, 'cluster_name', 'default')} is held by {by}; "
         "the run launches once it is free"
     )
 
@@ -955,7 +961,7 @@ class K8sDriver(DeploymentDriver):
                 driver=self.name, container_name=spec.container_name, machine=spec.machine,
                 endpoint_url="",
             ))
-            raise LaunchDeferred(node_port_taken(self.settings)) from exc
+            raise self._port_refused() from exc
         handle = DeploymentHandle(
             driver=self.name,
             container_name=spec.container_name,
@@ -1059,6 +1065,52 @@ class K8sDriver(DeploymentDriver):
             # The Service shares the run's name; delete it too so a pool is not
             # slowly filled with orphan Services.
             self.api.delete("service", handle.container_name)
+
+    def _port_refused(self) -> LaunchDeferred:
+        """The deferral for a launch refused the cluster's fixed NodePort,
+        naming the Service that holds it when it is in our namespace, and the
+        AutoTune run it was made for when it carries one's labels."""
+        holder = self._port_holder()
+        name = str(((holder or {}).get("metadata") or {}).get("name") or "")
+        labels = ((holder or {}).get("metadata") or {}).get("labels") or {}
+        run = labels.get(RUN_LABEL) if labels.get(MANAGED_LABEL) == "true" else None
+        return LaunchDeferred(
+            node_port_taken(self.settings, name), WaitingFor.NODE_PORT,
+            holder_service=name,
+            holder_run=int(run) if run and str(run).isdigit() else None,
+        )
+
+    def _port_holder(self) -> dict | None:
+        """The Service in our namespace on the fixed NodePort, None when none
+        is (one in another namespace holds it) or the list cannot be read."""
+        node_port = int(self.settings.k8s_service_nodeport or 0)
+        try:
+            services = self.api.list("service")
+        except Exception:
+            return None
+        for svc in services:
+            ports = (svc.get("spec") or {}).get("ports") or []
+            if any(p.get("nodePort") == node_port for p in ports):
+                return svc
+        return None
+
+    def release_orphan_port(self, service: str, run_id: int) -> bool:
+        svc = self.api.get("service", service)
+        if svc is None:
+            return True
+        labels = (svc.get("metadata") or {}).get("labels") or {}
+        if labels.get(MANAGED_LABEL) != "true" or labels.get(RUN_LABEL) != str(run_id):
+            return False
+        self.api.delete("service", service)
+        return self.api.get("service", service) is None
+
+    def release_leftovers(self, spec: LaunchSpec) -> bool:
+        """The run's Service on the cluster's fixed NodePort: deleted with the
+        Deployment, but if that failed it would hold the port after the run."""
+        if not (self._mode == "deployment" and self.settings.k8s_service_nodeport):
+            return True
+        self.api.delete("service", spec.container_name)
+        return self.api.get("service", spec.container_name) is None
 
     def attach(self, spec: LaunchSpec) -> DeploymentHandle | None:
         if self.api.get(self._resource, spec.container_name) is None:

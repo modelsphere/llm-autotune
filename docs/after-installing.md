@@ -182,11 +182,16 @@ same node port.
 
 Use `0` for automatic port allocation when running concurrently. A fixed
 NodePort is shared cluster-wide and can belong to only one Service, so on a
-cluster with a fixed port one run at a time is reachable: the platform holds
-the next run until the previous one's Service is gone, as it would for cards.
+cluster with a fixed port one run at a time is reachable. The port is handed
+out like GPUs, in the order campaigns queued: a run holds it from the moment
+it is placed until its Service is confirmed gone, and the next waits in line.
 That holds across clusters registered here that are one cluster underneath
 (the same API server, or the same public host). A port held by something
-outside the platform holds the run too, until it is free. Fixed ports
+outside the platform holds the run too, until it is free; the run names the
+Service holding it when it is in the run namespace. A port Service the
+platform made for a run that has ended (left behind by a crash) is deleted
+when the next run needs the port; it is recognised by the platform's labels
+for that run, and nothing else is touched. Fixed ports
 must be in the cluster's configured range (normally `30000–32767`). Public host
 and fixed port settings here do not override an Operator's endpoint in
 **custom** mode. Worker processes adopt edits within the settings cache TTL

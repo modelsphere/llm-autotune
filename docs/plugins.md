@@ -155,7 +155,11 @@ run per turn: campaigns with a run ready, policy sessions without a machine,
 and whatever plugins add. A campaign that places a run goes to the back, so
 two campaigns on one machine alternate. A waiter that cannot fit a machine it
 could use holds that machine for the rest of the pass, so a wide request is
-not starved by a stream of narrow ones.
+not starved by a stream of narrow ones. On a cluster with a fixed NodePort it
+holds every machine sharing that port too, so the port also goes in order.
+Each waiter keeps a ticket while it waits, issued in `arrival` order the first
+time the queue sees it and given up once it is admitted; a waiter's `ident`
+must stay the same across passes for it to keep its place.
 
 A plugin joins the queue with `queue_waiters`. Each `QueueWaiter` has an
 `arrival` time and a `try_admit(session, blocked, busy)`:
@@ -168,7 +172,8 @@ A waiter that admits a campaign to a machine usually reports that machine
 through `reservations` until the campaign's first run is placed. Placement,
 policy sessions and every other waiter count a reservation as taken.
 `busy_reason(session, machine, cards=, share=)` answers "why can't a run of
-this width go here right now" from the same accounting.
+this width go here right now" from the same accounting, the fixed NodePort
+included: a reservation on a machine of the same cluster holds the port.
 
 ## Runs in the agent API
 

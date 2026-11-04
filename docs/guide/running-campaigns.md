@@ -162,6 +162,27 @@ measurements at the end.
 
 ![The Activity log of a campaign that was stopped](images/campaign-activity.png)
 
+## Waiting in line
+
+Campaigns, policy sessions and plugins that want a machine wait in one line,
+first come, first served. Each has a ticket while it waits, and keeps it until
+it places a run; a campaign with more runs to place then queues again at the
+back, so campaigns on one machine take turns.
+
+- **What is handed out in order:** a machine's GPUs, and on a cluster with a
+  fixed NodePort, that port (one run at a time can be reached on it). A
+  waiter that cannot start yet holds what it waits for against everyone behind
+  it, so a run needing 8 GPUs is not passed forever by runs needing 2, and the
+  port is not taken by a later campaign on another machine of the same
+  cluster.
+- **Where it shows:** an active campaign with nothing running shows its place,
+  for example *Queued — #2 in line for the cluster's node port*, and why
+  (*behind campaign "qwen-tp2", which waits for h100-01*). A run that has been
+  placed but cannot start yet is tagged with what it waits for: *waiting for
+  cards*, *waiting for the node port* or *pulling the image*.
+- **A paused campaign** gives back a placed run that was only waiting for the
+  node port, and its config runs again on resume.
+
 ## Copying a campaign
 
 **⋯ ▸ Copy to a new campaign** opens New campaign with this one's definition
