@@ -337,10 +337,12 @@ async def test_a_new_model_is_checked_then_added_in_one_commit(stack, monkeypatc
     assert dry["ok"] and dry["dry_run"], dry
     assert [w["action"] for w in dry["writes"]] == ["add_model"]
     assert all(c[2].get("dryRun") == "true" for c in calls if c[0] == "POST")
-    # No report goes up (the server takes none), so no tuning entry either.
+    # No report goes up (the server takes none): the result is recorded without one.
     exported = dry["export"]
     assert [f["kind"] for f in exported["files"]] == ["variant", "variant", "metadata"]
     assert exported["variants"][1]["tuning"] == "no_report"
+    meta = yaml.safe_load(next(f["text"] for f in exported["files"] if f["kind"] == "metadata"))
+    assert meta["tuning"][0]["uplift"] == 20.0 and "report" not in meta["tuning"][0]
 
     calls.clear()
     done = (await http.post("/api/catalog-export/publish",
@@ -349,6 +351,31 @@ async def test_a_new_model_is_checked_then_added_in_one_commit(stack, monkeypatc
     posts = [c for c in calls if c[0] == "POST"]
     assert [p[2] for p in posts] == [{"dryRun": "true"}, {}], "every write is dry-run first"
     assert posts[1][3]["x-commit-message"] == "qwen3.5: tuned  H800", "ASCII in a header"
+
+
+async def test_an_export_records_who_made_each_variant_and_how(stack, monkeypatch):
+    """Production is the recipe as people wrote it; the tuned config is the
+    campaign's: its owner, its page, and the policy that found it."""
+    http, _, factory = stack
+    await _seed(factory)
+    async with factory() as s:
+        s.add(Policy(id=3, owner_id=1, name="llm-agent", image="registry.example.com/agent:pd-1",
+                     version="1.7"))
+        campaign = await s.get(Campaign, 9)
+        campaign.owner_id, campaign.policy_id = 2, 3
+        (await s.get(Candidate, 101)).config = {}
+        await s.commit()
+    monkeypatch.setattr(get_settings(), "public_ui_url", "http://autotune.example/")
+    preview = (await http.post("/api/catalog-export/preview",
+                               json={"variants": PAIR, "hf": HF, "use_catalog": False})).json()
+    meta = yaml.safe_load(next(f["text"] for f in preview["files"] if f["kind"] == "metadata"))
+    base, tuned = (f"{v['id']}@{v['version']}" for v in preview["variants"])
+    assert meta["origins"] == [
+        {"variant": base, "tool": "manual"},
+        {"variant": tuned, "tool": "autotune", "by": "alice",
+         "url": "http://autotune.example/campaigns/9", "policy": "llm-agent@1.7", "from": base},
+    ]
+    assert meta["tuning"][0]["metric"] == "request_output_tps"
 
 
 async def test_an_existing_model_gets_variant_puts_then_its_metadata(stack, monkeypatch):

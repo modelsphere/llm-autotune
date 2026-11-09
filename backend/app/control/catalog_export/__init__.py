@@ -161,6 +161,10 @@ class VariantSource:
     evidence: dict[str, Any] = field(default_factory=dict)
     # {"kind": "campaign_run", "campaign_id", "run_id", ...}
     origin: dict[str, Any] = field(default_factory=dict)
+    # Where the config came from, for metadata.yaml's origins: "tool" (manual |
+    # baseline-hub | autotune), and "by", "url", "policy" when known. Empty:
+    # not recorded.
+    made: dict[str, str] = field(default_factory=dict)
     id: str = ""  # explicit variant id; derived when empty
     description: str = ""  # explicit; derived when empty
     gpu_product: list[str] = field(default_factory=list)
@@ -243,8 +247,9 @@ class ExportedVariant:
     document: dict[str, Any]
     # Each env var and mount the run had, and what the export did with it.
     inputs: list[Input] = field(default_factory=list)
-    # A tuned variant's result in metadata.yaml: recorded, no_report (no saved
-    # report on these runs), no_baseline; "" for any other variant.
+    # A tuned variant's result in metadata.yaml: recorded, no_report (recorded,
+    # without a report to link: none was saved on these runs), no_baseline (not
+    # recorded); "" for any other variant.
     tuning: str = ""
     uplift: float | None = None
     # The card type the run measured, and the gpuProduct names written ([]
@@ -1180,6 +1185,12 @@ def _metadata(
     if tuning:
         recorded = [t for t in meta.get("tuning") or [] if t not in tuning]
         meta["tuning"] = recorded + tuning
+    made = _origins(sources, exported)
+    if made:
+        # One origin per variant version: this export's replaces a recorded one.
+        ours = {o["variant"] for o in made}
+        kept = [o for o in meta.get("origins") or [] if o.get("variant") not in ours]
+        meta["origins"] = kept + made
     named = re.compile(r"(^|-)optimi[sz]ed(-|$)")
     covered = {str(t.get("optimized", "")).split("@")[0] for t in meta.get("tuning") or []}
 
@@ -1226,6 +1237,7 @@ def _metadata(
         "tags",
         "deprecated",
         "defaultVariant",
+        "origins",
         "tuning",
         "source",
     )
@@ -1241,10 +1253,10 @@ def _tuning(
     warnings: list[str],
 ) -> list[dict[str, Any]]:
     """One entry per optimized variant: what it gained over the baseline
-    exported with it, on the benchmark and on each workload, and the report.
-    Without a baseline or a report there is no entry, and the variant says why
-    (ExportedVariant.tuning): the catalog's own check asks for one before the
-    pull request passes."""
+    exported with it, on the benchmark and on each workload, the measure that
+    is of, and the report when one was saved. Without a baseline there is no
+    entry, and the variant says why (ExportedVariant.tuning): the catalog's own
+    check asks for one before the pull request passes."""
     pairs = list(zip(exported, sources, strict=True))
     base = next(((v, s) for v, s in pairs if v.role == "baseline"), None)
     out = []
@@ -1256,16 +1268,16 @@ def _tuning(
             continue
         gain = gain_pct(src, base[1])
         v.uplift = round_pct(gain) if gain is not None else None
-        if not opts.report_file:
-            v.tuning = "no_report"
-            continue
-        v.tuning = "recorded"
+        v.tuning = "recorded" if opts.report_file else "no_report"
         entry: dict[str, Any] = {
             "baseline": f"{base[0].id}@{base[0].version}",
             "optimized": f"{v.id}@{v.version}",
         }
         if v.uplift is not None:
             entry["uplift"] = v.uplift
+            metric = str((src.evidence or {}).get("metric") or "")
+            if CATALOG_METRIC.fullmatch(metric):
+                entry["metric"] = metric
         workloads: list[dict[str, Any]] = []
         for sc in (src.evidence or {}).get("scenarios") or []:
             label = str(sc.get("label") or sc.get("key") or "")[:64]
@@ -1273,7 +1285,39 @@ def _tuning(
                 workloads.append({"name": label, "uplift": round_pct(float(sc["pct"]))})
         if workloads:
             entry["workloads"] = workloads
-        entry["report"] = opts.report_file
+        if opts.report_file:
+            entry["report"] = opts.report_file
+        out.append(entry)
+    return out
+
+
+# The measures a catalog tuning entry may name as its metric: those an uplift
+# reads naturally for (model-catalog's metadata.v2 schema, $defs.metric).
+CATALOG_METRIC = re.compile(
+    r"(?:(?:output|input|uncached_input|cached_input|total)_tpm(?:_per_gpu)?|request_rate"
+    r"|(?:request_output_tps|request_prefill_tps|ttft_ms|itl_ms|tpot_ms)(?:@(?:mean|p50|p90|p99))?)"
+)
+
+
+def _origins(sources: list[VariantSource], exported: list[ExportedVariant]) -> list[dict[str, Any]]:
+    """metadata.yaml's origins: where each exported variant version came from,
+    when the source says (VariantSource.made). A tuned one names the baseline
+    exported with it as what it was made from."""
+    pairs = list(zip(exported, sources, strict=True))
+    base = next((v for v, _ in pairs if v.role == "baseline"), None)
+    out = []
+    for v, src in pairs:
+        made = src.made or {}
+        if made.get("tool") not in ("manual", "baseline-hub", "autotune"):
+            continue
+        entry: dict[str, Any] = {"variant": f"{v.id}@{v.version}", "tool": made["tool"]}
+        for key in ("by", "url"):
+            if made.get(key):
+                entry[key] = str(made[key])[:64] if key == "by" else str(made[key])
+        if made["tool"] == "autotune" and made.get("policy"):
+            entry["policy"] = made["policy"]
+        if v.role == "optimized" and base is not None and base is not v:
+            entry["from"] = f"{base.id}@{base.version}"
         out.append(entry)
     return out
 

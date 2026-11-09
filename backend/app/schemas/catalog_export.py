@@ -88,7 +88,8 @@ class CatalogVariantOut(BaseModel):
     status: str  # new | updated | unchanged
     path: str
     inputs: list[CatalogInputOut] = Field(default_factory=list)
-    # A tuned variant's result: recorded | no_report | no_baseline; "" otherwise.
+    # A tuned variant's result: recorded | no_report (recorded, no report to link) |
+    # no_baseline (not recorded); "" otherwise.
     tuning: str = ""
     uplift: float | None = None
     # The card type the run measured, and the gpuProduct names written ([]
