@@ -71,7 +71,11 @@ function base(lang: Lang): Option {
 
 export function summaryChart(doc: Comparison, lang: Lang, labels: Map<number, string>,
   names: ScenarioLabels = {}): Option {
-  const scenarios = doc.baseline.results.scenarios
+  const allScenarios = doc.baseline.results.scenarios
+  if (allScenarios.length && allScenarios.every((s) => s.kind === 'bfcl')) {
+    return bfclChart(doc, lang, labels, allScenarios[0].key)
+  }
+  const scenarios = allScenarios.filter((s) => s.kind !== 'bfcl')
   const runs = runsOf(doc)
   const hardware = ` (${hardwareText(doc)})`
   return {
@@ -333,5 +337,58 @@ export function mountChart(
       chart.dispose()
     },
     update: () => chart.setOption(build(width), true),
+  }
+}
+
+export function bfclChart(doc: Comparison, lang: Lang, labels: Map<number, string>, key: string): Option {
+  const runs = runsOf(doc)
+  const params = doc.benchmark.modules.find((m) => m.key === key)?.params ?? {}
+  if (runs.some((r) => (scenarioOf(r, key)?.levels.length ?? 0) > 0)) {
+    return {
+      ...base(lang),
+      title: { text: 'BFCL V4', subtext: String(params.task_set ?? key), left: 'center' },
+      tooltip: { trigger: 'axis', confine: true },
+      legend: { top: 45 },
+      grid: [{ left: '9%', right: '55%', top: 100, bottom: 60 },
+        { left: '61%', right: '5%', top: 100, bottom: 60 }],
+      xAxis: [0, 1].map((i) => ({ type: 'value', name: tr(lang, 'bfclConcurrency'), gridIndex: i, minInterval: 1 })),
+      yAxis: [{ type: 'value', name: 'TPM', gridIndex: 0 },
+        { type: 'value', name: tr(lang, 'accuracy'), min: 0, max: 100, gridIndex: 1 }],
+      series: runs.flatMap((r, i) => ['total_tpm', 'accuracy'].map((metric, axis) => ({
+        type: 'line', name: labels.get(r.run_id) ?? r.label,
+        xAxisIndex: axis, yAxisIndex: axis, connectNulls: false,
+        itemStyle: { color: PALETTE[i % PALETTE.length] },
+        data: (scenarioOf(r, key)?.levels ?? []).map((lv) => [lv.concurrency,
+          lv.metrics.valid === 0 || typeof lv.metrics[metric] !== 'number' ? null
+            : Number(lv.metrics[metric]) * (axis === 1 ? 100 : 1)]),
+      }))),
+    }
+  }
+  const data = (metric: string, scale = 1) => runs.map((r, i) => {
+    const raw = scenarioOf(r, key)?.metrics[metric]
+    return { value: typeof raw === 'number' ? raw * scale : null,
+      itemStyle: { color: PALETTE[i % PALETTE.length] } }
+  })
+  const names = runs.map((r) => labels.get(r.run_id) ?? r.label)
+  return {
+    ...base(lang),
+    title: [
+      { text: 'BFCL V4', subtext: String(params.task_set ?? key), left: 'center', top: 0 },
+      { text: tr(lang, 'accuracy'), left: '22%', top: 54, textStyle: { fontSize: 13 } },
+      { text: tr(lang, 'bfclPassed'), left: '65%', top: 54, textStyle: { fontSize: 13 } },
+    ],
+    tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' }, confine: true },
+    grid: [{ left: '8%', right: '56%', top: 100, bottom: 58 },
+      { left: '60%', right: '5%', top: 100, bottom: 58 }],
+    xAxis: [{ type: 'category', data: names, gridIndex: 0 },
+      { type: 'category', data: names, gridIndex: 1 }],
+    yAxis: [{ type: 'value', min: 0, max: 100, name: '%', gridIndex: 0 },
+      { type: 'value', min: 0, name: 'cases/h', gridIndex: 1 }],
+    series: [
+      { type: 'bar', name: tr(lang, 'accuracy'), xAxisIndex: 0, yAxisIndex: 0,
+        data: data('accuracy', 100), barMaxWidth: 56 },
+      { type: 'bar', name: tr(lang, 'bfclPassed'), xAxisIndex: 1, yAxisIndex: 1,
+        data: data('passed_cases_per_hour'), barMaxWidth: 56 },
+    ],
   }
 }

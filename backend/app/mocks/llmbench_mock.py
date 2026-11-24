@@ -174,7 +174,10 @@ async def update_benchmark(benchmark_id: int, request: Request):
 
 @app.get("/modules/{name}")
 def module_descriptor(name: str):
-    configs = {"replay": REPLAY_CONFIGS, "perf_guidellm_sweep": SWEEP_CONFIGS}.get(name)
+    from app.evaluation.benchmark_spec import BFCLSpec, bfcl_module
+
+    configs = {"replay": REPLAY_CONFIGS, "perf_guidellm_sweep": SWEEP_CONFIGS,
+               "bfcl_v4": bfcl_module(BFCLSpec())["metric_configs"]}.get(name)
     if configs is None:
         raise HTTPException(404, "Module not found")
     return {"name": name, "default_params": {}, "default_metric_configs": configs}
@@ -357,6 +360,32 @@ def _replay_metrics(seed: int, cards: int) -> dict[str, Any]:
     }
 
 
+def _bfcl_metrics(seed: int, params: dict) -> dict[str, Any]:
+    task_set = params.get("task_set", "bfcl-v4-tool-use-v1")
+    categories = (["multi_turn_long_context"] if "long-context" in task_set else
+                  ["simple_python", "multi_turn_base"] if "smoke" in task_set else
+                  ["simple_python", "multiple", "parallel", "irrelevance", "multi_turn_base"])
+    n = params.get("cases_per_category", 1)
+    count = n * len(categories)
+    passed = int(count * (0.7 + (seed % 20) / 100))
+    accuracy = passed / count
+    wall = 60.0
+    return {
+        "accuracy": accuracy, **{f"accuracy_{c}": accuracy for c in categories},
+        "case_count": count, **{f"case_count_{c}": n for c in categories},
+        "passed_cases_per_hour": passed * 3600 / wall,
+        "generation_wall_seconds": wall, "grading_wall_seconds": 2.0,
+        "ttft_p50_ms": 120.0, "ttft_p90_ms": 250.0, "ttft_p99_ms": 400.0,
+        "request_e2e_p90_ms": 1500.0, "input_tpm": 6000.0, "output_tpm": 1200.0,
+        "total_tpm": 7200.0, "cache_hit_rate": 0.25, "ttft_coverage": 1.0,
+        "input_usage_coverage": 1.0, "output_usage_coverage": 1.0,
+        "cache_usage_coverage": 1.0, "active_cases_peak": params.get("concurrency", 2),
+        "active_http_peak": params.get("concurrency", 2), "request_error_count": 0,
+        "retry_count": 0, "infra_error_count": 0, "http_attempt_count": count * 2,
+        "successful_request_rps": count * 2 / wall,
+    }
+
+
 def _runs(submission: dict[str, Any], not_passed: bool) -> list[dict[str, Any]]:
     seed = int(hashlib.sha256(str(submission["id"]).encode()).hexdigest()[:8], 16)
     cards = _cards(submission)
@@ -368,6 +397,9 @@ def _runs(submission: dict[str, Any], not_passed: bool) -> list[dict[str, Any]]:
             metrics = _replay_metrics(seed, cards)
             params = {**mod["params_json"], "dataset_resolved": {
                 "build_id": _current_build["build_id"], "sha256": _current_build["sha256"]}}
+        elif mod["module_name"] == "bfcl_v4":
+            params = dict(mod["params_json"])
+            metrics = _bfcl_metrics(seed, params)
         else:
             metrics = _sweep_metrics(seed, cards)
             params = dict(mod["params_json"])

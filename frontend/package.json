@@ -8,7 +8,8 @@
     "build": "vite build",
     "preview": "vite preview",
     "typecheck": "vue-tsc --noEmit",
-    "build:report": "vite build -c vite.report.config.ts"
+    "build:report": "vite build -c vite.report.config.ts",
+    "test:bfcl": "node --test tests/bfcl.test.mjs"
   },
   "dependencies": {
     "@element-plus/icons-vue": "^2.3.2",

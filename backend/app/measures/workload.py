@@ -15,6 +15,12 @@ from app.measures.adapters import FAMILIES, family_of
 
 # Per family: the params that decide what the numbers describe.
 _PARAMS: dict[str, tuple[str, ...]] = {
+    "bfcl_v4": (
+        "task_set", "cases_per_category", "concurrency", "concurrency_grid", "max_seconds",
+        "max_total_seconds",
+        "request_timeout_seconds", "request_retries", "probe_endpoint", "required_metrics",
+        "min_ttft_coverage", "min_usage_coverage", "min_cache_usage_coverage",
+    ),
     "perf_guidellm_sweep": (
         "search_mode", "concurrencies", "input_tokens", "output_tokens", "max_seconds",
         "requests_per_concurrency", "slo_min_request_output_tps", "slo_max_ttft_ms",
@@ -28,6 +34,12 @@ _PARAMS: dict[str, tuple[str, ...]] = {
 }
 
 _SAYS: dict[str, str] = {
+    "bfcl_v4": (
+        "Frozen official BFCL subset with native streamed tool calls. Concurrency counts "
+        "active cases, not HTTP calls. Accuracy is official case correctness; "
+        "passed cases/hour and token rates use generation time, excluding grading. "
+        "Compare identical task sets, case counts, concurrency and retry policies."
+    ),
     "perf_guidellm_sweep": (
         "Synthetic prompts at several concurrency levels. Its measures describe the "
         "level with the highest total throughput that met the sweep's SLO "

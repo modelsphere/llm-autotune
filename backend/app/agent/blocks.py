@@ -26,8 +26,8 @@ from dataclasses import dataclass, field
 from app.schemas.agent import ComparisonDocument, ReportBlock
 
 BLOCK_KINDS = ("chart", "table", "command")
-CHART_TYPES = ("summary", "sweep", "agentic")
-TABLE_TYPES = ("setup", "slo", "summary", "quality", "diff", "scenarios")
+CHART_TYPES = ("summary", "sweep", "agentic", "bfcl")
+TABLE_TYPES = ("setup", "slo", "summary", "quality", "diff", "scenarios", "bfcl")
 
 # A caption the agent wrote itself ("**Figure 2. …**", "表 1 · …"). Figures
 # and results tables are captioned and numbered by the renderer, in fixed words,
@@ -84,7 +84,12 @@ def available(doc: ComparisonDocument) -> list[ReportBlock]:
         "Bars: normalized throughput (8 GPUs) at the best concurrency within SLO, per scenario, "
         "baseline next to each attempt, change on the bar.")
     for s in doc.baseline.results.scenarios:
-        if s.kind == "replay":
+        if s.kind == "bfcl":
+            add("chart", {"type": "bfcl", "scenario": s.key},
+                "BFCL: case accuracy and passed cases/hour, baseline next to each attempt.")
+            add("table", {"type": "bfcl"},
+                "BFCL accuracy, passed cases/hour, TTFT, telemetry coverage and case concurrency.")
+        elif s.kind == "replay":
             add("chart", {"type": "agentic", "scenario": s.key},
                 "Agentic dataset: input (uncached/cached) and output normalized throughput, "
                 "TTFT p50/p90/p99.")
@@ -140,10 +145,10 @@ def problems(markdown: str, doc: ComparisonDocument) -> list[dict[str, object]]:
         if b.kind == "chart":
             if b.type not in CHART_TYPES:
                 bad(b, f"chart type must be one of {', '.join(CHART_TYPES)}")
-            elif b.type in ("sweep", "agentic"):
+            elif b.type in ("sweep", "agentic", "bfcl"):
                 key = b.params.get("scenario", "")
                 s = scenarios.get(key)
-                want = "replay" if b.type == "agentic" else "sweep"
+                want = "replay" if b.type == "agentic" else b.type
                 if s is None:
                     bad(b, f"no scenario {key!r}; have {', '.join(scenarios) or 'none'}")
                 elif s.kind != want:

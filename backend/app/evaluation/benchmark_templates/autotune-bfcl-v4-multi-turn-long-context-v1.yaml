@@ -1,0 +1,45 @@
+slug: autotune-bfcl-v4-multi-turn-long-context-v1
+name: BFCL V4 multi-turn long context
+description: Official BFCL multi-turn long-context subset with streaming performance
+  telemetry.
+version: '1'
+status: active
+modules:
+- order_index: 1
+  module_name: bfcl_v4
+  weight: 1.0
+  params:
+    task_set: bfcl-v4-multi-turn-long-context-v1
+    cases_per_category: 200
+    concurrency: 1
+    request_timeout_seconds: 120
+    max_seconds: 1800
+    required_metrics:
+    - accuracy
+    - passed_cases_per_hour
+    - ttft_p90_ms
+    min_ttft_coverage: 1.0
+  metric_configs:
+  - key: accuracy
+    role: score
+    formula: passthrough
+  - key: accuracy_multi_turn_long_context
+    role: display
+  - key: case_count_multi_turn_long_context
+    role: display
+  - key: passed_cases_per_hour
+    role: display
+  - key: ttft_p90_ms
+    role: display
+  - key: input_tpm
+    role: display
+  - key: output_tpm
+    role: display
+  - key: total_tpm
+    role: display
+  - key: cache_hit_rate
+    role: display
+  - key: cache_usage_coverage
+    role: display
+group_tags:
+- llm-autotune/bfcl

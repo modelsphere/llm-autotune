@@ -29,12 +29,13 @@ import InfoHint from '../components/InfoHint.vue'
 import NightlyWindow from '../components/NightlyWindow.vue'
 import SpaceMap from '../components/SpaceMap.vue'
 import WorkloadPicker from '../components/WorkloadPicker.vue'
+import BFCLFields from '../components/BFCLFields.vue'
 import { type Extensions } from '../plugins'
 import { campaignFromYaml, campaignToYaml } from '../utils/campaignYaml'
 import { rememberValues, withPlatformValues } from '../utils/recent'
 import { absoluteTime } from '../utils/time'
 import { sweptKeysOf } from '../utils/space'
-import { defaultWorkload, specOf, type BenchmarkChoice, type Workload } from '../utils/workload'
+import { defaultBFCL, defaultWorkload, specOf, type BenchmarkChoice, type Workload } from '../utils/workload'
 import { fromYaml, toYaml, YamlError } from '../utils/yaml'
 import { all } from '../utils/load'
 import { useI18n } from '../i18n'
@@ -140,6 +141,8 @@ const form = ref({
   // answered by production and the finalists, each finalist held within
   // `quality_max_drop` points of production's average.
   quality_enabled: false,
+  quality_provider: 'opencompass',
+  bfcl_quality: defaultBFCL(),
   quality_max_drop: 10,
   quality_questions: 100,
   quality_tasks: ['gpqa_diamond'] as string[],
@@ -286,25 +289,36 @@ const QUALITY_TASKS = [
 /** Quality rides on a workload the platform builds; an existing benchmark is
  *  someone else's and cannot take a module. */
 const qualityAvailable = computed(() =>
-  workload.value.mode !== 'existing' && !(staged.value && verifyWorkload.value.mode === 'existing'))
+  workload.value.mode !== 'existing' && !(staged.value && verifyWorkload.value.mode === 'existing')
+  && !(form.value.quality_provider === 'bfcl_v4' && (workload.value.mode === 'bfcl'
+    || (staged.value && verifyWorkload.value.mode === 'bfcl'))))
 const qualityOn = computed(() =>
-  form.value.quality_enabled && qualityAvailable.value && form.value.quality_tasks.length > 0)
+  form.value.quality_enabled && qualityAvailable.value
+  && (form.value.quality_provider === 'bfcl_v4' || form.value.quality_tasks.length > 0))
 /** Quality on the finalists only, with no verify stage set up: the finalists
  *  are measured again on the screening workload plus the quality suite. */
 const qualityVerifyOnly = computed(() =>
   qualityOn.value && !form.value.quality_every_run && !staged.value)
+watch(() => [workload.value.mode, verifyWorkload.value.mode], () => {
+  if (workload.value.mode === 'bfcl' || (staged.value && verifyWorkload.value.mode === 'bfcl')) {
+    form.value.quality_provider = 'opencompass'
+  }
+})
 function qualitySpec() {
   return { tasks: form.value.quality_tasks, questions: form.value.quality_questions }
 }
 /** Each task held within the allowed drop of production's average score. */
 function qualityFloors(): Record<string, unknown>[] {
-  return form.value.quality_tasks.map((task) => ({
-    metric: `opencompass/accuracy[${task}]`, op: '>=', relative_to: 'production',
+  const metrics = form.value.quality_provider === 'bfcl_v4' ? ['bfcl_v4/accuracy[overall]']
+    : form.value.quality_tasks.map((task) => `opencompass/accuracy[${task}]`)
+  return metrics.map((metric) => ({
+    metric, op: '>=', relative_to: 'production',
     value: -Math.abs(form.value.quality_max_drop) / 100,
   }))
 }
 function withQuality(spec: Record<string, unknown> | null) {
-  return spec && { ...spec, quality: qualitySpec() }
+  return spec && { ...spec, ...(form.value.quality_provider === 'bfcl_v4'
+    ? { bfcl_quality: form.value.bfcl_quality } : { quality: qualitySpec() }) }
 }
 
 /** Whether a module's results can report a target metric: its own
@@ -326,7 +340,8 @@ const verifyObjectives = computed(() => objectivesFor(verifyModule.value))
 watch(screenModule, () => {
   const fits = screenObjectives.value
   if (!fits.length || fits.some((o) => o.id === selectedObjectiveId.value)) return
-  selectedObjectiveId.value = (fits.find((o) => o.is_builtin) ?? fits[0]).id
+  selectedObjectiveId.value = (fits.find((o) => screenModule.value === 'bfcl_v4'
+    ? o.target_metric === 'bfcl_v4.total_tpm' : o.is_builtin) ?? fits[0]).id
 })
 watch(verifyModule, () => {
   if (verifyObjectives.value.some((o) => o.id === verifyObjectiveId.value)) return
@@ -346,6 +361,7 @@ const pinnedProfile = computed(() =>
 
 /** What the summary calls a workload. */
 function describeWorkload(w: Workload): string {
+  if (w.mode === 'bfcl') return `BFCL V4 · ${w.bfcl.task_set} · ${w.bfcl.cases_per_category}`
   if (w.mode === 'sweep') {
     return t('campaignNew.describe.sweep', { in: w.input_tokens, out: w.output_tokens, c: w.concurrencies })
   }
@@ -373,6 +389,9 @@ const verifyObjectivePayload = computed(() => {
   const chosen = staged.value ? selectedVerifyObjective.value
     : qualityVerifyOnly.value ? selectedObjective.value : null
   const floors = qualityOn.value ? qualityFloors() : []
+  if (!chosen && staged.value && verifyModule.value === 'bfcl_v4') {
+    return { target_metric: 'bfcl_v4.total_tpm', direction: 'maximize', redlines: floors }
+  }
   if (!chosen) return floors.length && staged.value ? { redlines: floors } : {}
   return {
     name: chosen.name,
@@ -1428,7 +1447,7 @@ onMounted(async () => {
                 <span>{{ t('campaignNew.workload') }}</span>
                 <InfoHint :width="380"><span v-html="t('campaignNew.workloadHint')" /></InfoHint>
               </template>
-              <WorkloadPicker v-model="workload" v-model:rebuild="rebuildAtStart"
+              <WorkloadPicker :target-metric="selectedObjective?.target_metric" v-model="workload" v-model:rebuild="rebuildAtStart"
                 :profiles="datasetProfiles" :frozen="frozenDatasets" :benchmarks="benchmarks"
                 @module="(m) => (screenModule = m)" @datasets-changed="loadDatasetProfiles" />
             </el-form-item>
@@ -1479,12 +1498,22 @@ onMounted(async () => {
                 </div>
                 <p v-if="!qualityAvailable" class="muted tiny">{{ t('campaignNew.quality.needsSpec') }}</p>
                 <div v-else-if="form.quality_enabled" class="grid-2 verify-fields">
+                  <label class="field span-2">
+                    <span class="muted tiny">{{ t('bfcl.provider') }}</span>
+                    <el-select v-model="form.quality_provider" size="small">
+                      <el-option value="opencompass" label="OpenCompass" />
+                      <el-option value="bfcl_v4" label="BFCL V4"
+                        :disabled="workload.mode === 'bfcl' || (staged && verifyWorkload.mode === 'bfcl')" />
+                    </el-select>
+                  </label>
+                  <BFCLFields v-if="form.quality_provider === 'bfcl_v4'"
+                    v-model="form.bfcl_quality" class="span-2" />
                   <label class="field">
                     <span class="muted tiny">{{ t('campaignNew.quality.maxDrop') }}</span>
                     <el-input-number v-model="form.quality_max_drop" :min="1" :max="50"
                       size="small" controls-position="right" />
                   </label>
-                  <label class="field">
+                  <label v-if="form.quality_provider !== 'bfcl_v4'" class="field">
                     <span class="muted tiny">{{ t('campaignNew.quality.questions') }}</span>
                     <el-input-number v-model="form.quality_questions" :min="0" :max="10000"
                       :step="50" size="small" controls-position="right" />
@@ -1501,7 +1530,7 @@ onMounted(async () => {
             <el-collapse v-model="advancedNames" class="advanced">
               <el-collapse-item v-if="form.quality_enabled && qualityAvailable" name="quality">
                 <template #title>{{ t('campaignNew.quality.advanced') }}</template>
-                <label class="field">
+<label v-if="form.quality_provider !== 'bfcl_v4'" class="field">
                   <span class="muted tiny">{{ t('campaignNew.quality.tasks') }}</span>
                   <el-select v-model="form.quality_tasks" multiple size="small" style="width: 100%">
                     <el-option v-for="task in QUALITY_TASKS" :key="task" :value="task" :label="task" />
@@ -1523,7 +1552,7 @@ onMounted(async () => {
                     </InfoHint>
                   </div>
                   <template v-if="form.verify_enabled">
-                    <WorkloadPicker v-model="verifyWorkload" v-model:rebuild="rebuildAtStart"
+                    <WorkloadPicker :target-metric="selectedVerifyObjective?.target_metric" v-model="verifyWorkload" v-model:rebuild="rebuildAtStart"
                       :profiles="datasetProfiles" :frozen="frozenDatasets" :benchmarks="benchmarks" no-sweep
                       @module="(m) => (verifyModule = m)" @datasets-changed="loadDatasetProfiles" />
                     <div class="grid-2 verify-fields">

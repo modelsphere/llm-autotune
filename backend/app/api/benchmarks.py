@@ -62,11 +62,14 @@ async def ensure(body: EnsureIn, _: User = Depends(require_admin)):
 
 
 @router.post("/spec", summary="The LLMBench benchmark a described workload becomes")
-async def describe_spec(body: BenchmarkSpec, _: User = Depends(get_current_user)):
+async def describe_spec(body: BenchmarkSpec, target_metric: str = "",
+                        _: User = Depends(get_current_user)):
     """Read-only: the slug and title the workload maps to, the module (and so
     the metric names) it reports, and whether LLMBench already has it — in
     which case a campaign reuses it rather than creating another. `exists` is
     null when LLMBench could not be asked."""
+    body.require_ranking_metric(target_metric)
+
     def _exists() -> bool | None:
         try:
             return LLMBenchClient(max_attempts=1).get_benchmark(body.slug) is not None

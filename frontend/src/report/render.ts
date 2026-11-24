@@ -18,7 +18,7 @@ import python from 'highlight.js/lib/languages/python'
 import yaml from 'highlight.js/lib/languages/yaml'
 import MarkdownIt from 'markdown-it'
 import {
-  agenticChart, chartHeight, mountChart, PERCENTILES, sloPercentile, summaryChart,
+  agenticChart, bfclChart, chartHeight, mountChart, PERCENTILES, sloPercentile, summaryChart,
   sweepLatencyChart, sweepThroughputChart, type Percentile,
 } from './charts'
 import {
@@ -28,7 +28,7 @@ import css from './report.css?inline'
 import { tr, type Lang } from './strings'
 import { highlightShell } from './shell'
 import {
-  diffTable, esc, qualityTable, scenariosTable, setupTable, sloTable, summaryTable,
+  bfclTable, diffTable, esc, qualityTable, scenariosTable, setupTable, sloTable, summaryTable,
 } from './tables'
 
 // On first use, not on import, for the same reason as the charts' (charts.ts).
@@ -193,6 +193,7 @@ export function renderReport(root: HTMLElement, input: ReportInput): () => void 
           slo: () => sloTable(doc, lang),
           summary: () => summaryTable(doc, lang, labels, names),
           quality: () => qualityTable(doc, lang, labels),
+          bfcl: () => bfclTable(doc, lang, labels),
           diff: () => diffTable(doc, lang, labels, Number(params.attempt ?? 1)),
           scenarios: () => scenariosTable(doc, lang, names),
         }[params.type as 'setup']?.()
@@ -216,6 +217,9 @@ export function renderReport(root: HTMLElement, input: ReportInput): () => void 
           figure(() => summaryChart(doc, lang, labels, names))
           captionAfter(tr(lang, 'figSummary', { n: ++figures, hw: hardwareText(doc) }),
             tr(lang, 'figSummaryRead'))
+        } else if (type === 'bfcl') {
+          figure(() => bfclChart(doc, lang, labels, params.scenario))
+          captionAfter('BFCL V4', tr(lang, 'bfclNote'))
         } else if (type === 'agentic') {
           figure((w) => agenticChart(doc, lang, labels, params.scenario, w, names))
           captionAfter(tr(lang, 'figAgentic', { n: ++figures, name: nameOf(params.scenario) }),

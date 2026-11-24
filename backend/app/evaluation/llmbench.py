@@ -494,11 +494,16 @@ def _frozen_params(params: Any) -> dict[str, Any]:
     """
     if not isinstance(params, dict):
         return {}
-    return {
+    frozen = {
         str(key): value
         for key, value in params.items()
         if value is not None and isinstance(value, str | int | float | bool)
     }
+    for key in ("concurrency_grid", "required_metrics"):
+        value = params.get(key)
+        if isinstance(value, list) and all(isinstance(v, str | int) for v in value):
+            frozen[key] = list(value)
+    return frozen
 
 
 def _fmt_num(value: float) -> str:

@@ -52,8 +52,11 @@ SCENARIO_PARAMS = (
     "dataset_source",
     "dataset_profile",
     "max_samples",
-    "concurrency",
+    "concurrency", "concurrency_grid", "max_total_seconds",
     "max_generation_tokens",
+    "task_set", "cases_per_category", "request_timeout_seconds", "request_retries",
+    "max_seconds", "probe_endpoint", "required_metrics", "min_ttft_coverage",
+    "min_usage_coverage", "min_cache_usage_coverage",
 )
 
 # Per-concurrency metrics charted by default. Overridable per request; only
@@ -168,7 +171,7 @@ def deltas_between(base: ResultsPart, att: ResultsPart) -> Deltas:
                 # (score, cached vs uncached TPM, TTFT by input length) is
                 # its module-level metrics, so those get deltas too.
                 metrics=(
-                    _dict_deltas(bs.metrics, a_s.metrics) if bs.kind == "replay" else {}
+                    _dict_deltas(bs.metrics, a_s.metrics) if bs.kind in ("replay", "bfcl") else {}
                 ),
             )
         )

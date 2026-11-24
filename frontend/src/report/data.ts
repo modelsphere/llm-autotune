@@ -13,10 +13,10 @@ export interface Delta {
   better: 'higher' | 'lower'
   improved: boolean | null
 }
-export interface Level { concurrency: number; metrics: Record<string, unknown> }
+export interface Level { concurrency: number; metrics: Record<string, unknown>; error?: string }
 export interface Scenario {
   key: string
-  kind: 'sweep' | 'replay'
+  kind: 'sweep' | 'replay' | 'bfcl'
   label: string
   input_tokens: number | null
   output_tokens: number | null
@@ -132,6 +132,7 @@ export type ScenarioLabels = Record<string, ScenarioLabel>
 export function scenarioName(s: Scenario, lang: Lang, names: ScenarioLabels = {}): string {
   const given = names[s.key]?.name
   if (given) return given
+  if (s.kind === 'bfcl') return s.label || 'BFCL V4'
   if (s.kind === 'replay') {
     const c = s.best_level?.concurrency ?? (s.summary?.concurrency as number | undefined)
     return tr(lang, 'agentic', { c: concurrencyText(c) })
@@ -160,6 +161,9 @@ export function heldQuality(doc: Comparison): string[] {
     const key = `${v.module}.${v.metric}`
     if ((v.role === 'redline' || v.role === 'quality_floor') && key in quality && !out.includes(key))
       out.push(key)
+  }
+  for (const key of Object.keys(quality)) {
+    if (key.startsWith('bfcl_v4') && /\.accuracy(?:_|$)/.test(key) && !out.includes(key)) out.push(key)
   }
   return out
 }

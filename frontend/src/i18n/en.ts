@@ -10,6 +10,24 @@
  *  verbatim in both languages.
  */
 export default {
+  bfcl: {
+    grid: 'Concurrency scan points (leave empty for fixed concurrency)',
+    gridInvalid: 'Enter 2–16 distinct increasing integers from 1 to 128.',
+
+    taskSet: "Frozen task set",
+    note: "Official BFCL subset, not the full leaderboard. Concurrency counts cases. Keep settings identical when comparing runs.",
+    cases: "Cases per category",
+    concurrency: "Case concurrency",
+    maxSeconds: "Time limit (seconds)",
+    timeout: "Request timeout (seconds)",
+    retries: "Request retries",
+    ttftCoverage: "Minimum TTFT coverage",
+    usageCoverage: "Minimum token usage coverage",
+    cacheCoverage: "Minimum cache usage coverage",
+    probe: "Probe native tool calls before measurement",
+    provider: "Quality suite",
+    requiredMetrics: "Required metrics",
+  },
   reports: {
     title: 'Reports',
     subtitle: 'Performance reports written from finished runs: one baseline, the attempts '

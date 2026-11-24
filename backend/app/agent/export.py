@@ -110,9 +110,9 @@ type: summary
 ```
 ````
 
-`chart` takes `type: summary | sweep | agentic` (the last two with a
+`chart` takes `type: summary | sweep | agentic | bfcl` (the last three with a
 `scenario:`), `table` takes
-`type: setup | slo | summary | quality | scenarios | diff` (`diff` with an
+`type: setup | slo | summary | quality | scenarios | diff | bfcl` (`diff` with an
 `attempt:`), and `command` takes `config: baseline | <attempt>`.
 A plain markdown viewer shows them as code blocks; the renderer draws them.
 

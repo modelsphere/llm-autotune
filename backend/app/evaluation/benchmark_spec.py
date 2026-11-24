@@ -21,6 +21,7 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.core.config import get_settings
 from app.evaluation.benchmarks import GROUP_TAG, BenchmarkRefused, Ensured, ensure_document
+from app.evaluation.bfcl_sweep import BFCL_SCAN_MAX_SECONDS
 from app.evaluation.llmbench import LLMBenchClient
 
 SWEEP_MODULE = "perf_guidellm_sweep"
@@ -90,8 +91,85 @@ class QualitySpec(BaseModel):
         return tasks
 
 
+BFCL_MODULE = "bfcl_v4"
+BFCL_TASK_SETS = (
+    "bfcl-v4-smoke-v1", "bfcl-v4-tool-use-v1",
+    "bfcl-v4-multi-turn-long-context-v1",
+)
+
+
+class BFCLSpec(BaseModel):
+    """A frozen official BFCL subset, using native streamed tool calls.
+
+    Concurrency counts active cases, each of which can make several sequential
+    HTTP requests. Accuracy is a share, not a percentage.
+    """
+
+    model_config = {"extra": "forbid"}
+    task_set: Literal[
+        "bfcl-v4-smoke-v1", "bfcl-v4-tool-use-v1",
+        "bfcl-v4-multi-turn-long-context-v1",
+    ] = "bfcl-v4-tool-use-v1"
+    cases_per_category: int = Field(20, ge=1, le=200)
+    concurrency: int = Field(2, ge=1, le=128)
+    concurrency_grid: list[int] | None = Field(default=None, min_length=2, max_length=16)
+    max_total_seconds: float | None = Field(default=None, ge=1, le=BFCL_SCAN_MAX_SECONDS)
+    request_timeout_seconds: float = Field(120, ge=1, le=3600)
+    max_seconds: float = Field(1800, ge=1, le=86400)
+    request_retries: int = Field(0, ge=0, le=3)
+    export_replay_trace: bool = False
+    probe_endpoint: bool = False
+    required_metrics: list[str] = Field(
+        default_factory=lambda: ["accuracy", "passed_cases_per_hour", "ttft_p90_ms"])
+    min_ttft_coverage: float = Field(1, ge=0, le=1)
+    min_usage_coverage: float = Field(0, ge=0, le=1)
+    min_cache_usage_coverage: float = Field(0, ge=0, le=1)
+
+    @field_validator("concurrency_grid", mode="before")
+    @classmethod
+    def _strict_grid(cls, value):
+        if value is not None and (not isinstance(value, list)
+                                  or any(type(c) is not int for c in value)):
+            raise ValueError("BFCL scan requires integer concurrency points")
+        return value
+
+    @model_validator(mode="after")
+    def _smoke_count(self) -> BFCLSpec:
+        if self.concurrency_grid is not None:
+            grid = self.concurrency_grid
+            if (grid != sorted(set(grid))
+                    or any(type(c) is not int or not 1 <= c <= 128 for c in grid)):
+                raise ValueError("concurrency_grid requires increasing unique integers in [1, 128]")
+            budget = self.max_total_seconds or self.max_seconds * len(grid)
+            if budget > BFCL_SCAN_MAX_SECONDS:
+                raise ValueError(
+                    "BFCL scan budget exceeds 47 hours; reduce max_seconds or set max_total_seconds"
+                )
+        if self.task_set == "bfcl-v4-smoke-v1" and self.cases_per_category != 1:
+            raise ValueError("the BFCL smoke subset requires cases_per_category=1")
+        return self
+
+
+def bfcl_module(spec: BFCLSpec, *, quality: bool = False) -> dict:
+    metrics = ["accuracy", "accuracy_simple_python", "accuracy_multiple", "accuracy_parallel",
+               "accuracy_irrelevance", "accuracy_multi_turn_base",
+               "accuracy_multi_turn_long_context", "passed_cases_per_hour", "case_count",
+               "ttft_p50_ms", "ttft_p90_ms", "ttft_p99_ms", "request_e2e_p90_ms",
+               "input_tpm", "output_tpm", "total_tpm", "cache_hit_rate", "ttft_coverage",
+               "input_usage_coverage", "output_usage_coverage", "cache_usage_coverage"]
+    return {
+        "module_name": BFCL_MODULE,
+        "params": spec.model_dump(exclude_none=True),
+        "metric_configs": [
+            {"key": key, "role": "score" if key == "accuracy" and not quality else "display",
+             "formula": "passthrough"}
+            for key in metrics
+        ],
+    }
+
+
 class BenchmarkSpec(BaseModel):
-    """What every candidate is measured with. Two kinds:
+    """What every candidate is measured with. Three kinds:
 
     - `sweep`: random prompts of `input_tokens`, answers of `output_tokens`,
       at each of `concurrencies`. Level c sends c × `requests_per_concurrency`
@@ -105,11 +183,13 @@ class BenchmarkSpec(BaseModel):
       pipeline, measures nothing). `requests` caps how many (0 = the whole
       dataset).
 
-    Either kind may add `quality`: a quality suite after the workload, in the
-    same benchmark.
+    - `bfcl`: a frozen official BFCL subset with native streamed tool calls.
+
+    All kinds may add OpenCompass `quality`; sweep/replay may also add
+    `bfcl_quality`.
     """
 
-    kind: Literal["sweep", "replay"] = "sweep"
+    kind: Literal["sweep", "replay", "bfcl"] = "sweep"
     input_tokens: int = Field(default=2048, ge=1, le=1_000_000)
     output_tokens: int = Field(default=512, ge=1, le=100_000)
     concurrencies: list[int] = Field(default_factory=lambda: [1, 4, 16, 64])
@@ -120,6 +200,8 @@ class BenchmarkSpec(BaseModel):
     requests: int = Field(default=500, ge=0, le=1_000_000)
     concurrency: int = Field(default=16, ge=1, le=4096)
     quality: QualitySpec | None = None
+    bfcl: BFCLSpec | None = None
+    bfcl_quality: BFCLSpec | None = None
 
     @field_validator("concurrencies")
     @classmethod
@@ -135,7 +217,25 @@ class BenchmarkSpec(BaseModel):
     def _one_dataset(self) -> BenchmarkSpec:
         if self.dataset_profile.strip() and self.dataset_frozen.strip():
             raise ValueError("a replay names a collection profile or a frozen dataset, not both")
+        if self.kind == "bfcl" and self.bfcl is None:
+            self.bfcl = BFCLSpec()
+        if self.kind == "bfcl" and self.bfcl_quality is not None:
+            raise ValueError("a BFCL workload already measures tool-use quality")
+        if self.kind != "bfcl" and self.bfcl is not None:
+            raise ValueError(
+                "bfcl parameters require kind=bfcl; use bfcl_quality for a quality check")
         return self
+
+    def require_ranking_metric(self, target: str) -> None:
+        """Ask LLMBench to explain missing token usage when this stage ranks by BFCL TPM."""
+        bfcl = self.bfcl or self.bfcl_quality
+        if bfcl is None:
+            return
+        targets = {"bfcl_v4.total_tpm", "bfcl_v4/total_tpm", "bfcl_v4/total_tpm_per_gpu"}
+        if self.kind == "bfcl":
+            targets.update(("", "total_tpm", "total_tpm_per_gpu"))
+        if target in targets and "total_tpm" not in bfcl.required_metrics:
+            bfcl.required_metrics.append("total_tpm")
 
     def essentials(self) -> dict:
         """Only what this kind actually uses, so two specs that differ in an
@@ -145,6 +245,8 @@ class BenchmarkSpec(BaseModel):
                    "output_tokens": self.output_tokens, "concurrencies": self.concurrencies,
                    "requests_per_concurrency": self.requests_per_concurrency,
                    "max_seconds_per_level": self.max_seconds_per_level}
+        elif self.kind == "bfcl":
+            out = {"kind": "bfcl", "bfcl": self.bfcl.model_dump(exclude_none=True)}
         else:
             out = {"kind": "replay", "dataset_profile": self.dataset_profile.strip(),
                    "requests": self.requests, "concurrency": self.concurrency}
@@ -157,6 +259,8 @@ class BenchmarkSpec(BaseModel):
             # (avg@8 for GPQA) is not this one, and LLMBench keeps a slug's
             # document as first created.
             out["quality"] = {**self.quality.model_dump(), "once": True}
+        if self.bfcl_quality is not None:
+            out["bfcl_quality"] = self.bfcl_quality.model_dump(exclude_none=True)
         return out
 
     @property
@@ -173,6 +277,14 @@ class BenchmarkSpec(BaseModel):
             title = (f"AutoTune sweep — {self.input_tokens} in / {self.output_tokens} out "
                      f"at concurrency {levels}, {self.requests_per_concurrency} requests "
                      "per slot")
+        elif self.kind == "bfcl":
+            if self.bfcl.concurrency_grid:
+                levels = ",".join(str(c) for c in self.bfcl.concurrency_grid)
+                conc = f"at case concurrency grid {levels}"
+            else:
+                conc = f"at case concurrency {self.bfcl.concurrency}"
+            title = (f"AutoTune BFCL — {self.bfcl.task_set}, "
+                     f"{self.bfcl.cases_per_category} cases/category {conc}")
         else:
             dataset = (self.dataset_profile.strip() or self.dataset_frozen.strip()
                        or "the example set")
@@ -182,11 +294,15 @@ class BenchmarkSpec(BaseModel):
             q = self.quality
             each = f"{q.questions} questions each" if q.questions else "every question"
             title += f" + quality ({', '.join(q.tasks)}, {each})"
+        if self.bfcl_quality is not None:
+            title += f" + BFCL quality ({self.bfcl_quality.task_set})"
         return title
 
     @property
     def module(self) -> str:
         """The module this spec runs — and so the namespace of its metrics."""
+        if self.kind == "bfcl":
+            return BFCL_MODULE
         return SWEEP_MODULE if self.kind == "sweep" else replay_module()
 
     @property
@@ -215,6 +331,8 @@ def document(spec: BenchmarkSpec, client: LLMBenchClient | None = None) -> dict:
             },
             "metric_configs": _SWEEP_METRICS,
         }
+    elif spec.kind == "bfcl":
+        module = bfcl_module(spec.bfcl)
     else:
         params: dict = {"concurrency": spec.concurrency, "max_samples": spec.requests}
         if spec.dataset_profile.strip():
@@ -230,6 +348,10 @@ def document(spec: BenchmarkSpec, client: LLMBenchClient | None = None) -> dict:
     modules = [{**module, "order_index": 0, "weight": 1.0, "skip_if_prev_failed": False}]
     if spec.quality is not None:
         modules.append({**quality_module(spec.quality), "order_index": 1, "weight": 0.0,
+                        "skip_if_prev_failed": False})
+    if spec.bfcl_quality is not None:
+        modules.append({**bfcl_module(spec.bfcl_quality, quality=True),
+                        "order_index": len(modules), "weight": 0.0,
                         "skip_if_prev_failed": False})
     return {
         "slug": spec.slug,

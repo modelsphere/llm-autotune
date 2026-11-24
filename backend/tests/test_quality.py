@@ -97,7 +97,7 @@ def test_the_floor_is_production_s_average_less_the_allowed_drop(db):
 
     _measure(db, {}, 72.0, baseline=True)  # validation's production run
     _measure(db, {}, 68.0)  # production as a recipe campaign's empty config
-    assert quality.production_scores(db, campaign, [GPQA]) == {
+    assert quality.production_scores(db, campaign, [GPQA], reader_for(early.metrics)) == {
         GPQA: pytest.approx(0.70)
     }
     assert quality.rescore(db, campaign, lambda run: OBJECTIVE) >= 1
@@ -162,3 +162,83 @@ def test_a_config_that_leaves_the_recipe_as_it_is_is_production(db):
                                                        "dsa_decode_backend": None}), campaign)
     # Removing a flag the recipe does set is a change, not production.
     assert not quality.is_production(Candidate(config={"tp": None}), campaign)
+
+
+def test_bfcl_floor_rejudges_finalists_after_production_arrives(db):
+    objective = {"target_metric": "bfcl_v4.passed_cases_per_hour", "redlines":
+                 quality.quality_floor([], 0.1, metrics=["bfcl_v4/accuracy[overall]"])}
+    campaign = db.get(Campaign, 1)
+
+    def record(n, accuracy, baseline, task="bfcl-v4-tool-use-v1", cases=20):
+        candidate = Candidate(id=n, campaign_id=1, config={} if baseline else {"tp": 4},
+                              config_hash=f"bfcl-{n}", is_baseline=baseline)
+        db.add(candidate)
+        db.add(Run(id=n, campaign_id=1, candidate_id=n))
+        metrics = {"bfcl_v4.accuracy": accuracy, "bfcl_v4.passed_cases_per_hour": 100}
+        raw = {"runs": [{"module_name": "bfcl_v4", "params_json": {
+            "task_set": task, "cases_per_category": cases}}]}
+        reader = reader_for(metrics, raw, candidate.config, campaign)
+        result = Result(run_id=n, source="llmbench", metrics=metrics, raw=raw,
+                        **quality.judge(db, campaign, objective, reader).as_dict())
+        db.add(result)
+        db.flush()
+        return result
+
+    finalist = record(1, 0.75, False)
+    assert not finalist.feasible
+    record(2, 0.50, True, "bfcl-v4-smoke-v1", 1)
+    record(3, 0.50, True, cases=5)
+    quality.rescore(db, campaign, lambda run: objective)
+    assert not finalist.feasible and "no production score" in finalist.breaches[0]
+    record(4, 0.90, True)
+    quality.rescore(db, campaign, lambda run: objective)
+    assert not finalist.feasible and "production 0.9" in finalist.breaches[0]
+    record(5, 0.70, True)
+    assert quality.rescore(db, campaign, lambda run: objective) >= 1
+    assert finalist.feasible
+    record(6, 0.77, True)
+    quality.rescore(db, campaign, lambda run: objective)
+    assert finalist.constraints == pytest.approx([-0.06])
+    poor = record(7, 0.5, False)
+    assert not poor.feasible
+
+
+def test_bfcl_production_floor_matches_the_scan_grid_and_total_budget(db):
+    metric = "bfcl_v4/accuracy[overall]"
+    objective = {"target_metric": "bfcl_v4.total_tpm", "redlines":
+                 quality.quality_floor([], 0.1, metrics=[metric])}
+    campaign = db.get(Campaign, 1)
+
+    def record(n, accuracy, *, baseline=False, grid=None, total_budget=None):
+        config = {} if baseline else {"tp": 4}
+        db.add(Candidate(id=n, campaign_id=1, config=config, config_hash=f"scan-{n}",
+                         is_baseline=baseline))
+        db.add(Run(id=n, campaign_id=1, candidate_id=n))
+        params = {"task_set": "bfcl-v4-multi-turn-long-context-v1", "cases_per_category": 20,
+                  "concurrency": 2, "max_seconds": 1800}
+        if grid is not None:
+            params["concurrency_grid"] = grid
+        if total_budget is not None:
+            params["max_total_seconds"] = total_budget
+        raw = {"runs": [{"module_name": "bfcl_v4", "params_json": params}]}
+        metrics = {"bfcl_v4.accuracy": accuracy, "bfcl_v4.total_tpm": 12000}
+        reader = reader_for(metrics, raw, config, campaign)
+        result = Result(run_id=n, source="llmbench", metrics=metrics, raw=raw,
+                        **quality.judge(db, campaign, objective, reader).as_dict())
+        db.add(result)
+        db.flush()
+        return result, reader
+
+    a = [1, 3, 5, 6, 8]
+    b = [4, 8, 11, 15, 18]
+    record(1, 0.99, baseline=True, grid=a, total_budget=9000)
+    record(2, 0.99, baseline=True)  # Fixed concurrency is a separate protocol.
+    record(3, 0.99, baseline=True, grid=b, total_budget=4500)
+    candidate, measured = record(4, 0.55, grid=b, total_budget=9000)
+    assert quality.production_scores(db, campaign, [metric], measured) == {}
+    assert not candidate.feasible
+    record(5, 0.60, baseline=True, grid=b, total_budget=9000)
+    assert quality.production_scores(db, campaign, [metric], measured) == {
+        metric: pytest.approx(0.60)}
+    quality.rescore(db, campaign, lambda run: objective)
+    assert candidate.feasible  # 0.55 >= the matching production's 0.60 - 0.10.

@@ -130,8 +130,10 @@ class Reader:
         metrics: dict[str, Any] | None,
         reports: list[dict[str, Any]] | None = None,
         cards: float | None = None,
+        benchmark_config_hash: str = "",
     ):
         self.metrics = metrics or {}
+        self.benchmark_config_hash = benchmark_config_hash
         self._reports = reports
         self._cards = cards
         self._scenarios: list[Scenario] | None = None
@@ -141,6 +143,16 @@ class Reader:
         if self._scenarios is None:
             self._scenarios = measures_of(self.metrics, self._reports, self._cards)
         return self._scenarios
+
+    def scenario_for(self, name: str) -> Scenario | None:
+        """The module instance supplying a raw key or measure reference."""
+        if is_measure_ref(name):
+            try:
+                return main_scenario(self.scenarios, parse(name).scenario)
+            except RefError:
+                return None
+        module, dot, _ = name.partition(".")
+        return main_scenario(self.scenarios, module) if dot else None
 
     def get(self, name: str, default: Any = None) -> Any:
         if name and is_measure_ref(name):
@@ -191,7 +203,7 @@ def reader_for(
             cards = cards_used(config) or None
         except Exception:
             cards = None
-    return Reader(metrics, reports, cards)
+    return Reader(metrics, reports, cards, (raw or {}).get("benchmark_config_hash") or "")
 
 
 def scenarios_out(scenarios: list[Scenario]) -> list[dict[str, Any]]:

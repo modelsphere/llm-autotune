@@ -125,6 +125,7 @@ from app.db.models import (
 from app.db.models import JsonCol as JsonType
 from app.evaluation import scenarios
 from app.evaluation.aggregate import ResultSummary, summary_of
+from app.evaluation.bfcl_sweep import BFCLSweepPlan, bfcl_levels, select_bfcl_level
 from app.evaluation.gate import Gate
 from app.evaluation.llmbench import LLMBenchClient, instance_keys, module_reports
 from app.hardware import coerce_gpu_type, normalize_gpu_type
@@ -290,6 +291,9 @@ __all__ = [
     "module_reports",
     "pinning",
     "scenarios",
+    "BFCLSweepPlan",
+    "bfcl_levels",
+    "select_bfcl_level",
     "sort_key",
     "summary_of",
     "target_metric",

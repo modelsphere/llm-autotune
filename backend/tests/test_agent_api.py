@@ -905,3 +905,73 @@ async def test_the_agent_api_is_off_unless_enabled(stack):
     http, _ = stack
     del app.dependency_overrides[agent_api._enabled]
     assert (await http.get("/api/agent/v1/reports")).status_code == 404
+
+
+async def test_bfcl_report_separates_accuracy_from_telemetry_and_compares_protocols(stack):
+    from app.evaluation.benchmark_spec import BFCLSpec
+    from app.mocks.llmbench_mock import _bfcl_metrics
+
+    http, factory = stack
+    baseline = await _seed_run(factory, sid=1, name="base", engine_args={"tp": 2},
+                               base_tps=50, baseline=True)
+    attempt = await _seed_run(factory, sid=2, name="try", engine_args={"tp": 2}, base_tps=55)
+    async with factory() as session:
+        campaign = await session.get(Campaign, 1)
+        campaign.objective = {
+            "target_metric": "bfcl_v4.passed_cases_per_hour", "redlines": [{
+                "metric": "bfcl_v4/accuracy[overall]", "op": ">=",
+                "relative_to": "production", "value": -0.1,
+            }],
+        }
+        for rid, count in ((baseline, 20), (attempt, 40)):
+            params = BFCLSpec(cases_per_category=count).model_dump()
+            raw = {"status": "done", "passed": True, "runs": [{
+                "module_name": "bfcl_v4", "status": "done", "passed": True,
+                "params_json": params, "metrics_json": _bfcl_metrics(1, params),
+            }]}
+            result = (await session.execute(
+                select(Result).where(Result.run_id == rid))).scalar_one()
+            result.constraints = [-0.01]
+            result.raw = raw
+            result.metrics = _flatten_metrics(raw)
+        await session.commit()
+    response = await http.get(f"/api/agent/v1/runs/{baseline}/results")
+    assert response.status_code == 200, response.text
+    result = response.json()
+    assert result["scenarios"][0]["kind"] == "bfcl"
+    assert result["scenarios"][0]["best_level"]["case_concurrency"] == 2
+    assert set(result["quality"][0]["scores"]) == {
+        "accuracy", "accuracy_simple_python", "accuracy_multiple", "accuracy_parallel",
+        "accuracy_irrelevance", "accuracy_multi_turn_base",
+    }
+    assert "bfcl_v4.ttft_coverage" not in result["headline"]["quality"]
+    floor = next(v for v in result["verdicts"] if v["role"] == "quality_floor")
+    assert round(floor["min"], 4) == 0.7
+    assert floor["ok"] is True
+    response = await http.get("/api/agent/v1/comparison", params={
+        "baseline": baseline, "attempts": str(attempt),
+    })
+    assert response.status_code == 422, response.text
+    assert "cases_per_category" in response.text
+
+
+async def test_verify_report_resolves_an_absolute_bfcl_accuracy_floor(stack):
+    http, factory = stack
+    rid = await _seed_run(factory, sid=1, name="verify", engine_args={}, base_tps=50)
+    async with factory() as session:
+        campaign = await session.get(Campaign, 1)
+        campaign.verify_benchmark_slug = "bfcl-verify"
+        campaign.verify_objective = {"target_metric": "bfcl_v4.total_tpm", "redlines": [
+            {"metric": "bfcl_v4/accuracy[overall]", "op": ">=", "value": 0.9}]}
+        run = await session.get(Run, rid)
+        candidate = await session.get(Candidate, run.candidate_id)
+        candidate.kind = "verification"
+        result = (await session.execute(select(Result).where(Result.run_id == rid))).scalar_one()
+        result.raw = {"runs": [{"module_name": "bfcl_v4", "metrics_json": {"accuracy": 0.71}}]}
+        result.metrics = _flatten_metrics(result.raw)
+        await session.commit()
+    response = await http.get(f"/api/agent/v1/runs/{rid}/results")
+    assert response.status_code == 200, response.text
+    floors = [v for v in response.json()["verdicts"] if v["role"] == "quality_floor"]
+    assert floors == [{"module": "bfcl_v4", "metric": "accuracy[overall]", "min": 0.9,
+                       "actual": 0.71, "max": None, "role": "quality_floor", "ok": False}]

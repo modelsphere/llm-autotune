@@ -66,3 +66,5 @@ running campaigns and reading the results. Installation is covered in
 
 The screenshots come from a local kind setup running the mock engine; their
 numbers are not performance data.
+
+- [BFCL V4 工具调用调优](bfcl.md)：独立负载、附加质量检测、指标及报告。

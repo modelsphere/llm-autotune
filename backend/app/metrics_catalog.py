@@ -63,6 +63,18 @@ FUNC = "functional_acceptance"
 REPLAY = get_settings().llmbench_replay_module or "replay"
 
 METRICS: list[dict[str, Any]] = [
+    *[_m(f"bfcl_v4.{key}", label, better, meaning, unit=unit, group="BFCL V4")
+      for key, label, better, meaning, unit in (
+          ("total_tpm", "BFCL total TPM", "higher",
+           "Input plus output tokens per minute for the whole deployment.", "tok/min"),
+          ("accuracy", "BFCL accuracy", "higher", "Official case correctness, a share.", ""),
+          ("passed_cases_per_hour", "BFCL passed cases/hour", "higher",
+           "Passed cases per hour of generation time, excluding grading.", "cases/h"),
+          ("ttft_p90_ms", "BFCL TTFT p90", "lower",
+           "First text or tool-call token, excluding reasoning.", "ms"),
+          ("ttft_coverage", "BFCL TTFT coverage", "higher",
+           "Share of requests with TTFT telemetry.", ""),
+      )],
     # -- throughput, card-normalized -----------------------------------------
     # The right default family. An absolute rate almost always rewards giving a
     # config more GPUs — eight cards beat four at nearly anything — so ranking

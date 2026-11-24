@@ -43,7 +43,7 @@ def test_each_builtin_objective_fits_one_kind_of_benchmark():
     for spec in bootstrap.BUILTIN_OBJECTIVES:
         metrics = [spec["target_metric"], *(r["metric"] for r in spec["redlines"])]
         used = {m.split(".")[0] for m in metrics}
-        assert used <= sweep or used == {replay_module()}, spec["name"]
+        assert used <= sweep or used in ({replay_module()}, {"bfcl_v4"}), spec["name"]
 
 
 def test_a_user_objective_with_a_builtin_name_is_left_alone():

@@ -372,12 +372,21 @@ def test_the_catalog_offers_nothing_from_a_benchmark_nobody_pinned():
     """Every offered key belongs to a module some regression file has a real
     submission for. Without this, a new entry can be added under a brand-new
     module prefix and slip past both pins by matching neither."""
+    import json
+
+    # BFCL is pinned against the native module's published metric contract;
+    # the historical throughput submissions predate that module.
+    from pathlib import Path
+
     from app.metrics_catalog import METRICS
     from tests.test_regression_submission152 import REAL_KEYS as REPLAY_KEYS
 
+    bfcl_contract = json.loads((Path(__file__).parent / "data/measures/bfcl-contract.json")
+                               .read_text())
+    bfcl_keys = {f"bfcl_v4.{key}" for key in bfcl_contract["metric_keys"]}
     offered = {m["key"] for m in METRICS}
-    assert offered <= REAL_KEYS | REPLAY_KEYS, (
-        f"offered by no pinned benchmark: {sorted(offered - REAL_KEYS - REPLAY_KEYS)}"
+    assert offered <= REAL_KEYS | REPLAY_KEYS | bfcl_keys, (
+        f"offered by no pinned benchmark: {sorted(offered - REAL_KEYS - REPLAY_KEYS - bfcl_keys)}"
     )
 
 

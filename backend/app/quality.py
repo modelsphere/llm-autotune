@@ -18,7 +18,6 @@ before production was had nothing to be compared with, and crossed.
 from __future__ import annotations
 
 import copy
-from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -26,6 +25,7 @@ from sqlalchemy.orm import Session
 from app.db.models import Campaign, Candidate, PolicyTrial, Result, Run, is_baseline_candidate
 from app.evaluation.aggregate import ResultSummary, summarize
 from app.evaluation.benchmark_spec import QUALITY_MODULE
+from app.measures import Reader, reader_for
 from app.objective import redlines
 
 PRODUCTION = "production"
@@ -35,15 +35,18 @@ def relative_redlines(objective: dict | None) -> list[dict]:
     return [r for r in redlines(objective) if r.get("relative_to") == PRODUCTION]
 
 
-def quality_floor(tasks: list[str], max_drop: float) -> list[dict]:
+def quality_floor(
+    tasks: list[str], max_drop: float, *, metrics: list[str] | None = None,
+) -> list[dict]:
     """The redlines that hold each task within `max_drop` (a fraction: 0.10
     is ten points) of production."""
     # Named with its scenario: an unnamed reference reads the benchmark's
     # main (throughput) scenario, which has no accuracy.
     return [
-        {"metric": f"{QUALITY_MODULE}/accuracy[{task}]", "op": ">=",
+        {"metric": metric, "op": ">=",
          "relative_to": PRODUCTION, "value": -abs(max_drop)}
-        for task in tasks
+        for metric in (metrics if metrics is not None else
+                       [f"{QUALITY_MODULE}/accuracy[{task}]" for task in tasks])
     ]
 
 
@@ -70,10 +73,26 @@ def is_production(candidate: Candidate | None, campaign: Campaign) -> bool:
         return False
 
 
-def production_scores(db: Session, campaign: Campaign, metrics: list[str]) -> dict[str, float]:
-    """Production's score on each metric: the mean of its measurements."""
-    from app.measures import reader_for
+def _bfcl_protocol(reader: Reader, metric: str) -> tuple | None:
+    """Identify the BFCL cases and generation settings behind this particular metric."""
+    scenario = reader.scenario_for(metric)
+    if scenario is None or scenario.family != "bfcl_v4":
+        return None
+    params = scenario.params
+    if params.get("task_set") and params.get("cases_per_category") is not None:
+        keys = ("task_set", "cases_per_category", "concurrency", "max_seconds",
+                "request_timeout_seconds", "request_retries", "probe_endpoint")
+        return (*tuple(params.get(key) for key in keys),
+                tuple(params.get("concurrency_grid") or ()), params.get("max_total_seconds"))
+    # Older results may only identify the entire locked benchmark.
+    return (reader.benchmark_config_hash,) if reader.benchmark_config_hash else ()
 
+
+def production_scores(
+    db: Session, campaign: Campaign, metrics: list[str], measured: Reader,
+) -> dict[str, float]:
+    """Average repeated production measurements of the same BFCL protocol."""
+    protocols = {metric: _bfcl_protocol(measured, metric) for metric in metrics}
     if not metrics:
         return {}
     rows = db.execute(
@@ -91,6 +110,9 @@ def production_scores(db: Session, campaign: Campaign, metrics: list[str]) -> di
         except Exception:
             continue
         for metric in metrics:
+            protocol = protocols[metric]
+            if protocol == () or protocol != _bfcl_protocol(reader, metric):
+                continue
             value = reader.get(metric)
             if isinstance(value, int | float) and not isinstance(value, bool):
                 seen[metric].append(float(value))
@@ -119,10 +141,10 @@ def resolve(objective: dict | None, scores: dict[str, float]) -> dict | None:
     return resolved
 
 
-def judge(db: Session, campaign: Campaign, objective: dict | None, reader: Any) -> ResultSummary:
+def judge(db: Session, campaign: Campaign, objective: dict | None, reader: Reader) -> ResultSummary:
     """summarize(), with relative redlines resolved against production."""
     needed = [r["metric"] for r in relative_redlines(objective) if r.get("metric")]
-    scores = production_scores(db, campaign, needed) if needed else {}
+    scores = production_scores(db, campaign, needed, reader) if needed else {}
     return summarize(resolve(objective, scores), reader)
 
 
@@ -130,8 +152,6 @@ def rescore(db: Session, campaign: Campaign, objective_of) -> int:
     """Judge again every result of the campaign that a relative redline holds,
     after production's score moved. `objective_of(run)` is the objective the
     run's stage is judged by. Returns how many results changed."""
-    from app.measures import reader_for
-
     rows = db.execute(
         select(Result, Run, Candidate)
         .join(Run, Result.run_id == Run.id)
@@ -145,8 +165,9 @@ def rescore(db: Session, campaign: Campaign, objective_of) -> int:
             continue
         reader = reader_for(result.metrics, result.raw, candidate.config, campaign)
         stored = judge(db, campaign, objective, reader).as_dict()
-        if (stored["feasible"], stored["breaches"]) == (bool(result.feasible),
-                                                       list(result.breaches or [])):
+        if (stored["feasible"] == result.feasible and stored["breaches"] == (result.breaches or [])
+                and stored["constraints"] == result.constraints
+                and stored["objective_value"] == result.objective_value):
             continue
         result.objective_value = stored["objective_value"]
         result.feasible = stored["feasible"]

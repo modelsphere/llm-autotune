@@ -3,6 +3,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
 
 import anyio
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, Field, ValidationError
@@ -282,15 +283,25 @@ async def create_campaign(
     return await _campaign_out(session, campaign)
 
 
-def _spec(raw: dict | None, field: str) -> BenchmarkSpec | None:
+def _spec(body, field: str) -> BenchmarkSpec | None:
+    raw = getattr(body, field)
     if raw is None:
         return None
     try:
-        return BenchmarkSpec.model_validate(raw)
+        spec = BenchmarkSpec.model_validate(raw)
     except ValidationError as exc:
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_ENTITY, f"{field}: {exc.errors()}"
         ) from exc
+
+    objective_field = "verify_objective" if field == "verify_benchmark_spec" else "objective"
+    objective = getattr(body, objective_field) or {}
+    target = objective.get("target_metric") or ""
+    spec.require_ranking_metric(target)
+    if spec.kind == "bfcl" and not target:
+        setattr(body, objective_field, {"direction": "maximize", **objective,
+                                        "target_metric": "bfcl_v4.total_tpm"})
+    return spec
 
 
 async def _resolve_benchmark_specs(body: CampaignCreate) -> None:
@@ -299,7 +310,7 @@ async def _resolve_benchmark_specs(body: CampaignCreate) -> None:
     replay of a rolling profile also pins that profile, unless one is set."""
     for spec_field, slug_field in (("benchmark_spec", "benchmark_slug"),
                                    ("verify_benchmark_spec", "verify_benchmark_slug")):
-        spec = _spec(getattr(body, spec_field), spec_field)
+        spec = _spec(body, spec_field)
         if spec is None:
             continue
         try:
@@ -691,12 +702,14 @@ def _with_specs(
     waits for the campaign itself."""
     for spec_field, slug_field in (("benchmark_spec", "benchmark_slug"),
                                    ("verify_benchmark_spec", "verify_benchmark_slug")):
-        spec = _spec(getattr(body, spec_field), spec_field)
+        spec = _spec(body, spec_field)
         if spec is None:
             continue
         setattr(body, slug_field, spec.slug)
         if catalog is not None:
-            catalog.setdefault(spec.slug, [spec.module])
+            catalog.setdefault(spec.slug, [spec.module]
+                               + (["opencompass"] if spec.quality is not None else [])
+                               + (["bfcl_v4"] if spec.bfcl_quality is not None else []))
         if wired is not None:
             replays = spec.dataset_profile.strip() if spec.kind == "replay" else ""
             wired.setdefault(spec.slug, replays)
@@ -715,6 +728,17 @@ def _benchmark_checks(
             [r.get("metric", "") for r in redlines(body.objective)],
         )
     ]
+    stages = (body.benchmark_slug, body.verify_benchmark_slug)
+    if catalog and any("bfcl_v4" in catalog.get(slug, []) for slug in stages):
+        try:
+            client.module_defaults("bfcl_v4")
+        except httpx.HTTPError as exc:
+            missing = isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code == 404
+            checks.append(pf.Check(
+                "bfcl_module", "BFCL V4 module", pf.FAIL if missing else pf.SKIP,
+                "Deploy LLMBench with the bfcl_v4 module before running this benchmark."
+                if missing else "Could not check the BFCL module on LLMBench.",
+            ))
     if body.verify_benchmark_slug:
         checks.append(
             pf.benchmark_check(
@@ -1158,6 +1182,8 @@ class ValidateRequest(BaseModel):
         "", description="The benchmark to validate with, e.g. one that adds a quality "
         "suite to the campaign's workload. Empty: the campaign's validation benchmark.")
     quality_tasks: list[str] = Field(default_factory=lambda: ["gpqa_diamond"])
+    quality_metrics: list[str] | None = Field(
+        None, description="Explicit accuracy references, e.g. bfcl_v4/accuracy[overall].")
     quality_max_drop: float | None = Field(
         None, ge=0, le=100,
         description="Points a config may score below production on each quality task. "
@@ -1183,6 +1209,18 @@ async def validate_configs(
 ):
     from app import quality
     from app.control.search import CandidateConfig
+    from app.measures.refs import RefError, parse
+
+    if body.quality_metrics is not None:
+        try:
+            if not body.quality_metrics:
+                raise ValueError("quality_metrics must not be empty")
+            for metric in body.quality_metrics:
+                ref = parse(metric)
+                if ref.measure != "accuracy" or not ref.scenario:
+                    raise ValueError("quality_metrics must name a module's accuracy measure")
+        except (ValueError, RefError) as exc:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
 
     campaign = await session.get(Campaign, campaign_id)
     if campaign is None:
@@ -1213,7 +1251,7 @@ async def validate_configs(
         base = dict(campaign.verify_objective or campaign.objective or {})
         kept = [r for r in base.get("redlines") or [] if not r.get("relative_to")]
         base["redlines"] = kept + quality.quality_floor(
-            body.quality_tasks, body.quality_max_drop / 100)
+            body.quality_tasks, body.quality_max_drop / 100, metrics=body.quality_metrics)
         campaign.verify_objective = base
 
     # The campaign's node pin names the nodes it searched on, and a run's pod

@@ -91,6 +91,26 @@ BUILTIN_OBJECTIVES = [
         "direction": "maximize",
         "redlines": [{"metric": f"{REPLAY}.ttft_p99_ms", "op": "<=", "value": 10000}],
     },
+    {
+        "name": "BFCL total TPM",
+        "description": "Default BFCL ranking. Total input and output tokens per minute "
+                       "for the whole deployment.",
+        "target_metric": "bfcl_v4.total_tpm",
+        "direction": "maximize", "redlines": [],
+    },
+    {
+        "name": "BFCL passed cases per hour",
+        "description": "Correctly solved tool-use cases per hour of generation time. "
+                       "Add a calibrated accuracy floor before production tuning.",
+        "target_metric": "bfcl_v4.passed_cases_per_hour",
+        "direction": "maximize", "redlines": [],
+    },
+    {
+        "name": "BFCL accuracy",
+        "description": "Official BFCL case accuracy on the frozen subset.",
+        "target_metric": "bfcl_v4.accuracy",
+        "direction": "maximize", "redlines": [],
+    },
 ]
 
 

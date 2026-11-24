@@ -70,14 +70,21 @@ def is_replay(report: dict) -> bool:
     return name.split("#")[0].startswith("replay")
 
 
+def is_bfcl(report: dict) -> bool:
+    name = str(report.get("module_name") or report.get("module") or "")
+    return name.split("#")[0] == "bfcl_v4"
+
+
 def is_scenario(report: dict) -> bool:
-    return is_sweep(report) or is_replay(report)
+    return is_sweep(report) or is_replay(report) or is_bfcl(report)
 
 
 def scenario_label(report: dict) -> str:
     """How a scenario is named in a report: `50k + 1.5k` for a sweep,
     `replay` for a traffic replay, "" for a module that is not a scenario."""
     params = report.get("params") or {}
+    if is_bfcl(report):
+        return f"BFCL — {params.get('task_set', 'frozen subset')}"
     if is_sweep(report):
         return f"{tokens_label(params['input_tokens'])} + {tokens_label(params['output_tokens'])}"
     if is_replay(report):
@@ -111,6 +118,24 @@ def scenarios_of(metrics: dict[str, Any], module_reports: list, ttft_percentile:
         if replay:
             concurrency = as_number(params.get("concurrency"))
             request_tps = as_number(metrics.get(f"{key}.output_tps_mean"))
+        if is_bfcl(report):
+            out.append({
+                "key": key, "kind": "bfcl", "label": scenario_label(report),
+                "case_concurrency": as_number(metrics.get(f"{key}.reported_concurrency"))
+                    or as_number(params.get("concurrency")),
+                "concurrency_grid": params.get("concurrency_grid"),
+                "sweep_complete": as_flag(metrics.get(f"{key}.sweep_complete")),
+                "sweep_canceled": as_flag(metrics.get(f"{key}.sweep_canceled")),
+                "sweep_points_completed": as_number(metrics.get(f"{key}.sweep_points_completed")),
+                "sweep_points_planned": as_number(metrics.get(f"{key}.sweep_points_planned")),
+                "sweep_stop_reason": metrics.get(f"{key}.sweep_stop_reason") or "",
+                "task_set": params.get("task_set"),
+                "passed_cases_per_hour": as_number(metrics.get(f"{key}.passed_cases_per_hour")),
+                "accuracy": as_number(metrics.get(f"{key}.accuracy")),
+                "ttft_ms": as_number(metrics.get(f"{key}.ttft_{ttft_percentile}_ms")),
+                "passed": report.get("passed"),
+            })
+            continue
         out.append({
             "key": key,
             "kind": "replay" if replay else "sweep",

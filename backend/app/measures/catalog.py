@@ -436,6 +436,23 @@ MEASURES: tuple[Measure, ...] = (
         "Share of a task's questions answered correctly.",
         qualifier="task",
     ),
+    _m("passed_cases_per_hour", "Passed BFCL cases/hour", "cases/h", "higher", THROUGHPUT,
+       "Officially passed cases per hour of generation time, excluding grading."),
+    _m("case_count", "BFCL cases", "cases", None, WORKLOAD, "Number of evaluated BFCL cases."),
+    *(_m(key, label, "", "higher", WORKLOAD, meaning) for key, label, meaning in (
+        ("ttft_coverage", "TTFT coverage", "Share of requests with a measured first token."),
+        ("input_usage_coverage", "Input usage coverage", "Share with input-token usage."),
+        ("output_usage_coverage", "Output usage coverage", "Share with output-token usage."),
+        ("cache_usage_coverage", "Cache usage coverage", "Share with cache-token usage."),
+    )),
+    *(_m(key, label, "", None, WORKLOAD, meaning) for key, label, meaning in (
+        ("active_cases_peak", "Peak active cases", "Peak concurrent BFCL cases."),
+        ("active_http_peak", "Peak HTTP calls", "Peak concurrent BFCL HTTP attempts."),
+        ("http_attempt_count", "HTTP attempts", "HTTP attempts, including retries."),
+        ("request_error_count", "Request errors", "Failed HTTP attempts."),
+        ("retry_count", "Retries", "Retried HTTP attempts."),
+        ("infra_error_count", "Infrastructure errors", "BFCL infrastructure errors."),
+    )),
     # -- the benchmark's own verdict ------------------------------------------
     _m(
         "score",
