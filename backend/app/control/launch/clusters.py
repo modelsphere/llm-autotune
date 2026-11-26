@@ -46,6 +46,8 @@ _OVERRIDABLE: tuple[str, ...] = (
     "k8s_endpoint",
     "k8s_image_mirror",
     "k8s_site_values",
+    "k8s_scheduler_name",
+    "k8s_gpu_request_resource",
     "k8s_cr_group",
     "k8s_cr_version",
     "k8s_cr_kind",
@@ -88,6 +90,8 @@ _ROW_MAP: dict[str, str] = {
     "endpoint": "k8s_endpoint",
     "image_mirror": "k8s_image_mirror",
     "site_values": "k8s_site_values",
+    "scheduler_name": "k8s_scheduler_name",
+    "gpu_request_resource": "k8s_gpu_request_resource",
     "node_host": "k8s_node_host",
     "gpu_resource": "k8s_gpu_resource",
     "gpu_product_label": "k8s_gpu_product_label",
@@ -141,6 +145,8 @@ class K8sClusterSettings:
     k8s_endpoint: str = "dns"
     k8s_image_mirror: str = ""
     k8s_site_values: str = ""
+    k8s_scheduler_name: str = ""
+    k8s_gpu_request_resource: str = ""
     k8s_cr_group: str = "tuning.modelsphere.dev"
     k8s_cr_version: str = "v1alpha1"
     k8s_cr_kind: str = "TuningRun"

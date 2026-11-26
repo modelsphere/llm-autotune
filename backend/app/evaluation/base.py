@@ -35,6 +35,9 @@ class EvalOutcome:
     metrics: dict[str, Any] = field(default_factory=dict)
     raw: dict[str, Any] = field(default_factory=dict)
     error: str = ""
+    # While RUNNING: what is measured so far ({"modules": [...], "metrics":
+    # {...}}), for an evaluator that can tell. Empty otherwise.
+    progress: dict[str, Any] = field(default_factory=dict)
 
 
 class Evaluator(ABC):

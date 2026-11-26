@@ -163,3 +163,26 @@ def test_a_campaigns_node_names_reach_the_launch():
     supervisor.driver.launch = lambda spec: (seen.append(spec.allowed_nodes), real(spec))[1]
     supervisor.tick()
     assert seen == [["gpu-node-c"]]
+
+
+def test_each_node_says_how_many_of_the_requested_cards_it_offers():
+    # A node can hold the weights and none of the cards a run asks for: the
+    # cards of this pool are handed out under two names, one per node.
+    class TwoPlugins(PoolApi):
+        def list(self, resource, label_selector=""):
+            if resource != "nodes":
+                return super().list(resource, label_selector)
+            a, b = _node("gpu-node-a"), _node("gpu-node-b")
+            a["status"]["allocatable"] = {"huawei.com/npu": "8", "huawei.com/Ascend910B4-1": "8"}
+            b["status"]["allocatable"] = {"huawei.com/npu": "8", "volcano.sh/Ascend910B4-1": "8"}
+            return [a, b]
+
+    from app.control.launch.llmservice import LLMServiceDriver
+
+    settings = _settings(
+        k8s_gpu_resource="huawei.com/npu", k8s_gpu_request_resource="volcano.sh/Ascend910B4-1"
+    )
+    driver = LLMServiceDriver(api=TwoPlugins(have={"gpu-node-a"}), settings=settings)
+    found = driver.model_presence(POOL, image=ENGINE, model_path=MODEL, timeout=5)
+    assert {r["node"]: (r["present"], r["cards"]) for r in found} == {
+        "gpu-node-a": (True, 0), "gpu-node-b": (False, 8)}

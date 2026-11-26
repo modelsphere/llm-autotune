@@ -354,3 +354,22 @@ def test_mirror_and_service_names():
     lws = Recipe(values={"lws": {"enabled": True}})
     assert service_name(lws, "autotune-run-3") == "autotune-run-3-leader"
     assert service_name(Recipe(values={"pd": {"enabled": True}}), "r") == "r"
+
+
+def test_a_card_count_belongs_in_one_place():
+    recipe = from_fields(
+        engine="vllm",
+        image="x/y:1",
+        served_model_name="m",
+        engine_args={"tensor_parallel_size": 2},
+    )
+    assert recipe.gpus == 2
+    recipe.values["resources"] = {"limits": {"nvidia.com/gpu": "2"}}
+    assert any("model.gpus already requests" in p["message"] for p in recipe_problems(recipe))
+    # Another accelerator's name beside model.gpus renders, and requests both.
+    recipe.values["resources"] = {"limits": {"huawei.com/Ascend910B4-1": "2", "cpu": "16"}}
+    assert recipe_problems(recipe) == []
+    assert any("requests both" in w for w in recipe_warnings(recipe))
+    # Named as the recipe's own resource, it is the count written twice again.
+    recipe.values["model"]["gpuResource"] = "huawei.com/Ascend910B4-1"
+    assert any("model.gpus already requests" in p["message"] for p in recipe_problems(recipe))

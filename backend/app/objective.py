@@ -75,6 +75,32 @@ def target_metric(objective: dict | None) -> str:
     return (objective or {}).get("target_metric") or DEFAULT_TARGET
 
 
+# What a timed replay (1x load, app/evaluation/benchmark_spec.py schedule
+# "timed") measures: latency as users saw it, and the equivalent throughput
+# (the traffic a config would serve behind a least-connections balancer, from
+# its latency at each concurrency weighted by production's time there; see
+# LLMBench's docs/replay-datasets.md, "Equivalent throughput"). The schedule
+# sets the run's own TPM, so the flat throughput keys are empty. An objective
+# ranking on one of these needs a timed replay: its baseline is measured
+# twice, and the difference between the two is the noise a gain must clear
+# (app/evaluation/ranking.py).
+TIMED_LATENCY_KEYS = ("e2e_p50_ms", "e2e_p90_ms", "e2e_mean_ms",
+                      "session_time_p50_s", "session_time_mean_s")
+TIMED_THROUGHPUT_KEYS = ("equivalent_tpm",)
+TIMED_KEYS = TIMED_LATENCY_KEYS + TIMED_THROUGHPUT_KEYS
+
+
+def is_timed(objective: dict | None) -> bool:
+    """The objective ranks on a metric only a timed replay reports."""
+    return target_metric(objective).rsplit(".", 1)[-1] in TIMED_KEYS
+
+
+def baseline_repeats(objective: dict | None) -> int:
+    """How many times a stage measures production: twice for a timed replay,
+    so the repeat difference sets its noise floor; once otherwise."""
+    return 2 if is_timed(objective) else 1
+
+
 def redlines(objective: dict | None) -> list[dict]:
     """The declared redlines. Campaigns created before the rename carry them
     under "constraints"; a night that already ran must still rank the way it

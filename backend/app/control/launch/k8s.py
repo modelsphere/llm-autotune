@@ -1053,6 +1053,29 @@ class K8sDriver(DeploymentDriver):
     def logs(self, handle: DeploymentHandle, tail: int = 200) -> str:
         return self.api.logs(self._run_selector(handle), tail=tail)
 
+    # The engine's container in a run's pod, by the name the charts and our
+    # own Deployment give it; else the pod's first.
+    _ENGINE_CONTAINER_NAMES = ("sglang", "vllm", "engine")
+
+    def exec_in(self, handle: DeploymentHandle, command: str, timeout: int) -> tuple[int, str]:
+        pods = [
+            p for p in self.api.list("pods", self._run_selector(handle))
+            if (p.get("status") or {}).get("phase") == "Running"
+        ]
+        if not pods:
+            raise RuntimeError(f"no running pod for {handle.container_name}")
+        # A gang's leader is rank 0; it sorts first by name.
+        pod = sorted(pods, key=lambda p: p["metadata"]["name"])[0]
+        names = [c.get("name", "") for c in (pod.get("spec") or {}).get("containers") or []]
+        first = names[0] if names else ""
+        container = next((n for n in names if n in self._ENGINE_CONTAINER_NAMES), first)
+        try:
+            return self.api.exec(
+                pod["metadata"]["name"], container, ["sh", "-c", command], timeout
+            )
+        except K8sError as exc:
+            raise RuntimeError(str(exc)) from exc
+
     def teardown(self, handle: DeploymentHandle) -> None:
         # Idempotent by contract; the transport treats NotFound as success.
         if handle.workload:
@@ -1239,16 +1262,14 @@ class K8sDriver(DeploymentDriver):
                     f"is a node of this machine ({selector or 'any node'}); the pod can "
                     "never be scheduled",
                 )
-        want = _pod_gpu_request(pod, self.settings.k8s_gpu_resource)
+        resource = self.card_request_resource()
+        want = _pod_gpu_request(pod, resource)
         if want > 0 and nodes:
-            biggest = max(
-                (_node_gpu_count(node, self.settings.k8s_gpu_resource) for node in nodes),
-                default=0,
-            )
+            biggest = max((_node_gpu_count(node, resource) for node in nodes), default=0)
             if want > biggest:
                 return (
                     "unplaceable",
-                    f"pod asks for {want} x {self.settings.k8s_gpu_resource} but the "
+                    f"pod asks for {want} x {resource} but the "
                     f"largest node matching {selector or 'this cluster'} has {biggest} "
                     "allocatable; no amount of waiting fits it",
                 )
@@ -1919,7 +1940,8 @@ class K8sDriver(DeploymentDriver):
         nodes, node = self._smoke_nodes(api, machine)
         checks.append(pf.Check("node", "Node", node["status"], node["detail"]))
         if widest_candidate_cards and nodes:
-            biggest = max(_node_gpu_count(n, self.settings.k8s_gpu_resource) for n in nodes)
+            resource = self.card_request_resource()
+            biggest = max(_node_gpu_count(n, resource) for n in nodes)
             if widest_candidate_cards > biggest:
                 checks.append(pf.Check(
                     "gpus", "GPUs", pf.FAIL,
@@ -1968,6 +1990,10 @@ class K8sDriver(DeploymentDriver):
             except Exception:  # noqa: BLE001 — labelled; it reaps itself after 600 s
                 logger.warning("could not delete vocabulary job %s", name)
 
+    def card_request_resource(self) -> str:
+        """The extended resource a run's pods ask their cards under."""
+        return self.settings.k8s_gpu_resource
+
     def model_presence(
         self,
         machine: MachineInfo,
@@ -1993,8 +2019,13 @@ class K8sDriver(DeploymentDriver):
             return unknown("no node selector set, so the machine's nodes are unknown")
         try:
             api = self.api
-            names = [_node_name(n) for n in api.list("nodes", label_selector=selector)
-                     if _node_takes_pods(n, self.settings)]
+            listed = [n for n in api.list("nodes", label_selector=selector)
+                      if _node_takes_pods(n, self.settings)]
+            names = [_node_name(n) for n in listed]
+            # What each node offers of the resource a run's pods ask for: a
+            # node can hold the weights and none of the cards.
+            resource = self.card_request_resource()
+            cards = {_node_name(n): _node_gpu_count(n, resource) for n in listed}
         except Exception as exc:  # noqa: BLE001 — a probe reports, never raises
             return unknown(f"could not read the machine's nodes: {str(exc)[:300]}")
         if not names:
@@ -2037,6 +2068,7 @@ class K8sDriver(DeploymentDriver):
                     "node": node,
                     "present": {pf.PASS: True, pf.FAIL: False}.get(check.status),
                     "detail": check.detail,
+                    "cards": cards.get(node),
                 }
         except Exception as exc:  # noqa: BLE001
             return unknown(f"could not probe the nodes: {str(exc)[:300]}")
@@ -2048,7 +2080,7 @@ class K8sDriver(DeploymentDriver):
                     logger.warning("could not delete weights probe job %s", name)
         if shared:
             only = found[targets[0]]
-            return [{**only, "node": node} for node in names]
+            return [{**only, "node": node, "cards": cards.get(node)} for node in names]
         return [found[node] for node in names]
 
     def _probe_job(

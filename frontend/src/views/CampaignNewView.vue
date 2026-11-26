@@ -35,9 +35,12 @@ import { campaignFromYaml, campaignToYaml } from '../utils/campaignYaml'
 import { rememberValues, withPlatformValues } from '../utils/recent'
 import { absoluteTime } from '../utils/time'
 import { sweptKeysOf } from '../utils/space'
-import { defaultBFCL, defaultWorkload, specOf, type BenchmarkChoice, type Workload } from '../utils/workload'
+import { defaultBFCL, defaultWorkload, isTimed, isTimedLatency, specOf, type BenchmarkChoice, type Workload } from '../utils/workload'
 import { fromYaml, toYaml, YamlError } from '../utils/yaml'
 import { all } from '../utils/load'
+import { useFlash } from '../utils/flash'
+import { metricOptions, specFor } from '../utils/measures'
+import type { MetricSpec } from '../api/client'
 import { useI18n } from '../i18n'
 
 const { t } = useI18n()
@@ -71,6 +74,9 @@ const policies = ref<Policy[]>([])
 const forbiddenDefault = ref<string[]>([])
 const selectedSpaceId = ref<number | null>(null)
 const selectedObjectiveId = ref<number | null>(null)
+/** Labels for metric keys, and the platform's default throughput target. */
+const metricSpecs = ref<MetricSpec[]>([])
+const defaultTarget = ref('')
 const verifyObjectiveId = ref<number | null>(null)
 // The settings most campaigns never touch, one disclosure per step, collapsed
 // until opened. Separate lists: an el-collapse replaces its whole v-model, so a
@@ -348,6 +354,66 @@ watch(verifyModule, () => {
   verifyObjectiveId.value = null
 })
 
+/** An Original load (timed) replay reports latency and the equivalent
+ *  throughput, not the run's own throughput (production's timing sets that):
+ *  rank it by one of those, and a Fixed load replay by throughput. Whatever
+ *  moves the objective for the user flashes it. */
+const objectiveFlash = useFlash()
+function pickObjective(kind: 'latency' | 'throughput') {
+  const fits = screenObjectives.value.filter((o) => kind === 'latency'
+    ? isTimedLatency(o.target_metric) : !isTimed(o.target_metric))
+  const pick = kind === 'throughput'
+    ? fits.find((o) => o.is_builtin && o.target_metric === defaultTarget.value)
+      ?? fits.find((o) => o.is_builtin) ?? fits[0]
+    : fits.find((o) => o.is_builtin) ?? fits[0]
+  if (pick) selectedObjectiveId.value = pick.id
+}
+function onRecommend(kind: 'latency' | 'throughput') {
+  pickObjective(kind)
+  objectiveFlash.fire()
+}
+watch(() => workload.value.schedule, (schedule) => {
+  const current = selectedObjective.value?.target_metric ?? ''
+  if (!current || workload.value.mode !== 'replay') return
+  const timed = schedule === 'timed'
+  if (timed === isTimed(current)) return
+  pickObjective(timed ? 'latency' : 'throughput')
+  objectiveFlash.fire()
+})
+const objectiveKind = computed<'latency' | 'throughput' | ''>(() => {
+  const target = selectedObjective.value?.target_metric
+  return !target ? '' : isTimedLatency(target) ? 'latency' : 'throughput'
+})
+/** The objectives this replay mode can score: the timed ones (latency,
+ *  equivalent throughput) for Original load, the rest for Fixed load — plus the chosen one, whatever it is, so the
+ *  picker never shows a bare id. Built-ins first. */
+const pickableObjectives = computed(() => {
+  const timed = workload.value.mode === 'replay' && workload.value.schedule === 'timed'
+  const replay = workload.value.mode === 'replay'
+  const list = screenObjectives.value.filter((o) =>
+    !replay || isTimed(o.target_metric) === timed || o.id === selectedObjectiveId.value)
+  return [
+    { label: t('campaignNew.builtin'), items: list.filter((o) => o.is_builtin) },
+    { label: t('campaignNew.yours'), items: list.filter((o) => !o.is_builtin) },
+  ].filter((g) => g.items.length)
+})
+function metricName(key: string): string {
+  return specFor(key, metricSpecs.value)?.label ?? key
+}
+function objectiveLine(o: Objective): string {
+  return `${o.direction === 'minimize' ? '↓' : '↑'} ${metricName(o.target_metric)}`
+}
+/** The objective names a metric a closed replay does not report, or a
+ *  throughput a timed one leaves empty. */
+const scheduleMismatch = computed(() => {
+  const target = selectedObjective.value?.target_metric ?? ''
+  if (!target || workload.value.mode !== 'replay') return ''
+  const timed = workload.value.schedule === 'timed'
+  if (timed && !isTimed(target)) return t('campaignNew.timedNeedsLatency')
+  if (!timed && isTimed(target)) return t('campaignNew.latencyNeedsTimed')
+  return ''
+})
+
 /** The rolling dataset this campaign replays, so it is pinned for its life:
  *  a described replay names it; an existing benchmark may resolve one. */
 function replaysOf(w: Workload): string {
@@ -366,8 +432,9 @@ function describeWorkload(w: Workload): string {
     return t('campaignNew.describe.sweep', { in: w.input_tokens, out: w.output_tokens, c: w.concurrencies })
   }
   if (w.mode === 'replay') {
-    return w.dataset_frozen ? t('campaignNew.describe.frozen', { name: w.dataset_frozen })
+    const what = w.dataset_frozen ? t('campaignNew.describe.frozen', { name: w.dataset_frozen })
       : t('campaignNew.describe.replay', { name: w.dataset_profile || t('campaignNew.describe.example') })
+    return w.schedule === 'timed' ? `${what} · ${t('campaignNew.describe.timed')}` : what
   }
   return w.slug.trim() || t('campaignNew.describe.default')
 }
@@ -653,7 +720,10 @@ async function loadDatasetProfiles() {
 async function selectDefaultObjective() {
   let preferred = ''
   try {
-    preferred = (await api.get('/objectives/metrics')).data.default_target_metric
+    const { data } = await api.get('/objectives/metrics')
+    preferred = data.default_target_metric
+    defaultTarget.value = preferred
+    metricSpecs.value = metricOptions(data)
   } catch {
     /* fall through to the platform default, then the first objective */
   }
@@ -1449,7 +1519,8 @@ onMounted(async () => {
               </template>
               <WorkloadPicker :target-metric="selectedObjective?.target_metric" v-model="workload" v-model:rebuild="rebuildAtStart"
                 :profiles="datasetProfiles" :frozen="frozenDatasets" :benchmarks="benchmarks"
-                @module="(m) => (screenModule = m)" @datasets-changed="loadDatasetProfiles" />
+                @module="(m) => (screenModule = m)" @datasets-changed="loadDatasetProfiles"
+                :objective-kind="objectiveKind" @recommend="onRecommend" />
             </el-form-item>
 
             <el-form-item>
@@ -1460,32 +1531,39 @@ onMounted(async () => {
                   @click="openBuilder('/objectives')">{{ t('campaignNew.build') }}</el-button>
                 <el-button link class="label-link" @click="refreshLists">{{ t('common.refresh') }}</el-button>
               </template>
-              <el-select v-model="selectedObjectiveId" filterable style="width: 100%"
-                :placeholder="t('campaignNew.pickObjective')">
-                <el-option v-for="o in screenObjectives" :key="o.id" :value="o.id" :label="o.name">
-                  <span>{{ o.name }}</span>
-                  <span class="muted opt-help">{{ o.direction }} {{ o.target_metric }}</span>
-                </el-option>
-              </el-select>
-              <div v-if="selectedObjective" class="goal-box">
-                <div class="goal-line">
-                  <span class="muted tiny lead-in">{{ t('campaignNew.rankBy') }}</span>
-                  <b>{{ selectedObjective.direction }}</b>
-                  <span class="mono">{{ selectedObjective.target_metric }}</span>
+              <div class="objective">
+                <div class="flash-wrap" :class="{ flash: objectiveFlash.on.value }">
+                  <el-select v-model="selectedObjectiveId" filterable style="width: 100%"
+                    :placeholder="t('campaignNew.pickObjective')">
+                    <el-option-group v-for="g in pickableObjectives" :key="g.label" :label="g.label">
+                      <el-option v-for="o in g.items" :key="o.id" :value="o.id" :label="o.name">
+                        <span>{{ o.name }}</span>
+                        <span class="muted opt-help">{{ objectiveLine(o) }}</span>
+                      </el-option>
+                    </el-option-group>
+                  </el-select>
                 </div>
-                <!-- "must hold", not "reject if": a redline is the condition a run
-                     has to SATISFY. -->
-                <div v-if="selectedObjective.redlines.length" class="goal-line">
-                  <span class="muted tiny lead-in">{{ t('campaignNew.mustHold') }}</span>
-                  <span v-for="(r, i) in selectedObjective.redlines" :key="i" class="mono chip">
-                    {{ r.metric }} {{ r.op }} {{ r.value }}
-                  </span>
-                </div>
-                <div v-else class="muted tiny">{{ t('campaignNew.noRedlines') }}</div>
+                <dl v-if="selectedObjective" class="goal">
+                  <dt>{{ t('campaignNew.rankBy') }}</dt>
+                  <dd>
+                    <b>{{ t(selectedObjective.direction === 'minimize' ? 'campaignNew.lowest' : 'campaignNew.highest') }}</b>
+                    {{ metricName(selectedObjective.target_metric) }}
+                    <span class="mono key">{{ selectedObjective.target_metric }}</span>
+                  </dd>
+                  <dt>{{ t('campaignNew.mustHold') }}</dt>
+                  <!-- "must hold", not "reject if": a redline is the condition a
+                       run has to SATISFY. -->
+                  <dd v-if="selectedObjective.redlines.length" class="holds">
+                    <span v-for="(r, i) in selectedObjective.redlines" :key="i" class="hold"
+                      :title="r.metric">{{ metricName(r.metric) }} {{ r.op.replace('<=', '≤').replace('>=', '≥') }} {{ r.value }}</span>
+                  </dd>
+                  <dd v-else class="muted">{{ t('campaignNew.noRedlines') }}</dd>
+                </dl>
               </div>
               <div v-if="objectiveMismatch" class="stage-warn">
                 {{ t('campaignNew.mismatch') }} <b>{{ selectedObjective?.target_metric }}</b>.
               </div>
+              <div v-else-if="scheduleMismatch" class="stage-warn">{{ scheduleMismatch }}</div>
             </el-form-item>
 
             <el-form-item>
@@ -1851,6 +1929,60 @@ onMounted(async () => {
   margin-left: 12px;
   font-size: 12px;
   font-weight: 400;
+}
+.objective {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.flash-wrap {
+  border-radius: 6px;
+}
+.flash {
+  animation: changed 0.8s ease-out 2;
+}
+@keyframes changed {
+  0% { box-shadow: 0 0 0 0 var(--el-color-primary-light-5); }
+  35% { box-shadow: 0 0 0 5px var(--el-color-primary-light-5); }
+  100% { box-shadow: 0 0 0 0 transparent; }
+}
+.goal {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 4px 14px;
+  margin: 0;
+  padding: 10px 14px;
+  background: var(--autotune-bg);
+  border: 1px solid var(--autotune-border);
+  border-radius: 6px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.goal dt {
+  color: var(--autotune-muted);
+  font-size: 12px;
+}
+.goal dd {
+  margin: 0;
+  color: var(--autotune-text);
+}
+.goal .key {
+  margin-left: 6px;
+  font-size: 11.5px;
+  color: var(--autotune-muted);
+}
+.goal .holds {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.hold {
+  padding: 0 8px;
+  border-radius: 10px;
+  background: #fff;
+  border: 1px solid var(--autotune-border);
+  font-size: 12px;
 }
 .goal-box {
   background: var(--autotune-bg);

@@ -14,13 +14,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.control.launch import MachineInfo, get_driver
 from app.control.launch.base import DeploymentHandle
-from app.control.orchestrator.policy_lifecycle import deadlines
+from app.control.orchestrator.lifecycle import as_utc
+from app.control.orchestrator.policy_lifecycle import deadlines, token_expiry
 from app.control.orchestrator.policy_session import policy_log_path
 from app.control.search.coverage import space_coverage
-from app.core.auth import get_current_user
+from app.core import apikeys
+from app.core.auth import Principal, get_current_user, get_principal
 from app.core.config import get_settings
 from app.db.base import get_async_session
 from app.db.models import (
+    TERMINAL_SESSION_STATES,
+    ApiKey,
     Campaign,
     Event,
     LlmEndpoint,
@@ -38,6 +42,7 @@ from app.schemas.policy import (
     PolicyOut,
     SessionDetailOut,
     SessionOut,
+    SessionTokenOut,
     SpaceCoverage,
     TrialOut,
 )
@@ -50,7 +55,7 @@ router = APIRouter(tags=["policies"])
 
 @router.get("/policies", response_model=list[PolicyOut])
 async def list_policies(
-    _user: User = Depends(get_current_user),
+    _principal: Principal = Depends(get_principal),
     db: AsyncSession = Depends(get_async_session),
 ):
     rows = (await db.execute(select(Policy).order_by(Policy.name))).scalars().all()
@@ -76,9 +81,11 @@ async def _check_endpoint(db: AsyncSession, endpoint_id: int | None) -> None:
 @router.post("/policies", response_model=PolicyOut, status_code=status.HTTP_201_CREATED)
 async def create_policy(
     body: PolicyIn,
-    user: User = Depends(get_current_user),
+    principal: Principal = Depends(get_principal),
     db: AsyncSession = Depends(get_async_session),
 ):
+    # A service key may register one too, as the install guide does.
+    user = principal.user
     existing = (
         await db.execute(select(Policy).where(Policy.name == body.name))
     ).scalar_one_or_none()
@@ -162,6 +169,94 @@ async def campaign_sessions(
         .all()
     )
     return [SessionOut.model_validate(row) for row in rows]
+
+
+@router.post(
+    "/campaigns/{campaign_id}/session-token",
+    response_model=SessionTokenOut,
+    summary="The token of an external policy's live session",
+)
+async def session_token(
+    campaign_id: int,
+    principal: Principal = Depends(get_principal),
+    db: AsyncSession = Depends(get_async_session),
+):
+    """Issue the credential an external policy speaks the policy API with.
+
+    A policy the platform runs is handed its token in its container's
+    environment. An external one (`Policy.external`) runs elsewhere, so the
+    campaign's owner asks for the token here, once the session has its
+    machine. The token is shown this once and never stored; asking again
+    issues a new one and ends the one before, so a policy that lost its
+    token gets back in and a leaked one is closed by the same call.
+    """
+    user = principal.user
+    campaign = await db.get(Campaign, campaign_id)
+    if campaign is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "No such campaign")
+    if campaign.owner_id != user.id and user.role != "admin":
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN, "only the campaign's owner or an admin can ask"
+        )
+    policy = await db.get(Policy, campaign.policy_id) if campaign.policy_id else None
+    if policy is None or not policy.external:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "this campaign's policy is not external: the platform runs it and "
+            "gives its container the token",
+        )
+    session = (
+        await db.execute(
+            select(PolicySession)
+            .where(
+                PolicySession.campaign_id == campaign.id,
+                PolicySession.status.not_in([s.value for s in TERMINAL_SESSION_STATES]),
+            )
+            .order_by(PolicySession.id.desc())
+        )
+    ).scalars().first()
+    if session is None:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "no live session: the campaign is not running, or its window has not opened",
+        )
+    if session.machine_id is None or session.status == PolicySessionStatus.PENDING.value:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"session {session.id} is waiting for a machine; ask again once it has one",
+        )
+    machine = await db.get(Machine, session.machine_id)
+    moment = datetime.now(UTC)
+    for key in (
+        await db.execute(select(ApiKey).where(ApiKey.policy_session_id == session.id))
+    ).scalars():
+        expires = as_utc(key.expires_at)
+        if expires is None or expires > moment:
+            key.expires_at = moment
+    settings = get_settings()
+    token, prefix, key_hash = apikeys.mint()
+    expires_at = token_expiry(deadlines(campaign, machine)[1], settings)
+    db.add(
+        ApiKey(
+            name=f"policy-session-{session.id}",
+            prefix=prefix,
+            key_hash=key_hash,
+            owner_id=campaign.owner_id,
+            policy_session_id=session.id,
+            expires_at=expires_at,
+        )
+    )
+    db.add(
+        Event(
+            actor=principal.actor, kind="policy_session_token_issued",
+            campaign_id=campaign.id, payload={"session_id": session.id},
+        )
+    )
+    await db.commit()
+    return SessionTokenOut(
+        session_id=session.id, token=token, expires_at=expires_at,
+        api_url=settings.public_api_url or "",
+    )
 
 
 @router.get("/policy-sessions/{session_id}", response_model=SessionDetailOut)

@@ -330,3 +330,22 @@ async def test_a_chart_repo_llm_operator_would_refuse_is_refused(client):
     for repo in ("https://charts.example.com", "oci://registry.example/charts", ""):
         assert (await client.post("/api/clusters", json={**body, "name": f"ok{len(repo)}",
                                                          "chart_repo": repo})).status_code == 201
+
+
+async def test_the_scheduler_and_card_request_name_round_trip(client):
+    created = await _add(client)
+    assert created["scheduler_name"] == "" and created["gpu_request_resource"] == ""
+    body = {
+        "name": "gpu-cluster-a", "kubeconfig": "", "namespace": "gpu-test",
+        "workload_kind": "llmservice", "gpu_resource": "huawei.com/npu",
+        "scheduler_name": "volcano", "gpu_request_resource": "volcano.sh/Ascend910B4-1",
+    }
+    edited = (await client.put(f"/api/clusters/{created['id']}", json=body)).json()
+    assert edited["scheduler_name"] == "volcano"
+    assert edited["gpu_request_resource"] == "volcano.sh/Ascend910B4-1"
+
+    # And both are among what a cluster's row sets for its driver.
+    from app.control.launch.clusters import _ROW_MAP
+
+    assert _ROW_MAP["scheduler_name"] == "k8s_scheduler_name"
+    assert _ROW_MAP["gpu_request_resource"] == "k8s_gpu_request_resource"

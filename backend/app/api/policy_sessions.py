@@ -23,6 +23,7 @@ import re
 from datetime import UTC, datetime
 from typing import Any
 
+import anyio
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response, status
 from fastapi.responses import PlainTextResponse
 from sqlalchemy import func, select
@@ -36,6 +37,8 @@ from app.control.engines import vocabulary as vocab_mod
 from app.control.engines.base import render_args
 from app.control.engines.env_keys import env_problems, is_env_key, split_env
 from app.control.engines.flags import known_flags, normalize_args
+from app.control.launch import MachineInfo, get_driver
+from app.control.launch.base import DeploymentHandle
 from app.control.launch.clusters import resolve_cluster
 from app.control.orchestrator.policy_lifecycle import (
     PENDING_CONTENDER_STATES,
@@ -51,8 +54,10 @@ from app.control.recipe.address import parse as parse_address
 from app.control.recipe.campaign import (
     base_recipe,
     config_cards,
+    config_hash,
     config_pod_cards,
     recipe_for,
+    run_recipe,
     split_flat,
 )
 from app.control.recipe.check import config_problems as recipe_config_problems
@@ -89,6 +94,8 @@ from app.db.models import (
     RunKind,
     RunStatus,
 )
+from app.evaluation.benchmark_spec import BenchmarkSpec, ensure_spec
+from app.evaluation.benchmarks import BenchmarkRefused
 from app.hardware import is_node_pool
 from app.measures import reader_for, scenarios_out
 from app.measures.catalog import catalogue as measure_catalogue
@@ -108,6 +115,8 @@ from app.schemas.policy import (
     ContendersEcho,
     ContendersPut,
     DigestIn,
+    ExecIn,
+    ExecOut,
     ExternalBenchmarkIn,
     HeartbeatIn,
     HeartbeatOut,
@@ -124,6 +133,7 @@ from app.schemas.policy import (
     ManifestProduction,
     ManifestServices,
     ManifestTime,
+    ModuleProgress,
     PlanIn,
     PolicyEventIn,
     ScenarioMeasures,
@@ -132,8 +142,9 @@ from app.schemas.policy import (
     TrialIn,
     TrialOut,
     VocabularyOut,
+    launch_files,
 )
-from app.staging import SCREEN, VERIFY
+from app.staging import PROBE, SCREEN, VERIFY, is_probe, stage_of
 from app.staging import objective as stage_objective
 
 logger = logging.getLogger(__name__)
@@ -200,13 +211,16 @@ async def _model_config(db: AsyncSession, campaign: Campaign) -> ModelConfig | N
     ).scalar_one_or_none()
 
 
-async def _vocabulary(db: AsyncSession, campaign: Campaign) -> vocab_mod.Vocabulary | None:
-    """The newest usable vocabulary dumped from the campaign's image."""
+async def _vocabulary(
+    db: AsyncSession, campaign: Campaign, image: str = ""
+) -> vocab_mod.Vocabulary | None:
+    """The newest usable vocabulary dumped from the campaign's image, or from
+    `image` (1.9: one of the campaign's other images)."""
     row = (
         await db.execute(
             select(EngineVocabulary)
             .where(
-                EngineVocabulary.image == campaign.image,
+                EngineVocabulary.image == (image or campaign.image),
                 EngineVocabulary.engine == campaign.engine,
                 EngineVocabulary.status != "failed",
             )
@@ -377,12 +391,13 @@ async def _validated_or_audit(
     config: dict[str, Any],
     campaign: Campaign,
     machine: Machine | None,
+    image: str = "",
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     """`_validated`, with a refusal kept in the campaign's activity log: a
     refused config never becomes a trial, so without this the only trace of
     what a policy tried and was told no is the policy's own log."""
     try:
-        return _validated(config, campaign, machine, await _vocabulary(db, campaign))
+        return _validated(config, campaign, machine, await _vocabulary(db, campaign, image))
     except HTTPException as exc:
         _audit(
             db, caller, "policy_config_refused",
@@ -459,14 +474,14 @@ def _free_cards(session: PolicySession, live: list[Run], needed: int) -> list[in
     if needed > len(allowed):
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
-            f"the recipe uses {needed} card(s) but this session holds {len(allowed)}",
+            f"the launch uses {needed} card(s) but this session holds {len(allowed)}",
         )
     busy = {i for r in live for i in (r.gpu_indices or [])}
     free = [i for i in allowed if i not in busy]
     if len(free) < needed:
         raise HTTPException(
             status.HTTP_429_TOO_MANY_REQUESTS,
-            f"the recipe uses {needed} card(s) and {len(free)} are free of your own runs "
+            f"the launch uses {needed} card(s) and {len(free)} are free of your own runs "
             "— release something or wait",
         )
     return free[:needed]
@@ -516,6 +531,64 @@ def _check_cards_and_port(
     )
 
 
+def campaign_image(campaign: Campaign) -> str:
+    """The image a campaign's launches run unless one names another: its
+    recipe's under a recipe, else its own."""
+    stored = base_recipe(campaign)
+    return stored.image if stored is not None else campaign.image
+
+
+def allowed_images(campaign: Campaign) -> list[str]:
+    """(1.9) The images a policy's launch may name: the campaign's own, and
+    its `policy_settings.images`. Same engine, same configuration; only the
+    image changes."""
+    listed = (campaign.policy_settings or {}).get("images") or []
+    extra = [str(i) for i in listed if str(i).strip()]
+    return list(dict.fromkeys([campaign_image(campaign), *extra]))
+
+
+def _launch_image(campaign: Campaign, asked: str) -> str:
+    """What a launch stores as its image: "" for the campaign's own, the
+    named one when the campaign allows it."""
+    asked = (asked or "").strip()
+    if not asked or asked == campaign_image(campaign):
+        return ""
+    allowed = allowed_images(campaign)
+    if asked not in allowed:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            f"image {asked!r} is not among the campaign's images: {', '.join(allowed)}",
+        )
+    return asked
+
+
+def _launch_files(campaign: Campaign, machine: Machine, files: dict[str, str]) -> dict[str, str]:
+    """(1.9) The files a launch mounts, when the campaign allows files, under
+    the paths it allows, on a driver that can mount them."""
+    if not files:
+        return {}
+    settings = campaign.policy_settings or {}
+    if not settings.get("files"):
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "this campaign allows no files in its launches (policy_settings.files)",
+        )
+    under = [str(p).rstrip("/") + "/" for p in settings.get("file_paths") or [] if str(p).strip()]
+    outside = [p for p in files if under and not any(p.startswith(u) for u in under)]
+    if outside:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            f"{', '.join(sorted(outside))}: not under the campaign's file paths "
+            f"({', '.join(u.rstrip('/') for u in under)})",
+        )
+    if not getattr(_engine_driver(machine), "mounts_files", False):
+        raise HTTPException(
+            status.HTTP_501_NOT_IMPLEMENTED,
+            f"machine {machine.name}'s launch driver cannot mount files into an engine",
+        )
+    return dict(files)
+
+
 async def _make_candidate(
     db: AsyncSession,
     campaign: Campaign,
@@ -539,7 +612,10 @@ async def _make_candidate(
 
 
 def _launch_out(
-    run: Run, candidate: Candidate | None = None, waiting_reason: str = ""
+    run: Run,
+    candidate: Candidate | None = None,
+    waiting_reason: str = "",
+    campaign: Campaign | None = None,
 ) -> LaunchOut:
     mapping = {
         RunStatus.PENDING.value: "queued",
@@ -559,9 +635,20 @@ def _launch_out(
     waiting = run.waiting_since is not None and state == "launching"
     if waiting:
         state = "queued"
+    # (1.10) What the launch runs, as one document: the campaign's recipe with
+    # the config and the launch's image applied, and its identity with files.
+    recipe = (
+        run_recipe(campaign, dict(candidate.config or {}), run.image or "")
+        if campaign is not None and candidate is not None
+        else None
+    )
     return LaunchOut(
         id=run.id,
         status=state,
+        gpu_indices=list(run.gpu_indices or []),
+        image=run.image or "",
+        tainted=bool(run.tainted),
+        files=launch_files(run.files),
         endpoint_url=run.endpoint_url or "",
         launch_command=run.launch_command or "",
         failure_class=run.failure_class or "",
@@ -570,6 +657,8 @@ def _launch_out(
         deviations=list((candidate.deviations if candidate else None) or []),
         waiting_reason=waiting_reason if waiting else "",
         waiting_since=run.waiting_since if waiting else None,
+        recipe=recipe.model_dump() if recipe is not None else {},
+        config_hash=config_hash(recipe, run.files) if recipe is not None else "",
     )
 
 
@@ -658,34 +747,41 @@ async def _benchmark_out(db: AsyncSession, run: Run, candidate: Candidate | None
         RunStatus.KILLED.value: "killed",
     }
     summary = None
-    metrics: dict[str, Any] = {}
+    # Until the result lands, what the benchmark has measured so far.
+    metrics: dict[str, Any] = dict((run.progress or {}).get("metrics") or {})
     measures: list[ScenarioMeasures] = []
     result = (
         await db.execute(
             select(Result)
-            .where(Result.run_id == run.id, Result.source == "llmbench")
+            .where(Result.run_id == run.id, Result.source.in_(("llmbench", PROBE)))
             .order_by(Result.id.desc())
         )
     ).scalars().first()
-    if result is not None:
+    if result is not None and result.source == "llmbench":
+        # A probe has no summary: nothing judged it.
         summary = BenchmarkSummary(
             objective_value=result.objective_value,
             feasible=bool(result.feasible),
             constraints=list(result.constraints or []),
             breaches=list(result.breaches or []),
         )
+    if result is not None:
         metrics = dict(result.metrics or {})
         try:
             campaign = await db.get(Campaign, run.campaign_id)
             measures = _measures_out(result, candidate, campaign)
         except Exception:
             logger.exception("could not read benchmark %s as measures", run.id)
-    from app.staging import stage_of
-
     return BenchmarkOut(
         id=run.id,
         status=mapping.get(run.status, run.status),
-        suite=VERIFY if candidate is not None and stage_of(candidate) == VERIFY else SCREEN,
+        suite=(
+            PROBE if is_probe(run)
+            else VERIFY if candidate is not None and stage_of(candidate) == VERIFY
+            else SCREEN
+        ),
+        benchmark_slug=run.benchmark_slug or "",
+        modules=_modules_of(run, result),
         summary=summary,
         metrics=metrics,
         measures=measures,
@@ -694,6 +790,18 @@ async def _benchmark_out(db: AsyncSession, run: Run, candidate: Candidate | None
         config=(candidate.config if candidate else {}),
         deviations=list((candidate.deviations if candidate else None) or []),
     )
+
+
+def _modules_of(run: Run, result: Result | None) -> list[ModuleProgress]:
+    """Each module run and its state: from the result once there is one,
+    from the last poll before that."""
+    if result is not None and result.raw:
+        from app.evaluation.llmbench import progress_of
+
+        listed = progress_of(result.raw).get("modules") or []
+    else:
+        listed = (run.progress or {}).get("modules") or []
+    return [ModuleProgress(**m) for m in listed if isinstance(m, dict) and m.get("key")]
 
 
 def _audit(
@@ -1017,10 +1125,15 @@ async def request_launch(
     existing = await _idempotent_run(db, session, idempotency_key)
     if existing is not None:
         await db.commit()
-        return _launch_out(existing, await db.get(Candidate, existing.candidate_id))
+        return _launch_out(
+            existing, await db.get(Candidate, existing.candidate_id), campaign=campaign
+        )
 
+    image = _launch_image(campaign, body.image)
+    # The campaign's own files, then the launch's over them, path by path.
+    files = {**(campaign.files or {}), **_launch_files(campaign, machine, dict(body.files or {}))}
     canonical, dev = await _validated_or_audit(
-        db, caller, dict(body.engine_args or {}), campaign, machine
+        db, caller, dict(body.engine_args or {}), campaign, machine, image
     )
     needed = config_cards(campaign, canonical)
     live = await _live_session_runs(db, session)
@@ -1029,7 +1142,11 @@ async def request_launch(
     # engine) gives the session none, and its launches ask for none whatever
     # the config's parallelism, the way a plain campaign runs there. Asking
     # for a card it does not hold is still refused, as outside the allocation.
-    if session.gpu_indices and needed != len(gpu_indices):
+    if session.gpu_indices and not gpu_indices:
+        # (1.8) No cards named: the platform takes the first free ones of the
+        # allocation, as many as the config uses.
+        gpu_indices = _free_cards(session, live, needed)
+    elif session.gpu_indices and needed != len(gpu_indices):
         if base_recipe(campaign) is None:
             raise HTTPException(
                 status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -1055,6 +1172,8 @@ async def request_launch(
         service_port=port,
         policy_session_id=session.id,
         idempotency_key=idempotency_key,
+        image=image,
+        files=files,
         # Stamp the clock at creation like the classic scheduler does, so every
         # run kind carries a start time and duration/timeline readers never see
         # a null on the policy paths.
@@ -1064,10 +1183,14 @@ async def request_launch(
     await db.flush()
     _audit(
         db, caller, "policy_launch_requested", run_id=run.id,
-        payload={"config": canonical, "gpus": gpu_indices, "port": port},
+        payload={
+            "config": canonical, "gpus": gpu_indices, "port": port,
+            "image": image or campaign_image(campaign),
+            "files": [f.model_dump() for f in launch_files(files)],
+        },
     )
     await db.commit()
-    return _launch_out(run, candidate)
+    return _launch_out(run, candidate, campaign=campaign)
 
 
 @router.get("/launches/{run_id}", response_model=LaunchOut)
@@ -1078,7 +1201,10 @@ async def launch_status(
 ):
     run = await _session_run(db, caller, run_id, RunKind.POLICY_LAUNCH.value)
     return _launch_out(
-        run, await db.get(Candidate, run.candidate_id), await _waiting_reason(db, run)
+        run,
+        await db.get(Candidate, run.candidate_id),
+        await _waiting_reason(db, run),
+        await db.get(Campaign, run.campaign_id),
     )
 
 
@@ -1095,7 +1221,11 @@ async def release_launch(
         run.release_requested_at = datetime.now(UTC)
         _audit(db, caller, "policy_release_requested", run_id=run.id)
     await db.commit()
-    return _launch_out(run, await db.get(Candidate, run.candidate_id))
+    return _launch_out(
+        run,
+        await db.get(Candidate, run.candidate_id),
+        campaign=await db.get(Campaign, run.campaign_id),
+    )
 
 
 async def _session_run(
@@ -1128,7 +1258,10 @@ async def bench_launch(
 ):
     session, campaign, machine = await _context(db, caller)
     _require_exploring(session, campaign, machine)
-    _require_known_suite(body.suite)
+    named = _allowed_slug(campaign, body.benchmark_slug)
+    is_probe = body.benchmark is not None or bool(named)
+    if not is_probe:
+        _require_known_suite(body.suite)
     _mark_activity(session)
     parent = await _session_run(db, caller, run_id, RunKind.POLICY_LAUNCH.value)
     if parent.status != RunStatus.SERVING.value:
@@ -1136,13 +1269,22 @@ async def bench_launch(
             status.HTTP_409_CONFLICT,
             f"launch {parent.id} is {parent.status}, not serving — wait for it",
         )
+    if parent.tainted and not is_probe:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"launch {parent.id} is tainted (a command ran in its engine): the "
+            "campaign's own benchmark is refused on it; relaunch its config, "
+            "or measure it with a probe",
+        )
     existing = await _idempotent_run(db, session, idempotency_key)
     if existing is not None:
         await db.commit()
         return await _benchmark_out(db, existing, await db.get(Candidate, existing.candidate_id))
+    probe = named or await _probe_slug(body.benchmark)
     run = Run(
         campaign_id=campaign.id,
         candidate_id=parent.candidate_id,  # same config, same ledger entry
+        benchmark_slug=probe,
         machine_id=session.machine_id,
         kind=RunKind.EXTERNAL.value,
         status=RunStatus.HEALTH_CHECK.value,
@@ -1156,7 +1298,10 @@ async def bench_launch(
     )
     db.add(run)
     await db.flush()
-    _audit(db, caller, "policy_bench_requested", run_id=run.id, payload={"of_launch": parent.id})
+    _audit(
+        db, caller, "policy_bench_requested", run_id=run.id,
+        payload={"of_launch": parent.id, **({"probe": probe} if probe else {})},
+    )
     await db.commit()
     return await _benchmark_out(db, run, await db.get(Candidate, run.candidate_id))
 
@@ -1170,7 +1315,8 @@ async def bench_external(
 ):
     session, campaign, machine = await _context(db, caller)
     _require_exploring(session, campaign, machine)
-    _require_known_suite(body.suite)
+    if body.benchmark is None:
+        _require_known_suite(body.suite)
     _mark_activity(session)
     if machine is None:
         raise HTTPException(status.HTTP_409_CONFLICT, "session has no machine")
@@ -1192,9 +1338,11 @@ async def bench_external(
     _require_self_serving_is_reachable(machine)
     canonical, dev = await _validated_or_audit(db, caller, body.engine_args, campaign, machine)
     candidate = await _make_candidate(db, campaign, canonical, dev)
+    probe = await _probe_slug(body.benchmark)
     run = Run(
         campaign_id=campaign.id,
         candidate_id=candidate.id,
+        benchmark_slug=probe,
         machine_id=session.machine_id,
         kind=RunKind.EXTERNAL.value,
         status=RunStatus.HEALTH_CHECK.value,
@@ -1211,7 +1359,8 @@ async def bench_external(
     await db.flush()
     _audit(
         db, caller, "policy_bench_requested", run_id=run.id,
-        payload={"endpoint": run.endpoint_url, "config": canonical},
+        payload={"endpoint": run.endpoint_url, "config": canonical,
+                 **({"probe": probe} if probe else {})},
     )
     await db.commit()
     return await _benchmark_out(db, run, candidate)
@@ -1245,6 +1394,45 @@ def _require_self_serving_is_reachable(machine) -> None:
             "outside its pod. Launch through POST /launches and benchmark it "
             "with POST /launches/{id}/benchmarks instead.",
         )
+
+
+async def _probe_slug(spec: BenchmarkSpec | None) -> str:
+    """The benchmark a policy's described workload runs on: created on LLMBench
+    and locked if it is new, found if it is not (the same description is the
+    same benchmark, whoever asks). "" when the request names a suite instead.
+
+    Asked here, before there is a run, so that a description LLMBench will not
+    take is the request's own 4xx and not a run that fails a minute later."""
+    if spec is None:
+        return ""
+    try:
+        ensured = await asyncio.to_thread(ensure_spec, spec)
+    except BenchmarkRefused as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status.HTTP_502_BAD_GATEWAY,
+            f"could not create the benchmark on the benchmark platform: {exc}",
+        ) from exc
+    return ensured.slug
+
+
+def _allowed_slug(campaign: Campaign, slug: str) -> str:
+    """(1.11) A probe's existing benchmark: one the campaign allows, or ""."""
+    slug = (slug or "").strip()
+    if not slug:
+        return ""
+    allowed = list(settings_of(campaign).benchmark_slugs)
+    if slug not in allowed:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            f"benchmark {slug!r} is not one this campaign allows a probe on"
+            + (f": {', '.join(allowed)}" if allowed
+               else " (policy_settings.benchmark_slugs is empty)"),
+        )
+    return slug
 
 
 def _require_known_suite(suite: str) -> None:
@@ -1299,7 +1487,7 @@ async def check_config(
     echo, the rendered command, catalog warnings, deviations — without
     spending a launch. Never 422s: the answer is the point."""
     _session, campaign, machine = await _context(db, caller)
-    vocab = await _vocabulary(db, campaign)
+    vocab = await _vocabulary(db, campaign, _launch_image(campaign, body.image))
     canonical, problems = _config_problems(
         dict(body.engine_args or {}), campaign, machine, vocab
     )
@@ -1325,7 +1513,7 @@ async def check_config(
     commands: dict[str, list[str]] = {}
     if not any(p.kind in ("not_renderable", "bad_key") for p in problems):
         command = render_args(args, campaign.engine)
-        recipe = recipe_for(campaign, canonical)
+        recipe = run_recipe(campaign, canonical, _launch_image(campaign, body.image))
         recipe_out = recipe.model_dump()
         shape_out = recipe_shape(recipe).payload()
         commands = chart_commands(recipe)
@@ -1350,18 +1538,20 @@ async def engine_vocabulary(
     query: str = Query("", max_length=200),
     level: str = Query("", pattern="^(|high|mid|low|unknown)$"),
     limit: int = Query(100, ge=1, le=1000),
+    image: str = Query("", max_length=512),
     caller: PolicyCaller = Depends(get_policy_session),
     db: AsyncSession = Depends(get_async_session),
 ):
     """What the campaign's engine image reads, filtered: `kind`, a substring
     of the name or help (`query`), and the lowest `level` wanted ("mid" =
-    high and mid)."""
+    high and mid). `image` (1.9): another of the campaign's images."""
     _session, campaign, machine = await _context(db, caller)
+    target = _launch_image(campaign, image) or campaign.image
     row = (
         await db.execute(
             select(EngineVocabulary)
             .where(
-                EngineVocabulary.image == campaign.image,
+                EngineVocabulary.image == target,
                 EngineVocabulary.engine == campaign.engine,
             )
             .order_by(EngineVocabulary.id.desc())
@@ -1375,7 +1565,7 @@ async def engine_vocabulary(
     }
     if row is None or row.status == "failed":
         return VocabularyOut(
-            status="none", engine=campaign.engine, image=campaign.image,
+            status="none", engine=campaign.engine, image=target,
             notes=list(row.notes or []) if row is not None else [], **model,
         )
     rows = vocab_mod.lookup(
@@ -1433,6 +1623,57 @@ async def launch_log(
     are here — the evidence a failed or slow launch leaves."""
     run = await _session_run(db, caller, run_id, RunKind.POLICY_LAUNCH.value)
     return _filter_log(await read_run_log(db, run), grep, context, tail)
+
+
+def _engine_driver(machine: Machine):
+    """The driver that runs this machine's engines."""
+    return get_driver(machine.driver or "ssh_docker", cluster_id=machine.cluster_id)
+
+
+@router.post("/launches/{run_id}/exec", response_model=ExecOut)
+async def launch_exec(
+    run_id: int,
+    body: ExecIn,
+    caller: PolicyCaller = Depends(get_policy_session),
+    db: AsyncSession = Depends(get_async_session),
+):
+    """(1.9) Run a shell line in a serving launch's engine container: for
+    diagnosing it (a profile, a file, the GPUs). The launch is tainted from
+    here on, whatever the command did: what it serves may no longer be what
+    its config says, so the campaign's own benchmark is refused on it. A
+    relaunch of the config is clean."""
+    _session, _campaign, _machine = await _context(db, caller)
+    run = await _session_run(db, caller, run_id, RunKind.POLICY_LAUNCH.value)
+    if run.status != RunStatus.SERVING.value or not run.machine_id:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, f"launch {run.id} is {run.status}, not serving",
+        )
+    run.tainted = True
+    _audit(db, caller, "policy_exec_requested", run_id=run.id, payload={"command": body.command})
+    await db.commit()
+    machine = await db.get(Machine, run.machine_id)
+    driver = _engine_driver(machine)
+    handle = DeploymentHandle(
+        driver=getattr(driver, "name", ""),
+        # The name the drivers give a run's engine (LaunchSpec.container_name).
+        container_name=run.container_name or f"autotune-run-{run.id}",
+        machine=MachineInfo.of(machine), endpoint_url=run.endpoint_url or "",
+    )
+    try:
+        code, output = await anyio.to_thread.run_sync(
+            driver.exec_in, handle, body.command, body.timeout_s
+        )
+    except NotImplementedError as exc:
+        raise HTTPException(status.HTTP_501_NOT_IMPLEMENTED, str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001 — the cluster's or the ssh's reason
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"exec failed: {exc}") from exc
+    output = output[-65536:]
+    _audit(
+        db, caller, "policy_exec", run_id=run.id,
+        payload={"command": body.command, "exit_code": code, "output_tail": output[-2000:]},
+    )
+    await db.commit()
+    return ExecOut(exit_code=code, output=output)
 
 
 @router.get("/launches/{run_id}/environment", response_model=EnvironmentPart)

@@ -8,7 +8,7 @@ This document is the narrative version: what the calls mean, and what each side
 guarantees. For the one-page summary see [policy-api.md](policy-api.md); the interactive reference that
 always matches the running build is **`/api/docs`**, section *policy sessions*.
 For real responses from a finished session see the
-Contract version: **1.7** (`/api/policy/v1`; see [Evolution](#evolution)).
+Contract version: **1.11** (`/api/policy/v1`; see [Evolution](#evolution)).
 
 ---
 
@@ -72,6 +72,16 @@ Send the key on every request as `X-API-Key`. It is valid for **this session
 only**: it cannot touch other campaigns, other machines, or other sessions,
 and it expires shortly after the session ends. Everything you do is audited as
 `policy:<name>`.
+
+**An external policy** (registered with `external: true`) is not started by
+the platform and gets none of these variables. Its owner asks for the key
+once the session has its machine, with an ordinary user credential or a
+service key (`X-API-Key`):
+`POST /api/campaigns/{id}/session-token` answers `{session_id, token,
+expires_at, api_url}`. The key is shown once; asking again issues a new one
+and ends the one before. Everything else in this contract is the same, and
+the heartbeat is the session's only sign of life: there is no container
+whose exit the platform could notice.
 
 First calls, in order:
 
@@ -474,6 +484,88 @@ DELETE /api/policy/v1/launches/31
 Concurrent launches on disjoint card sets are allowed. Expect launch → serving
 to take minutes (model load), never seconds.
 
+#### Another image (1.9)
+
+A campaign may allow more than one image of its engine: its own, and those its
+`policy_settings.images` lists. A launch may name one of them:
+
+```http
+POST /api/policy/v1/launches
+{"engine_args": {"tp_size": 2}, "image": "registry/sglang:v0.5.16"}
+→ {"id": 32, "status": "queued", "image": "registry/sglang:v0.5.16", …}
+```
+
+Everything else is the campaign's: the engine, the model, the recipe under a
+recipe campaign (only its image is replaced). The launch answers the `image`
+it named, `""` for the campaign's own. An image the campaign does not allow
+is refused (`422`, naming the ones it does). `POST /configs/check` and
+`GET /engine/vocabulary` take the same `image`, so a config is checked
+against the flags of the image it will run.
+
+#### A command in the engine (1.9)
+
+```http
+POST /api/policy/v1/launches/31/exec
+{"command": "nvidia-smi --query-gpu=memory.used --format=csv", "timeout_s": 30}
+→ {"exit_code": 0, "output": "memory.used [MiB]\n71234 MiB\n…", "tainted": true}
+```
+
+Runs a shell line in a serving launch's engine container and answers its exit
+code and output (stdout then stderr, the last 64 KB; `124` when it ran out of
+time). It is for diagnosing an engine: a profile, a file, the GPUs.
+
+The launch is **tainted** from then on, whatever the command did (`tainted`
+on the launch): what it serves may no longer be what its config says, so the
+campaign's own benchmark is refused on it (`409`). A probe still runs. A
+relaunch of the same config is clean, and contenders are always relaunched,
+so a tainted launch never becomes a result. Every command is kept in the
+campaign's activity log. On Kubernetes the platform's account needs
+`pods/exec` (get and create: the Python client execs over a websocket, a GET) in the GPU cluster's namespace (`deploy/gpu-cluster.sh` grants it);
+a substrate that cannot run a command answers `501`.
+
+#### Files in the engine (1.9)
+
+```http
+POST /api/policy/v1/launches
+{"engine_args": {"tp_size": 8},
+ "files": {"/opt/configs/moe/E=128,N=768,device_name=NVIDIA_H800.json": "{\"1\": {…}}"}}
+→ {"id": 32, "files": [{"path": "/opt/configs/moe/…json", "sha256": "…", "bytes": 5120}], …}
+```
+
+A launch may mount files into its engine container: a tuned kernel
+configuration, a chat template, a replaced module. Each is mounted read-only
+at its absolute path, in place before the engine starts; a file the image
+already has at that path is shadowed. At most 16 files and 512 KiB in all.
+
+The campaign must allow it: `policy_settings.files: true`, and optionally
+`policy_settings.file_paths`, the directories a mounted path must be under.
+Otherwise the launch is refused (`422`). The files are stored with the launch
+and answered by digest on it, so a relaunch mounts the same files; a launch
+with files is not tainted, since what it runs is all in its request. On
+Kubernetes they travel in one ConfigMap next to the launch's LLMService and
+go with it; the platform's account needs `configmaps` in the GPU cluster's
+namespace (`deploy/gpu-cluster.sh` grants it). A substrate that cannot mount
+files answers `501`.
+
+#### What a launch runs (1.10)
+
+```http
+GET /api/policy/v1/launches/32
+→ {"id": 32, …,
+   "recipe": {"engine": "sglang", "chart": {"name": "sglang", "version": ">=0.7.1"},
+              "values": {"image": {"repository": "registry/sglang", "tag": "v0.5.16"}, …},
+              "image_digest": ""},
+   "config_hash": "sha256:…"}
+```
+
+Every launch answers what it runs as one document: `recipe`, the campaign's
+recipe with the launch's config and image applied (a campaign without a
+recipe answers the one built from its fields), and `config_hash`, the
+identity of that recipe together with the launch's files. With no files,
+`config_hash` is the recipe's own hash. Two launches with the same
+`config_hash` ran the same configuration, whatever spelling their configs
+used; one that differs only in its image or a file has another.
+
 ### Benchmarks
 
 Two forms, one for each way an engine can exist:
@@ -520,6 +612,77 @@ each suite's approximate duration and pinned dataset. (v1 offers `screen`;
 the full replay `verify` suite is reserved for the platform's own validation.)
 A benchmark whose `approx_minutes` no longer fits before `search_deadline` is
 refused with `409` — do not start what cannot finish.
+
+#### While a benchmark runs (1.8)
+
+A benchmark of several modules reports each one as it finishes. While the
+status is `benchmarking`, `modules` lists every module run in order with its
+state (`pending`, `running`, `done`, `failed`, `skipped`) and the key its
+metrics are reported under, and `metrics` already holds the modules that are
+done:
+
+```http
+GET /api/policy/v1/benchmarks/57
+→ {"status": "benching", "summary": null,
+   "modules": [{"key": "replay", "module": "replay", "status": "done"},
+               {"key": "perf_guidellm_sweep", "module": "perf_guidellm_sweep",
+                "status": "running"}],
+   "metrics": {"replay.output_tpm": 41200.0, "…": "…"}}
+```
+
+`summary` and `measures` wait for the end: the objective is judged on the
+whole result. A replay that already looks poor need not be waited out: stop
+the benchmark (`DELETE /benchmarks/{id}`) and move on. The metrics are what
+the benchmark platform reported on the platform's last poll, so they can lag
+by a poll.
+
+#### Probes (1.8)
+
+A suite measures with the campaign's benchmark. To look at something it does
+not show — two minutes at one concurrency before the long run, a higher
+concurrency, a quality suite — describe the workload instead:
+
+```http
+POST /api/policy/v1/launches/31/benchmarks
+{"benchmark": {"kind": "sweep", "input_tokens": 2048, "output_tokens": 512,
+               "concurrencies": [16], "requests_per_concurrency": 10}}
+
+→ {"id": 58, "status": "health_check", "suite": "probe",
+   "benchmark_slug": "autotune-sweep-3f9a1c2e", …}
+```
+
+`benchmark` is a workload as a campaign describes its own: `kind` `sweep`
+(`input_tokens`, `output_tokens`, `concurrencies`, `requests_per_concurrency`,
+`max_seconds_per_level`) or `replay` (`dataset_profile` or `dataset_frozen`,
+`requests`, `concurrency`), and optionally `quality` (`tasks`, `questions`,
+…). `more` lists further workloads of the same two kinds, run after the first
+in the order given, on the same engine:
+
+```json
+{"benchmark": {"kind": "replay", "dataset_frozen": "prod-2026-11", "requests": 500,
+               "more": [{"kind": "sweep", "concurrencies": [16, 64]}],
+               "quality": {"tasks": ["gpqa_diamond"], "questions": 100}}}
+```
+
+Each module's metrics come back under its own key: the first run of a module
+under its name, a second run of the same module under `<module>#2`. A further
+replay names a frozen dataset. The platform creates the benchmark on LLMBench and locks it; the same
+description is always the same benchmark, so asking again reuses it. Both
+benchmark forms take it, and `suite` is ignored when it is there.
+
+A probe is yours to read and nobody else's to count:
+
+- `metrics` and `measures` come back as for any benchmark. `summary` is
+  `null`: the campaign's objective was written for the campaign's benchmark,
+  and nothing judges a probe by it.
+- It is not a trial, it is not ranked with the campaign's results, and it is
+  never a contender's evidence. Only a suite's benchmark is.
+- Many benchmarks can follow each other on one launch, so the engine is
+  loaded once: probe, read the result, and decide whether the long benchmark
+  is worth its time.
+
+A description LLMBench will not take is the request's own `409` or `422`, and
+`502` when LLMBench cannot be reached; no run is created.
 
 ### Trials
 
@@ -792,6 +955,33 @@ from their specs, time permitting. Either way the machine's own guarantees
   `search_idle_strikes`) and a recorded `search_end_reason`. A 1.0 image keeps
   working unchanged — it simply never sends the new fields, and the deadline
   plus the watchdog govern it exactly as before.
+- **1.11** (additive): a probe may name an existing benchmark,
+  `{"benchmark_slug": "<slug>"}`, one the campaign lists in
+  `policy_settings.benchmark_slugs`; any other is refused (`422`). It is
+  answered like a probe: never judged by the campaign's objective. A 1.10
+  policy runs unchanged.
+- **1.10** (additive): a launch answers [what it runs](#what-a-launch-runs-110):
+  `recipe` and `config_hash`. A launch that names another image now runs
+  that image on an LLMService too: the image is written into the recipe the
+  chart renders (before, the recipe kept the campaign's). A 1.9 policy runs
+  unchanged.
+- **1.9** (additive): a launch may name [another of the campaign's
+  images](#another-image-19) (`policy_settings.images`); the answer carries
+  `image`, and `/configs/check` and `/engine/vocabulary` take it too.
+  [`POST /launches/{id}/exec`](#a-command-in-the-engine-19) runs a command in
+  a serving engine and taints the launch; the campaign's own benchmark is
+  refused on a tainted launch. A launch may mount
+  [files into its engine](#files-in-the-engine-19) where the campaign allows
+  it (`policy_settings.files`). A 1.8 policy runs unchanged.
+- **1.8** (additive): [probes](#probes-18). A benchmark request may carry
+  `benchmark`, a described workload, instead of a `suite`; the answer has
+  `suite: "probe"` and `benchmark_slug`. A benchmark answers
+  [its modules as they finish](#while-a-benchmark-runs-18), and a described
+  workload may list `more` workloads. A launch that names no `gpu_indices`
+  is given free cards of the allocation, as many as its config uses, and a
+  launch answers the `gpu_indices` it holds. A policy may be
+  [external](#boot): not started by the platform, with a token its owner asks
+  for. A 1.7 policy runs unchanged.
 - **1.7** (additive): `production` is the platform's production config —
   built from the Baselines record or, with none, from the campaign's recipe —
   with `env`, `image`, `config` and `source` beside `engine_args`, and

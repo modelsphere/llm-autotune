@@ -327,6 +327,17 @@ class SshDockerDriver(DeploymentDriver):
                 f"ssh to {machine.host} timed out after {timeout}s: {remote_cmd[:200]}"
             ) from exc
 
+    def exec_in(self, handle: DeploymentHandle, command: str, timeout: int) -> tuple[int, str]:
+        done = self._ssh(
+            handle.machine,
+            self._q([
+                "timeout", str(timeout), "docker", "exec", handle.container_name,
+                "sh", "-c", command,
+            ]),
+            timeout=timeout + 15,
+        )
+        return done.returncode, done.stdout + done.stderr
+
     @staticmethod
     def _q(parts: list[str]) -> str:
         return " ".join(shlex.quote(part) for part in parts)

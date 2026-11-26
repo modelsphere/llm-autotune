@@ -5,7 +5,7 @@
  *  docs/plugins.md); the rest of `src/` is private to the app and can change
  *  in any release.
  */
-export { api, downloadText, fetchPolicySessionLog, fetchRunLog } from '../api/client'
+export { api, downloadText, fetchPolicySessionLog, fetchRunLog, postLines } from '../api/client'
 export type * from '../api/client'
 export { useI18n, type Locale } from '../i18n'
 export { useAuthStore } from '../stores/auth'

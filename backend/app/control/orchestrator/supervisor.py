@@ -82,7 +82,7 @@ from app.control.orchestrator.occupancy import busy_reason, holds, reservations_
 from app.control.orchestrator.packing import Placement, choose_next, free_indices
 from app.control.orchestrator.queue_tickets import Entry, TicketBook, place_in_line
 from app.control.orchestrator.states import can_transition
-from app.control.recipe.campaign import base_recipe, config_cards, recipe_for, split_flat
+from app.control.recipe.campaign import base_recipe, config_cards, run_recipe, split_flat
 from app.control.run_nodes import machine_hosts_live_gang, nodes_of, run_ids_on_machine
 from app.control.search import CandidateConfig
 from app.control.search.space import expand
@@ -140,10 +140,12 @@ from app.evaluation import (
 from app.evaluation.aggregate import summary_of
 from app.hardware import is_node_pool, record_capacity
 from app.measures import reader_for
-from app.objective import sort_key
+from app.objective import baseline_repeats, sort_key
 from app.staging import (
+    PROBE,
     SCREEN,
     VERIFY,
+    is_probe,
     is_staged,
     stage_of,
     stage_of_run,
@@ -208,6 +210,15 @@ def _crash_detail(exc: BaseException, frames: int = 4) -> str:
     ]
     where = " <- ".join(reversed(tail))
     return f"supervisor crashed: {summary}" + (f" [{where}]" if where else "")
+
+
+def _note_progress(run: Run, outcome) -> None:
+    """Keep what a running benchmark has measured so far on its run. Written
+    only when it changed: most polls of a long module report nothing new. A
+    poll that could not reach the platform reports nothing, and keeps what was
+    there."""
+    if outcome.progress and outcome.progress != (run.progress or {}):
+        run.progress = outcome.progress
 
 
 def _bench_failure_class(outcome) -> str:
@@ -1567,6 +1578,9 @@ class Supervisor:
             ),
             dist_port=dist_port,
             node_group=node_group,
+            # The campaign's files, recorded on the run like its image: what it
+            # mounted is part of what it measured.
+            files=dict(campaign.files or {}),
             started_at=_now(),
         )
         candidate.status = CandidateStatus.EXHAUSTED.value
@@ -1818,17 +1832,31 @@ class Supervisor:
     def _has_baseline_candidate(
         self, session: Session, campaign: Campaign, stage: str
     ) -> bool:
-        """Has this campaign already got a baseline for `stage` — measured in
-        place or relaunched, run or still pending? Created once per stage."""
+        """Has this campaign already got every baseline for `stage` — measured
+        in place or relaunched, run or still pending? Created once per stage
+        (twice for a latency campaign: `baseline_repeats`)."""
+        return self._baseline_count(session, campaign, stage) >= baseline_repeats(
+            _stage_objective(campaign, stage))
+
+    def _baseline_count(self, session: Session, campaign: Campaign, stage: str) -> int:
         candidates = session.scalars(
             select(Candidate).where(Candidate.campaign_id == campaign.id)
         ).all()
-        return any(
-            is_baseline_candidate(c) and stage_of(c) == stage for c in candidates
-        )
+        return sum(1 for c in candidates if is_baseline_candidate(c) and stage_of(c) == stage)
+
+    def _add_baselines(
+        self, session: Session, campaign: Campaign, baseline: Baseline, kind: str, stage: str
+    ) -> int:
+        """Add the baselines `stage` still lacks; returns how many."""
+        have = self._baseline_count(session, campaign, stage)
+        want = baseline_repeats(_stage_objective(campaign, stage))
+        for repeat in range(have + 1, want + 1):
+            self._add_baseline_candidate(session, campaign, baseline, kind, repeat=repeat)
+        return max(0, want - have)
 
     def _add_baseline_candidate(
-        self, session: Session, campaign: Campaign, baseline: Baseline, kind: str
+        self, session: Session, campaign: Campaign, baseline: Baseline, kind: str,
+        repeat: int = 1,
     ) -> Candidate:
         """A baseline the pipeline launches and measures itself, at one stage.
 
@@ -1839,7 +1867,7 @@ class Supervisor:
         candidate = Candidate(
             campaign_id=campaign.id,
             config=dict(baseline.engine_args or {}),
-            config_hash=f"baseline-{kind}-{baseline.id}",
+            config_hash=f"baseline-{kind}-{baseline.id}" + (f"-{repeat}" if repeat > 1 else ""),
             kind=kind,
             is_baseline=True,
             status=CandidateStatus.VALID.value,
@@ -1849,7 +1877,7 @@ class Supervisor:
         self._event(
             session, "baseline_relaunch_scheduled", campaign_id=campaign.id,
             payload={"baseline_id": baseline.id, "stage": stage_of(candidate),
-                     "config": candidate.config},
+                     "config": candidate.config, "repeat": repeat},
         )
         return candidate
 
@@ -1864,7 +1892,7 @@ class Supervisor:
         baseline = self._campaign_baseline(session, campaign)
         if baseline is None:
             return
-        self._add_baseline_candidate(session, campaign, baseline, CandidateKind.SEARCH.value)
+        self._add_baselines(session, campaign, baseline, CandidateKind.SEARCH.value, SCREEN)
 
     # --------------------------------------------------------------- advance
 
@@ -1901,6 +1929,11 @@ class Supervisor:
                 self._note_placement(session, run, held, WaitingFor.NODE_PORT)
                 return
             try:
+                if spec.files and not getattr(driver, "mounts_files", False):
+                    # Refused at the request already; a driver changed since.
+                    raise RuntimeError(
+                        f"the {driver.name} launch driver cannot mount files into an engine"
+                    )
                 handle, launch_commands = driver.launch_nodes(spec)
             except LaunchDeferred as exc:
                 # On its way (an image still pulling onto the machine, the
@@ -2015,6 +2048,7 @@ class Supervisor:
         elif run.status == RunStatus.BENCHING.value:
             outcome = self.bench.poll(run.llmbench_submission_id)
             if outcome.status == EvalStatus.RUNNING:
+                _note_progress(run, outcome)
                 return
             self._record_result(session, run, "llmbench", outcome)
             if outcome.status == EvalStatus.PASSED:
@@ -2138,6 +2172,7 @@ class Supervisor:
         elif run.status == RunStatus.BENCHING.value:
             outcome = self.bench.poll(run.llmbench_submission_id)
             if outcome.status == EvalStatus.RUNNING:
+                _note_progress(run, outcome)
                 return
             self._record_result(session, run, "llmbench", outcome)
             if outcome.status == EvalStatus.PASSED:
@@ -2181,7 +2216,8 @@ class Supervisor:
         context: dict = {
             # Per stage, not per campaign: the whole point of the second stage
             # is that it is a different, more expensive benchmark.
-            "benchmark_slug": _benchmark_slug(campaign, stage) or None,  # None -> default
+            # A probe names its own; None -> the platform default.
+            "benchmark_slug": run.benchmark_slug or _benchmark_slug(campaign, stage) or None,
             "description_summary": f"{label} run {run.id}: {config_summary}"[:100],
             "description_detail": (
                 f"Automated tuning run from the LLM AutoTune platform.\n\n"
@@ -2304,7 +2340,7 @@ class Supervisor:
         # Every run carries its recipe: the LLMService driver launches it as
         # is. The flat fields below are for the drivers that take them
         # (ssh_docker, the Deployment kind), which apply flags and env only.
-        recipe = recipe_for(campaign, run.candidate.config or {})
+        recipe = run_recipe(campaign, run.candidate.config or {}, run.image or "")
         if stored is not None:
             engine_args, config_env = dict(recipe.flags()), dict(recipe.env())
         else:
@@ -2334,7 +2370,8 @@ class Supervisor:
             run_id=run.id,
             machine=master_info,
             engine=recipe.engine if stored is not None else campaign.engine,
-            image=recipe.image if stored is not None else campaign.image,
+            # (1.9) a policy's launch may name another of the campaign's images
+            image=run.image or (recipe.image if stored is not None else campaign.image),
             model_path=campaign.model_path,
             served_model_name=(
                 recipe.served_name if stored is not None else campaign.served_model_name
@@ -2346,6 +2383,7 @@ class Supervisor:
             port=run.service_port or campaign.service_port,
             env=env,
             volumes=volumes,
+            files=dict(run.files or {}),
             nodes=nodes,
             nnodes=max(1, len(nodes)),
             allowed_nodes=list(campaign.node_names or []),
@@ -2392,7 +2430,8 @@ class Supervisor:
         # the numbers is what lets the window math stop asking for guesses.
         if target in (RunStatus.BENCHING, RunStatus.SERVING):
             timing.record_ready(session, run, _now())
-        elif target == RunStatus.SUCCEEDED:
+        elif target == RunStatus.SUCCEEDED and not is_probe(run):
+            # A probe's length says nothing about how long a stage's takes.
             timing.record_finished(session, run, stage_of_run(run), _now())
 
     def _reclaim_orphan_port(
@@ -2882,6 +2921,13 @@ class Supervisor:
         return (False, "", "")
 
     def _record_result(self, session: Session, run: Run, source: str, outcome) -> None:
+        if source == "llmbench" and is_probe(run):
+            # A probe measured a workload of the policy's choosing. Its result
+            # is kept under its own source and goes back to the policy as it
+            # is: not judged by the campaign's objective, not a trial, not
+            # held to the campaign's dataset, and no reason to judge the
+            # campaign's results again.
+            source = PROBE
         result = Result(
             run_id=run.id,
             source=source,
@@ -3422,10 +3468,9 @@ class Supervisor:
         ):
             baseline = self._campaign_baseline(session, campaign)
             if baseline is not None:
-                self._add_baseline_candidate(
-                    session, campaign, baseline, CandidateKind.VERIFICATION.value
+                created += self._add_baselines(
+                    session, campaign, baseline, CandidateKind.VERIFICATION.value, VERIFY
                 )
-                created += 1
         if created:
             logger.info(
                 "queued %d verification run(s) for campaign %d against %s",

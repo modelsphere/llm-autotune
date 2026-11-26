@@ -126,6 +126,15 @@ rules:
   - apiGroups: [""]
     resources: ["pods/log"]
     verbs: ["get"]
+  # A command in a running engine (a policy diagnosing it; the run is tainted).
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    # create for kubectl (SPDY); get for a websocket exec, which is a GET.
+    verbs: ["create", "get"]
+  # Files a policy's launch mounts into its engine, next to its LLMService.
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["create", "get", "update", "delete"]
   - apiGroups: [""]
     resources: ["events"]
     verbs: ["get", "list"]

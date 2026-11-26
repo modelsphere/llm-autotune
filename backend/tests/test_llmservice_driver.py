@@ -4,6 +4,8 @@ One run is one LLMService; the operator installs the chart and says nothing
 about the engine, so readiness, failures and logs come from the pods and the
 chart's Service, which these tests stand in for."""
 
+import json
+
 import pytest
 
 from app.control.launch import get_driver
@@ -20,6 +22,8 @@ class LlmsvcApi(FakeK8sApi):
     def _resource_of(self, manifest):
         if manifest.get("kind") == "LLMService":
             return LLMSVC_RESOURCE
+        if manifest.get("kind") == "ConfigMap":
+            return "configmap"
         return super()._resource_of(manifest)
 
     def list(self, resource, label_selector=""):
@@ -294,3 +298,205 @@ def test_the_environment_says_which_chart_the_operator_installed():
     }
     env = driver.environment(handle)
     assert env["chart"] == "sglang-0.9.26" and env["chart_version"] == "0.9.26"
+
+
+# -- what the cluster adds to a recipe: the card resource, inputs ---------------
+
+ASCEND = "huawei.com/Ascend910B4-1"
+
+
+def _variant_recipe(**over):
+    """A catalog variant as the catalog writes one for Ascend cards today: how
+    many cards under requires, no resource name anywhere."""
+    from app.control.recipe import Recipe
+
+    doc = {
+        "apiVersion": "catalog.swiss/v2",
+        "kind": "Variant",
+        "model": "qwen",
+        "engine": "vllm",
+        "chart": {"name": "vllm", "version": ">=0.9.1"},
+        "image": {"repository": "quay.io/ascend/vllm-ascend", "tag": "v1"},
+        "requires": {"gpus": 2, "topology": "single-node", "vendor": "ascend"},
+        "values": {
+            "extraArgs": ["--tensor-parallel-size=2"],
+            "resources": {"limits": {"cpu": "16"}, "requests": {"cpu": "16"}},
+        },
+    }
+    doc.update(over)
+    return Recipe.from_variant(doc)
+
+
+def _layers(api):
+    return {layer["name"]: layer["values"] for layer in api.applied[0]["spec"]["layers"]}
+
+
+def test_the_cards_are_requested_as_the_clusters_resource():
+    driver, api = _driver(k8s_gpu_resource=ASCEND)
+    driver.launch_nodes(_spec(recipe=_variant_recipe().model_dump()))
+    layers = _layers(api)
+    assert layers["site"]["model"]["gpuResource"] == ASCEND
+    assert layers["catalog"]["model"] == {"name": "qwen", "gpus": "2"}  # the recipe is untouched
+
+
+def test_nvidia_cards_render_as_before_the_key_existed():
+    driver, api = _driver()
+    driver.launch_nodes(_spec())
+    assert "gpuResource" not in _layers(api)["site"].get("model", {})
+
+
+def test_site_values_name_the_resource_where_it_differs_from_the_counted_one():
+    # The cluster counts huawei.com/npu; this pool's device plugin hands cards
+    # out under another name.
+    driver, api = _driver(
+        k8s_gpu_resource="huawei.com/npu",
+        k8s_site_values=json.dumps({"model": {"gpuResource": ASCEND}}),
+    )
+    driver.launch_nodes(_spec(recipe=_variant_recipe().model_dump()))
+    assert _layers(api)["site"]["model"]["gpuResource"] == ASCEND
+
+
+def test_a_recipe_that_names_its_resource_or_its_cards_under_resources_keeps_them():
+    driver, api = _driver(k8s_gpu_resource=ASCEND)
+    own = _variant_recipe()
+    own.values["model"]["gpuResource"] = "volcano.sh/Ascend910B4-1"
+    driver.launch_nodes(_spec(recipe=own.model_dump()))
+    assert "gpuResource" not in _layers(api)["site"].get("model", {})
+
+    driver, api = _driver(k8s_gpu_resource=ASCEND)
+    old = _variant_recipe(requires={"gpus": 0, "topology": "single-node"})
+    old.values["resources"]["limits"]["volcano.sh/Ascend910B4-1"] = "2"
+    driver.launch_nodes(_spec(recipe=old.model_dump()))
+    assert "gpuResource" not in _layers(api)["site"].get("model", {})
+
+
+def test_a_card_count_written_twice_never_launches():
+    # model.gpus 2 and the same cards again under resources: the chart refuses
+    # it once the cluster's resource is on, minutes into the run. Refused here.
+    driver, api = _driver(k8s_gpu_resource=ASCEND)
+    twice = _variant_recipe()
+    twice.values["resources"]["limits"][ASCEND] = "2"
+    with pytest.raises(RuntimeError, match="chart refuses.*model.gpus already requests"):
+        driver.launch_nodes(_spec(recipe=twice.model_dump()))
+    assert api.applied == []
+
+
+def test_a_chart_too_old_for_the_resource_key_is_the_clusters_setup():
+    driver, api = _driver(k8s_gpu_resource=ASCEND)
+    recipe = _variant_recipe().model_dump()
+    with pytest.raises(RuntimeError, match="cluster setup:.*vllm 0.9.1 or newer"):
+        driver.launch_nodes(_spec(recipe=recipe, chart_version="0.8.23"))
+    driver.launch_nodes(_spec(recipe=recipe, chart_version="0.9.4"))
+    assert len(api.applied) == 1
+
+
+INPUTS = [
+    {"key": "storageKVOffload.mooncake.master", "title": "Mooncake master", "example": "m:1"},
+    {
+        "key": "storageKVOffload.mooncake.device",
+        "title": "HCAs",
+        "example": "x",
+        "default": "mlx5_0",
+    },
+]
+
+
+def test_an_input_is_answered_by_the_site_or_its_default():
+    driver, api = _driver(
+        k8s_site_values='{"storageKVOffload": {"mooncake": {"master": "10.0.0.1:50051"}}}'
+    )
+    recipe = _variant_recipe(inputs=INPUTS)
+    driver.launch_nodes(_spec(recipe=recipe.model_dump()))
+    assert _layers(api)["site"]["storageKVOffload"]["mooncake"] == {
+        "master": "10.0.0.1:50051",
+        "device": "mlx5_0",
+    }
+    assert recipe.to_variant()["inputs"] == INPUTS
+    assert recipe.hash() == _variant_recipe().hash()  # the inputs are not the configuration
+
+
+def test_an_unanswered_input_never_launches():
+    driver, api = _driver()
+    with pytest.raises(RuntimeError, match=r"cluster setup:.*mooncake\.master \(Mooncake master\)"):
+        driver.launch_nodes(_spec(recipe=_variant_recipe(inputs=INPUTS).model_dump()))
+    assert api.applied == []
+
+
+def test_a_cluster_names_its_scheduler_and_what_its_cards_are_requested_as():
+    # Counted as huawei.com/npu, handed out by volcano under its own name, and
+    # only to pods volcano placed.
+    driver, api = _driver(
+        k8s_gpu_resource="huawei.com/npu",
+        k8s_gpu_request_resource="volcano.sh/Ascend910B4-1",
+        k8s_scheduler_name="volcano",
+    )
+    driver.launch_nodes(_spec(recipe=_variant_recipe().model_dump()))
+    site = _layers(api)["site"]
+    assert site["model"]["gpuResource"] == "volcano.sh/Ascend910B4-1"
+    assert site["schedulerName"] == "volcano"
+    # The toleration still follows the resource the nodes are counted (and tainted) by.
+    assert {"key": "huawei.com/npu", "operator": "Exists", "effect": "NoSchedule"} in site[
+        "tolerations"
+    ]
+
+    driver, api = _driver()
+    driver.launch_nodes(_spec())
+    assert "schedulerName" not in _layers(api)["site"]
+
+
+def test_a_launchs_files_are_a_configmap_the_chart_mounts():
+    """(1.9) Each file is mounted read-only at its path from one ConfigMap,
+    made before the engine and then owned by its LLMService; the recipe's own
+    volumes are kept."""
+    from app.control.recipe import Recipe
+    from app.control.recipe.legacy import from_fields
+
+    recipe = from_fields(
+        engine="sglang", image="lmsysorg/sglang:v0.5.20", served_model_name="qwen",
+        engine_args={"tp": 2}, extra_volumes={"/data/cache": "/cache"},
+    )
+    files = {"/opt/moe/E=128.json": '{"1": {}}', "/etc/chat.jinja": "{{ messages }}"}
+    driver, api = _driver()
+
+
+    real_apply = api.apply
+
+    def apply(manifest):
+        real_apply(manifest)
+        if manifest.get("kind") == "LLMService":
+            api.objects[(LLMSVC_RESOURCE, "autotune-run-7")]["metadata"]["uid"] = "svc-uid"
+
+    api.apply = apply
+    handle, _ = driver.launch_nodes(_spec(recipe=recipe.model_dump(), files=files))
+    kinds = [m["kind"] for m in api.applied]
+    assert kinds == ["ConfigMap", "LLMService", "ConfigMap"], "made first, then owned"
+    made, owned = api.applied[0], api.applied[2]
+    assert made["metadata"]["name"] == "autotune-run-7-files"
+    assert made["metadata"]["ownerReferences"] == []
+    assert owned["metadata"]["ownerReferences"][0]["uid"] == "svc-uid"
+    assert owned["data"] == {"f0": "{{ messages }}", "f1": '{"1": {}}'}
+
+    layers = {layer["name"]: layer["values"] for layer in api.applied[1]["spec"]["layers"]}
+    assert layers["autotune"]["volumes"] == [
+        {"name": "extra-0", "hostPath": {"path": "/data/cache"}},
+        {"name": "autotune-files", "configMap": {"name": "autotune-run-7-files"}},
+    ]
+    assert layers["autotune"]["volumeMounts"] == [
+        {"name": "extra-0", "mountPath": "/cache"},
+        {"name": "autotune-files", "mountPath": "/etc/chat.jinja", "subPath": "f0",
+         "readOnly": True},
+        {"name": "autotune-files", "mountPath": "/opt/moe/E=128.json", "subPath": "f1",
+         "readOnly": True},
+    ]
+    assert Recipe.model_validate(recipe.model_dump())  # the stored recipe is untouched
+
+    driver.teardown(handle)
+    assert ("configmap", "autotune-run-7-files") in api.deleted
+
+
+def test_a_launch_without_files_makes_no_configmap():
+    driver, api = _driver()
+    handle, _ = driver.launch_nodes(_spec())
+    assert [m["kind"] for m in api.applied] == ["LLMService"]
+    layers = {layer["name"]: layer["values"] for layer in api.applied[0]["spec"]["layers"]}
+    assert "volumes" not in layers["autotune"]

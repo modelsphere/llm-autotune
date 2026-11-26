@@ -17,6 +17,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     event,
+    false,
     func,
 )
 from sqlalchemy.dialects.postgresql import JSONB
@@ -296,6 +297,14 @@ class Cluster(Base):
     image_mirror: Mapped[str] = mapped_column(String(255), default="", server_default="")
     # Chart values for every engine on this cluster, as JSON text.
     site_values: Mapped[str] = mapped_column(Text, default="", server_default="")
+    # The scheduler engine pods name ("" = the cluster's default), and the
+    # resource their cards are requested as ("" = gpu_resource). Device plugins
+    # with a scheduler of their own (volcano, HAMi) hand cards out under their
+    # own name, and only to pods that scheduler placed.
+    scheduler_name: Mapped[str] = mapped_column(String(253), default="", server_default="")
+    gpu_request_resource: Mapped[str] = mapped_column(
+        String(253), default="", server_default=""
+    )
     # The host LLMBench is given for a run's NodePort endpoint. Empty = derive
     # from a node InternalIP, which needs the cluster-scoped `nodes` read.
     node_host: Mapped[str] = mapped_column(String(255), default="")
@@ -529,6 +538,12 @@ class Campaign(Base):
     # its candidate's config applied, and a winner is published as it. Empty =
     # a campaign from before recipes, built from the fields above.
     recipe: Mapped[dict] = mapped_column(JsonCol, default=dict)
+    # Files every run mounts into its engine ({path: content}): part of the
+    # configuration the campaign starts from, like its recipe (a tuned kernel
+    # table, a chat template). A policy's launch adds its own over them, path
+    # by path. Only a driver that mounts files (the LLMService) launches a
+    # campaign that has any.
+    files: Mapped[dict] = mapped_column(JsonCol, default=dict, server_default="{}")
     # The exact chart version every run renders. The recipe may name a range
     # (the catalog does); a campaign pins it once, so a chart released mid-way
     # cannot change what later trials measure. Set at creation when given or
@@ -794,6 +809,26 @@ class Run(Base):
     launch_run_id: Mapped[int | None] = mapped_column(
         ForeignKey("runs.id"), nullable=True, index=True
     )
+    # A probe: a benchmark the policy described itself, instead of the
+    # campaign's own (app/staging.py). "" for every other run. Its result is
+    # kept and answered to the policy, and never judged or ranked with the
+    # campaign's: it measured a different workload.
+    benchmark_slug: Mapped[str] = mapped_column(String(100), default="", server_default="")
+    # While its benchmark runs: each module's state, and the metrics of the
+    # ones already done ({"modules": [{key, module, status}], "metrics": {}}),
+    # as the benchmark platform reported them on the last poll. The final
+    # result replaces none of this; it lands in `results` as always.
+    progress: Mapped[dict] = mapped_column(JsonCol, default=dict, server_default="{}")
+    # (1.9) The image a policy's launch named, when not the campaign's: one of
+    # the campaign's `policy_settings.images`. "" = the campaign's image.
+    image: Mapped[str] = mapped_column(String(512), default="", server_default="")
+    # (1.9) A command was run in this launch's engine (policy exec): what it
+    # serves may differ from its config, so the campaign's own benchmark is
+    # refused on it. A relaunch from the config is clean.
+    tainted: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    # (1.9) Files a policy's launch mounts into its engine ({path: content},
+    # LaunchIn.files); part of what it runs, like its config and image.
+    files: Mapped[dict] = mapped_column(JsonCol, default=dict, server_default="{}")
     # Which engine process a policy's launch is serving from, as the substrate
     # names it (driver.incarnation), recorded when it starts serving. A pod a
     # Deployment replaced or a container it restarted serves again under the
@@ -1394,6 +1429,12 @@ class Policy(Base):
     # happens to hold the weights. Defaults true so every policy registered
     # before this field keeps the mount it was launched with.
     needs_model: Mapped[bool] = mapped_column(Boolean, default=True)
+    # A policy the platform does not run. No container is started for it:
+    # whoever owns the campaign runs the search somewhere else, speaking the
+    # same policy API with a token asked for once the session has its machine
+    # (POST /campaigns/{id}/session-token). `image` is then only a label, and
+    # the heartbeat is the session's one sign of life.
+    external: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
     # Static env for the container, shown on the Policies page and in the
     # container's launch command — nothing secret belongs here.
     env: Mapped[dict] = mapped_column(JsonCol, default=dict)

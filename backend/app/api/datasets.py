@@ -130,7 +130,7 @@ def _out(
         "current": current and {
             key: current.get(key)
             for key in ("build_id", "records", "bytes", "built_at", "age_hours",
-                        "window_start", "window_end", "buckets", "summary")
+                        "window_start", "window_end", "buckets", "summary", "load", "timed")
         },
         "last_build": last and {
             key: last.get(key)

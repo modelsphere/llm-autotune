@@ -9,6 +9,80 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A replay at recorded output lengths.** A closed replay workload takes
+  `fixed_output_lengths: true`: every response runs to the length production
+  answered with (LLMBench's `fixed_output_lengths`), so every engine under
+  test does the same work and the score measures speed. Off by default; a
+  replay without it keeps its benchmark.
+- **`DeploymentHandle` in the plugin API**, so a plugin can address a
+  running launch's engine through its machine's driver.
+- **A cluster names its scheduler and what its cards are requested as.** Two
+  optional settings under a cluster's **Advanced**, for LLMService runs:
+  **Scheduler** (the pods' `schedulerName`) and **Request cards as** (the
+  resource engine pods ask for, when it is not the GPU resource the nodes are
+  counted by). A device plugin with its own scheduler (volcano, HAMi) hands
+  cards out under its own name and only to pods that scheduler placed; the
+  catalog leaves both to the site. `scheduler_name` and
+  `gpu_request_resource` on a cluster in the API; migration 029.
+- **Files in an engine** (policy contract 1.9). A launch may carry `files`,
+  mounted read-only into its engine container before the engine starts (a
+  tuned kernel configuration, a chat template). A campaign allows it with
+  `policy_settings.files`, optionally limited to `file_paths`. The run stores
+  the files, and a launch shows them by digest. On Kubernetes they travel in a
+  ConfigMap owned by the launch's LLMService; the GPU-cluster account gains
+  `configmaps`: rerun `deploy/gpu-cluster.sh` for a cluster added before.
+- **A command in a running engine** (policy contract 1.9).
+  `POST /launches/{id}/exec` runs a shell line in a serving launch's engine
+  container, for diagnosing it, and answers its output. The launch is marked
+  tainted, and the campaign's own benchmark is refused on it; a relaunch of
+  its config is clean. The GPU-cluster account gains `pods/exec`: rerun
+  `deploy/gpu-cluster.sh` for a cluster added before.
+- **A launch may run another of the campaign's images** (policy contract
+  1.9). A campaign lists the images a policy may choose in
+  `policy_settings.images`; a launch names one with `image`, and runs it with
+  the campaign's engine, model and recipe. The run records it, and the
+  configuration check and the engine vocabulary answer for that image. A
+  policy can compare engine versions side by side in one session.
+- **Probes: a policy can measure with a workload of its own** (policy
+  contract 1.8). A benchmark request may carry `benchmark`, a described
+  workload (a sweep or a replay, with or without a quality suite), instead of
+  the campaign's `screen` suite. The platform creates and locks the benchmark
+  and answers the metrics. A probe is not judged by the campaign's objective,
+  is not a trial and is not ranked with the campaign's results, so a policy
+  can run a two-minute sweep on an engine and start the long benchmark only
+  if it looks worth it, without reloading the model.
+- **Results while a benchmark runs** (policy contract 1.8). A policy's
+  benchmark answers `modules`, each module run with its state, and while it
+  runs `metrics` already holds the modules that are done, as LLMBench
+  reported them on the last poll. A policy can read the replay of a long
+  benchmark and stop it before the sweep if it is not worth finishing. The
+  run keeps it in `progress`.
+- **A benchmark of several workloads.** A described workload (a campaign's
+  `benchmark_spec`, a policy's probe) may list `more`: further sweeps or
+  replays that run after the first, in order, in the same locked benchmark
+  and on the same engine, with a quality suite after them if asked for. A
+  replay and then a sweep is one benchmark and one run. The first workload
+  names the benchmark, and a benchmark of one workload keeps the slug it
+  had. `POST /api/benchmarks/spec` answers `modules`, the key each module's
+  metrics are reported under.
+- **The platform picks a launch's cards** (policy contract 1.8). A launch
+  that names no `gpu_indices` gets free cards of the session's allocation, as
+  many as its config uses, and every launch answers the `gpu_indices` it
+  holds.
+- **Service keys register policies.** `GET` and `POST /api/policies` take an
+  `X-API-Key`, as the install guide already showed.
+  So do the catalog reads (`GET /api/catalog/models` and a variant).
+- **Plugins can describe a benchmark.** `app.plugin_api` exports
+  `BenchmarkSpec`, `ensure_spec` and `metric_problem`, which says why a
+  benchmark built from a description can never report a metric.
+- **A policy you run yourself.** A policy registered with `external: true`
+  is not started as a container: the platform reserves the machine and cards
+  for its session, and the policy runs wherever you run it, speaking the same
+  policy API. The campaign's owner asks for the session's token with
+  `POST /api/campaigns/{id}/session-token` once the session has its machine;
+  asking again issues a new token and ends the one before. Its heartbeat is
+  the session's one sign of life. Registered through the API for now; the
+  Policies page does not offer it yet.
 - **A place in line.** Everything waiting for a machine (campaigns, policy
   sessions, plugins' waiters) keeps a ticket while it waits, so its place
   cannot drift, and the campaign page shows it: *Queued — #2 in line for the
@@ -26,11 +100,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The vendored catalog schemas follow model-catalog `c7434c8`** (`inputs`).
+  `backend/scripts/sync_catalog_schema.py` refreshes them in one command, and
+  with `--check` reports when the catalog has moved on.
 - **A tuned result without a report is recorded.** It was left out of
   `metadata.yaml`, so publishing to a catalog server, which takes no report,
   never recorded a gain. It is now written without a report link.
 
 ### Fixed
+
+- **A weights probe says what each node offers of the cards a run asks for.**
+  `model_presence` on a k8s machine adds `cards` per node, so a node that
+  holds the weights but none of those cards can be told apart from one that
+  can run them. The unplaceable check counts the cards under the name a run
+  requests them by (**Request cards as**), not the one nodes are counted by.
+  Plugins can read a recipe's warnings (`recipe_warnings`).
+- **A catalog variant for a non-NVIDIA card launches as it is.** The catalog
+  now writes such a variant with a card count and a vendor and no resource
+  name (`requires.gpus: 2`, `vendor: ascend`), leaving the name to the site.
+  An LLMService run asked for `nvidia.com/gpu` regardless and waited for cards
+  the cluster does not have. The run's site layer now sets the chart's
+  `model.gpuResource` to the cluster's **GPU resource** when that is not
+  `nvidia.com/gpu`; the cluster's **Request cards as** names another, and a
+  recipe that names its own keeps it. A chart pinned below the version that takes the
+  key (vllm 0.9.1, sglang 0.9.29) is refused at launch with that reason.
+- **A card count written twice is refused before the run starts.** A recipe
+  with `model.gpus` and the same resource again under `resources` is refused
+  by the chart; the run found out on the cluster, after waiting. It is now a
+  problem when the recipe is read, and at launch once the cluster's resource
+  is known. Another accelerator's name beside `model.gpus` (the pod would
+  request both) is a warning.
+- **A variant's `inputs` are answered or the run does not start.** The catalog
+  lets a variant leave chart values to the deploy (`inputs`: a Mooncake
+  master's address, say). They were dropped when a variant was read, so the
+  engine started without them. A recipe keeps them now; a run takes each
+  answer from the cluster's `site_values`, else the input's default, and one
+  with neither fails at launch naming the keys. The catalog export writes
+  them back, so a published variant still asks its deploy for them.
+- **A published variant for a non-NVIDIA card names its vendor.** A recipe
+  with its cards under `requires.gpus` was exported with no `requires.vendor`,
+  which the catalog reads as NVIDIA.
 
 - **A cluster's fixed NodePort is handed out in order, with the GPUs.** A run
   now holds the port from the moment it is placed, not from its launch, and a

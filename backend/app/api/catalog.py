@@ -14,9 +14,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.control.catalog_export import catalog_index
 from app.core import platform_settings
-from app.core.auth import get_current_user
+from app.core.auth import Principal, get_principal
 from app.db.base import get_async_session
-from app.db.models import User
 
 router = APIRouter(prefix="/catalog", tags=["catalog"])
 
@@ -33,7 +32,7 @@ async def _index_url(db: AsyncSession) -> str:
 
 @router.get("/models", summary="Models the catalog publishes, with their variants")
 async def catalog_models(
-    db: AsyncSession = Depends(get_async_session), _: User = Depends(get_current_user)
+    db: AsyncSession = Depends(get_async_session), _: Principal = Depends(get_principal)
 ):
     url = await _index_url(db)
     try:
@@ -51,7 +50,7 @@ async def catalog_variant(
     name: str,
     variant_id: str,
     db: AsyncSession = Depends(get_async_session),
-    _: User = Depends(get_current_user),
+    _: Principal = Depends(get_principal),
 ):
     url = await _index_url(db)
     try:

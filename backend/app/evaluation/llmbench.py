@@ -639,6 +639,26 @@ def _module_score(module_run: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def progress_of(submission: dict[str, Any]) -> dict[str, Any]:
+    """What a submission still running has measured so far: every module run
+    with its state, and the metrics of the ones that are done, keyed as the
+    final result will key them. LLMBench stores a module's metrics the moment
+    it finishes and lists every run of a submission from the start, so the
+    first workload of a long benchmark can be read while the next one runs."""
+    modules: list[dict[str, Any]] = []
+    metrics: dict[str, Any] = {}
+    for key, run in _keyed_runs(submission):
+        state = str(run.get("status") or "")
+        modules.append({"key": key, "module": run.get("module_name", ""), "status": state})
+        if state != "done":
+            continue
+        for suffix, value in _module_score(run).items():
+            metrics[f"{key}.{suffix}"] = value
+        for name, value in (run.get("metrics_json") or {}).items():
+            _flatten_into(metrics, f"{key}.{name}", value)
+    return {"modules": modules, "metrics": metrics} if modules else {}
+
+
 def _flatten_metrics(submission: dict[str, Any]) -> dict[str, Any]:
     """Flatten per-module metrics_json into one namespaced dict of scalars.
 
@@ -765,7 +785,8 @@ class LLMBenchEvaluator(Evaluator):
                 metrics=_flatten_metrics(submission),
                 raw=submission,
             )
-        return EvalOutcome(status=EvalStatus.RUNNING)
+        # Still going: the modules already done are worth reading now.
+        return EvalOutcome(status=EvalStatus.RUNNING, progress=progress_of(submission))
 
     def cancel(self, external_ref: str) -> None:
         self.client.cancel(external_ref)

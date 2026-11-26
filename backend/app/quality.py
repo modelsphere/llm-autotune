@@ -6,7 +6,8 @@ finalists with the same quality suite (app/evaluation/benchmark_spec.py,
 QualitySpec) and holds each finalist to a floor relative to production's
 score: a redline `{"metric": "opencompass/accuracy[gpqa_diamond]", "op": ">=",
 "relative_to": "production", "value": -0.10}` reads "no more than ten points
-below production".
+below production"; with `"factor": 1.02` instead of a value the limit is a
+multiple of production's score ("no more than 2 % slower").
 
 Production's score is the average of every measurement of production in the
 campaign that reports the metric, so a second measurement of production
@@ -130,7 +131,14 @@ def resolve(objective: dict | None, scores: dict[str, float]) -> dict | None:
     out = []
     for redline in resolved.get(key) or []:
         metric = redline.get("metric")
-        if redline.get("relative_to") == PRODUCTION and metric in scores:
+        if redline.get("relative_to") == PRODUCTION and metric in scores and redline.get("factor"):
+            # A multiple of production's score: {"factor": 1.02} on a latency
+            # reads "no more than 2 % slower than production".
+            base, factor = scores[metric], float(redline["factor"])
+            redline = {k: v for k, v in redline.items() if k not in ("relative_to", "factor")}
+            redline["value"] = round(base * factor, 6)
+            redline["basis"] = f"production {base:.3g} × {factor:g}"
+        elif redline.get("relative_to") == PRODUCTION and metric in scores:
             base, offset = scores[metric], float(redline.get("value") or 0.0)
             sign = "-" if offset < 0 else "+"
             redline = {k: v for k, v in redline.items() if k != "relative_to"}

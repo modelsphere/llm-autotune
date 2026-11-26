@@ -302,6 +302,20 @@ class CampaignCreate(BaseModel):
     chart_version: str = Field("", max_length=64)
     # The catalog variant the recipe was read from ("<model>/<variant>@<version>").
     recipe_source: str = Field("", max_length=255)
+    # Files every run mounts into its engine, read only, by absolute path:
+    # {"/path": "<content>"}. Part of the configuration the campaign starts
+    # from, like its recipe. Only a driver that mounts files (the LLMService)
+    # launches a campaign that has any.
+    files: dict[str, str] = Field(default_factory=dict)
+
+    @field_validator("files")
+    @classmethod
+    def _files_fit(cls, files: dict[str, str]) -> dict[str, str]:
+        from app.schemas.policy import check_launch_files
+
+        check_launch_files(files)
+        return files
+
     objective: dict[str, Any] = Field(default_factory=dict)
     benchmark_slug: str = ""  # "" = platform default
     # The workload instead of a slug (app/evaluation/benchmark_spec.py):
@@ -429,6 +443,8 @@ class CampaignOut(BaseModel):
     recipe: dict[str, Any] = {}
     chart_version: str = ""
     recipe_source: str = ""
+    # Files every run mounts into its engine ({path: content}).
+    files: dict[str, str] = Field(default_factory=dict)
     objective: dict[str, Any]
     status: str
     benchmark_slug: str
@@ -611,6 +627,12 @@ class LeaderboardEntry(BaseModel):
     # across nights even as absolute numbers drift — which is why the board
     # ranks on it whenever it exists.
     vs_baseline: float | None = None
+    # Latency campaigns measure production twice per stage; the relative
+    # difference between the measurements is the stage's noise. True when this
+    # entry's gain over production is no larger than that: it may be luck, and
+    # it is never promoted on its own. None when there is no noise reading.
+    within_noise: bool | None = None
+    noise: float | None = None
     # This row IS the production baseline, not a candidate.
     is_baseline: bool = False
     # The canonical GPU type this run landed on (e.g. "H100"), from the node it

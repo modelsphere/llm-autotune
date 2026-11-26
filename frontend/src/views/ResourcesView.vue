@@ -140,6 +140,8 @@ const emptyClusterForm = () => ({
   endpoint: 'dns',
   image_mirror: '',
   site_values: '',
+  scheduler_name: '',
+  gpu_request_resource: '',
   node_host: '',
   service_nodeport: 0,
   gpu_resource: 'nvidia.com/gpu',
@@ -215,6 +217,7 @@ const emptyNewCluster = () => ({
   gpu_product_label: 'nvidia.com/gpu.product', tolerations: '',
   image_pull_secrets: '', node_selector: '', policy_node_selector: '',
   chart_repo: '', image_mirror: '',
+  scheduler_name: '', gpu_request_resource: '',
 })
 const newCluster = ref(emptyNewCluster())
 /** A failed Connect: the probe that says why, nothing saved. */
@@ -628,6 +631,8 @@ function clusterFormOf(c: Cluster) {
     endpoint: c.endpoint ?? 'dns',
     image_mirror: c.image_mirror ?? '',
     site_values: c.site_values ?? '',
+    scheduler_name: c.scheduler_name ?? '',
+    gpu_request_resource: c.gpu_request_resource ?? '',
     node_host: c.node_host,
     service_nodeport: c.service_nodeport,
     gpu_resource: c.gpu_resource,
@@ -1436,6 +1441,22 @@ onMounted(() => {
                 <el-form-item :label="t('resources.imageMirror')">
                   <el-input v-model.trim="newCluster.image_mirror" class="mono" :placeholder="t('resources.none')" />
                 </el-form-item>
+                <el-form-item>
+                  <template #label>
+                    {{ t('resources.gpuRequestResource') }}
+                    <InfoHint>{{ t('resources.gpuRequestResourceHint') }}</InfoHint>
+                  </template>
+                  <el-input v-model.trim="newCluster.gpu_request_resource" class="mono"
+                    :placeholder="newCluster.gpu_resource" />
+                </el-form-item>
+                <el-form-item>
+                  <template #label>
+                    {{ t('resources.schedulerName') }}
+                    <InfoHint>{{ t('resources.schedulerNameHint') }}</InfoHint>
+                  </template>
+                  <el-input v-model.trim="newCluster.scheduler_name" class="mono"
+                    :placeholder="t('resources.schedulerDefault')" />
+                </el-form-item>
               </template>
             </div>
           </el-collapse-item>
@@ -1675,6 +1696,22 @@ onMounted(() => {
                   </template>
                   <el-input v-model.trim="clusterForm.image_mirror" class="mono"
                     :placeholder="t('resources.none')" />
+                </el-form-item>
+                <el-form-item>
+                  <template #label>
+                    {{ t('resources.gpuRequestResource') }}
+                    <InfoHint>{{ t('resources.gpuRequestResourceHint') }}</InfoHint>
+                  </template>
+                  <el-input v-model.trim="clusterForm.gpu_request_resource" class="mono"
+                    :placeholder="clusterForm.gpu_resource" />
+                </el-form-item>
+                <el-form-item>
+                  <template #label>
+                    {{ t('resources.schedulerName') }}
+                    <InfoHint>{{ t('resources.schedulerNameHint') }}</InfoHint>
+                  </template>
+                  <el-input v-model.trim="clusterForm.scheduler_name" class="mono"
+                    :placeholder="t('resources.schedulerDefault')" />
                 </el-form-item>
               </template>
               <el-form-item label="RuntimeClass">

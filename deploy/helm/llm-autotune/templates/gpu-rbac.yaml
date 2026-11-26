@@ -33,6 +33,18 @@ rules:
   - apiGroups: [""]
     resources: ["pods/log"]
     verbs: ["get"]
+  # A command in a running engine's container, for a policy diagnosing it
+  # (policy contract 1.9); the run is marked tainted.
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    # create for kubectl (SPDY); get for a websocket exec (the Python client's),
+    # which is a GET.
+    verbs: ["create", "get"]
+  # Files a policy's launch mounts into its engine (policy contract 1.9): one
+  # ConfigMap per launch, owned by its LLMService.
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["create", "get", "update", "delete"]
   # Warning events (FailedMount and friends), so a run that never started
   # carries its real reason instead of a generic timeout.
   - apiGroups: [""]

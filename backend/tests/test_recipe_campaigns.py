@@ -336,3 +336,55 @@ async def test_a_campaign_starts_from_a_catalog_variant_as_published(client, mon
     assert resp.json()["recipe_source"] == "qwen3.6-35b-a3b/sglang-tp2-h100@1.1.0"
     missing = await client.get("/api/catalog/models/qwen3.6-35b-a3b/variants/nope")
     assert missing.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_a_service_key_reads_a_catalog_variant(client, monkeypatch):
+    from app.control.catalog_export import catalog_index
+    from app.core import apikeys
+    from app.db.models import ApiKey
+
+    transport = _catalog_transport()
+    variant = catalog_index.variant
+    monkeypatch.setattr(
+        catalog_index, "variant", lambda url, n, v: variant(url, n, v, transport)
+    )
+    token, prefix, key_hash = apikeys.mint()
+    async with client.db() as session:
+        session.add(ApiKey(name="svc", prefix=prefix, key_hash=key_hash, owner_id=1))
+        await session.commit()
+
+    got = await client.get(
+        "/api/catalog/models/qwen3.6-35b-a3b/variants/sglang-tp2-h100",
+        headers={"Authorization": "", "X-API-Key": token},
+    )
+    assert got.status_code == 200, got.text
+    assert got.json()["ref"] == "qwen3.6-35b-a3b/sglang-tp2-h100@1.1.0"
+
+
+def test_with_image_replaces_only_the_image():
+    from app.control.recipe.campaign import with_image
+
+    base = Recipe(values={"image": {"repository": "harbor:443/x/sglang", "tag": "a",
+                                    "pullPolicy": "IfNotPresent"}, "extraArgs": ["--tp-size=2"]},
+                  image_digest="sha256:old")
+    swapped = with_image(base, "harbor:443/x/sglang:b@sha256:new")
+    assert swapped.values["image"] == {"repository": "harbor:443/x/sglang", "tag": "b",
+                                       "pullPolicy": "IfNotPresent"}
+    assert swapped.image_digest == "sha256:new"
+    assert swapped.values["extraArgs"] == base.values["extraArgs"]
+    assert base.values["image"]["tag"] == "a", "the campaign's recipe is not changed"
+    assert with_image(base, "") is base and with_image(base, base.image) is base
+    assert with_image(base, "harbor:443/x/sglang:b").image_digest == ""
+
+
+def test_config_hash_is_the_recipe_hash_until_files_are_mounted():
+    from app.control.recipe.campaign import config_hash
+
+    recipe = Recipe(values={"extraArgs": ["--tp-size=2"]})
+    assert config_hash(recipe) == config_hash(recipe, {}) == recipe.hash()
+    one = config_hash(recipe, {"/opt/a.json": "1"})
+    assert one != recipe.hash()
+    assert one == config_hash(recipe, {"/opt/a.json": "1"})
+    assert one != config_hash(recipe, {"/opt/a.json": "2"})
+    assert one != config_hash(recipe, {"/opt/b.json": "1"})

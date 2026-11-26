@@ -241,7 +241,41 @@ def test_a_zero_valued_pair_does_not_become_a_division_by_zero():
 # -- the catalog promise ------------------------------------------------------
 
 
-REAL_KEYS = {f"{REPLAY}.{key}" for key in REPLAY_METRICS} | {
+# What a TIMED replay (schedule: timed, 1x load) adds to the keys above: the
+# replay module's own output for a four-request timed dataset against LLMBench's
+# mock server. Every other key it returned is in REPLAY_METRICS already.
+TIMED_REPLAY_METRICS = {
+    'e2e_p50_ms': 138.8757,
+    'e2e_p90_ms': 151.4391,
+    'e2e_mean_ms': 141.835,
+    'tpot_p50_ms': 5.5949,
+    'session_time_p50_s': 0.5711,
+    'session_time_mean_s': 0.5711,
+    'sessions_measured': 1,
+    'measured_requests': 4,
+    'warmup_requests': 0,
+    'schedule_s': 1.0,
+    'replay_s': 0.7565,
+    'schedule_lag_p99_s': 0.0051,
+    'fell_behind': 0,
+    'max_in_flight_hit': 0,
+    'in_flight_mean': 0.7372,
+    'in_flight_max': 1,
+    'cache_flushed': 1,
+    # Equivalent throughput, from the same module on a 300-request timed
+    # dataset with logged usage, against the same mock server (which answers
+    # far faster than the logged latencies: hence the low coverage).
+    'equivalent_tpm': 4683998.5097,
+    'equivalent_tpm_logged': 3928533.5243,
+    'equivalent_coverage': 0.02,
+    'equivalent_busy_share': 0.977,
+    'equivalent_size_matched': 1,
+    'equivalent_size_r2': 1.0,
+    'equivalent_little_error': -0.0759,
+    'equivalent_levels': 1,
+}
+
+REAL_KEYS = {f"{REPLAY}.{key}" for key in (*REPLAY_METRICS, *TIMED_REPLAY_METRICS)} | {
     f"{REPLAY}.score",
     # Ours, derived above from two keys LLMBench returned.
     f"{REPLAY}.score_card_norm",

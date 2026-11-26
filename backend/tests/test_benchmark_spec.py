@@ -245,6 +245,161 @@ async def test_a_campaign_replaying_a_frozen_dataset_records_it_and_pins_nothing
     assert "path" not in listed["prod-q36"]  # LLMBench's own business
 
 
+# -- several workloads in one benchmark --------------------------------------------
+
+
+def _replay_then_sweep(**extra) -> bs.BenchmarkSpec:
+    return bs.BenchmarkSpec(
+        kind="replay", dataset_frozen="mock-frozen", requests=200, concurrency=32,
+        more=[{"kind": "sweep", "concurrencies": [16, 64]}], **extra,
+    )
+
+
+def test_a_benchmark_can_run_several_workloads_in_order(mock_llmbench):
+    spec = _replay_then_sweep(quality={"tasks": ["gpqa_diamond"], "questions": 50})
+    doc = bs.document(spec, mock_llmbench)
+
+    assert [m["module_name"] for m in doc["modules"]] == [
+        bs.replay_module(), bs.SWEEP_MODULE, bs.QUALITY_MODULE]
+    assert [m["order_index"] for m in doc["modules"]] == [0, 1, 2]
+    # LLMBench's own score stays the first workload's.
+    assert [m["weight"] for m in doc["modules"]] == [1.0, 0.0, 0.0]
+    assert doc["modules"][0]["params"]["dataset_path"] == llmbench_mock.FROZEN["path"]
+    assert doc["modules"][1]["params"]["concurrencies"] == "16,64"
+    assert spec.modules == [bs.replay_module(), bs.SWEEP_MODULE, bs.QUALITY_MODULE]
+    # Known by its first workload.
+    assert spec.slug.startswith("autotune-replay-")
+    assert doc["group_tags"] == [f"{GROUP_TAG}/replay"]
+    assert "replay — mock-frozen" in spec.title and "; then sweep — " in spec.title
+    assert "quality (gpqa_diamond" in spec.title
+
+
+def test_a_module_run_twice_reports_under_its_own_key():
+    spec = bs.BenchmarkSpec(
+        kind="sweep", input_tokens=1024,
+        more=[{"kind": "sweep", "input_tokens": 16384, "concurrencies": [4]}],
+    )
+    assert spec.modules == [bs.SWEEP_MODULE, f"{bs.SWEEP_MODULE}#2"]
+    params = [m["params"]["input_tokens"] for m in bs.document(spec)["modules"]]
+    assert params == [1024, 16384]
+
+
+def test_further_workloads_are_part_of_what_the_benchmark_is():
+    alone = bs.BenchmarkSpec(kind="sweep")
+    a = {"kind": "sweep", "input_tokens": 8192}
+    b = {"kind": "sweep", "input_tokens": 16384}
+    assert bs.BenchmarkSpec(kind="sweep", more=[a]).slug != alone.slug
+    assert bs.BenchmarkSpec(kind="sweep", more=[a, b]).slug != (
+        bs.BenchmarkSpec(kind="sweep", more=[b, a]).slug), "the order is part of it"
+    assert bs.BenchmarkSpec(kind="sweep", more=[a]).slug == (
+        bs.BenchmarkSpec(kind="sweep", more=[{**a, "dataset_profile": "", "requests": 9}]).slug
+    ), "a field the workload does not use changes nothing"
+
+
+def test_a_benchmark_of_one_workload_keeps_the_slug_it_had():
+    import hashlib
+    import json
+
+    before = {"kind": "sweep", "input_tokens": 2048, "output_tokens": 512,
+              "concurrencies": [1, 4, 16, 64], "requests_per_concurrency": 20,
+              "max_seconds_per_level": 600}
+    digest = hashlib.sha256(json.dumps(before, sort_keys=True).encode()).hexdigest()[:8]
+    assert bs.BenchmarkSpec().slug == f"autotune-sweep-{digest}"
+    assert bs.BenchmarkSpec().modules == [bs.SWEEP_MODULE]
+    assert bs.BenchmarkSpec().title.startswith("AutoTune sweep — 2048 in / 512 out")
+
+
+def test_a_further_replay_names_a_frozen_dataset():
+    with pytest.raises(ValueError, match="frozen dataset"):
+        bs.BenchmarkSpec(kind="sweep", more=[{"kind": "replay", "dataset_profile": "rolling"}])
+    with pytest.raises(ValueError):
+        bs.BenchmarkSpec(kind="sweep", more=[{"kind": "sweep"}] * 5)
+    with pytest.raises(ValueError, match="not both"):
+        bs.BenchmarkSpec(kind="sweep", more=[
+            {"kind": "replay", "dataset_profile": "a", "dataset_frozen": "b"}])
+
+
+def test_a_benchmark_of_several_workloads_is_created_and_locked(mock_llmbench):
+    spec = _replay_then_sweep()
+    ensured = bs.ensure_spec(spec, mock_llmbench)
+    assert ensured.created and ensured.locked
+    stored = mock_llmbench.get_benchmark(spec.slug)
+    assert stored is not None
+    assert not bs.ensure_spec(spec, mock_llmbench).created, "asked twice, made once"
+
+
+async def test_the_spec_endpoint_names_every_module(client):
+    response = await client.post("/api/benchmarks/spec", json={
+        "kind": "sweep", "more": [{"kind": "sweep", "input_tokens": 8192}],
+        "quality": {"tasks": ["gpqa_diamond"]},
+    })
+    assert response.status_code == 200, response.text
+    assert response.json()["modules"] == [
+        bs.SWEEP_MODULE, f"{bs.SWEEP_MODULE}#2", bs.QUALITY_MODULE]
+    assert response.json()["module"] == bs.SWEEP_MODULE
+
+
+def test_a_metric_is_checked_against_the_modules_a_benchmark_runs():
+    spec = bs.BenchmarkSpec(kind="sweep", more=[{"kind": "sweep", "input_tokens": 8192}],
+                            quality={"tasks": ["gpqa_diamond"]})
+    assert bs.metric_problem(f"{bs.SWEEP_MODULE}.output_tps", spec) is None
+    assert bs.metric_problem(f"{bs.SWEEP_MODULE}#2.output_tps", spec) is None
+    assert bs.metric_problem("score_total", spec) is None
+    assert "no module replay" in bs.metric_problem("replay.output_tpm", spec)
+    assert "no module" in bs.metric_problem(f"{bs.SWEEP_MODULE}#3.output_tps", spec)
+    assert bs.metric_problem("output_tpm_per_gpu", spec) is None
+    assert bs.metric_problem("nonsense_measure/[x", spec) is not None
+
+
+def test_fixed_output_lengths_is_its_own_benchmark_and_reaches_the_module():
+    plain = bs.BenchmarkSpec(kind="replay", dataset_profile="p", requests=400)
+    fixed = bs.BenchmarkSpec(
+        kind="replay", dataset_profile="p", requests=400, fixed_output_lengths=True,
+    )
+    # Off by default, and off leaves the slug of every existing replay alone.
+    assert "fixed_output_lengths" not in plain.essentials()
+    assert fixed.essentials()["fixed_output_lengths"] is True
+    assert plain.slug != fixed.slug
+    assert "recorded lengths" in fixed.description
+    assert bs.workload_module(fixed)["params"]["fixed_output_lengths"] is True
+    assert "fixed_output_lengths" not in bs.workload_module(plain)["params"]
+
+
+def test_a_timed_replay_takes_fixed_output_lengths_too():
+    plain = bs.BenchmarkSpec(kind="replay", dataset_profile="p", schedule="timed")
+    fixed = bs.BenchmarkSpec(kind="replay", dataset_profile="p", schedule="timed",
+                             fixed_output_lengths=True)
+    # Off leaves the slug of every existing timed replay alone.
+    assert "fixed_output_lengths" not in plain.essentials()
+    assert fixed.essentials()["fixed_output_lengths"] is True
+    assert plain.slug != fixed.slug
+    assert "recorded lengths" in fixed.description
+    assert "recorded lengths" not in plain.description
+    params = bs.workload_module(fixed)["params"]
+    assert params["fixed_output_lengths"] is True and params["schedule"] == "timed"
+    assert "fixed_output_lengths" not in bs.workload_module(plain)["params"]
+
+
+def test_steady_state_only_is_its_own_benchmark_reaches_the_module_and_is_closed_replay_only():
+    plain = bs.BenchmarkSpec(kind="replay", dataset_profile="p", requests=400)
+    steady = bs.BenchmarkSpec(
+        kind="replay", dataset_profile="p", requests=400, steady_state_only=True,
+    )
+    # Off by default, and off leaves the slug of every existing replay alone.
+    assert "steady_state_only" not in plain.essentials()
+    assert steady.essentials()["steady_state_only"] is True
+    assert plain.slug != steady.slug
+    assert "steady part" in steady.description
+    assert bs.workload_module(steady)["params"]["steady_state_only"] is True
+    assert "steady_state_only" not in bs.workload_module(plain)["params"]
+    with pytest.raises(ValueError, match="closed replay"):
+        bs.BenchmarkSpec(
+            kind="replay", dataset_profile="p", schedule="timed", steady_state_only=True,
+        )
+    with pytest.raises(ValueError, match="closed replay"):
+        bs.Workload(kind="sweep", steady_state_only=True)
+
+
 async def test_bfcl_campaign_and_verification_default_to_total_tpm(client):
     response = await client.post("/api/campaigns", json=_body(
         benchmark_spec={"kind": "bfcl"}, verify_benchmark_spec={"kind": "bfcl"},
@@ -319,3 +474,41 @@ def test_preflight_detects_an_llmbench_without_bfcl(mock_llmbench, monkeypatch):
     body = campaigns_api.PreflightRequest(**_body(benchmark_spec={"kind": "bfcl"}))
     checks = campaigns_api._benchmark_checks(body, {}, mock_llmbench)
     assert any(c.key == "bfcl_module" and c.status == "fail" for c in checks)
+
+
+def test_a_grid_sweep_keeps_its_slug_and_its_module():
+    """The fields auto mode added are only in the slug when set."""
+    spec = bs.BenchmarkSpec(kind="sweep", concurrencies=[8, 32])
+    assert "mode" not in spec.essentials() and "slo" not in spec.essentials()
+    params = bs.workload_module(spec)["params"]
+    assert params["search_mode"] == "grid" and params["concurrencies"] == "8,32"
+    assert not any(k.startswith(("slo_", "search_max", "probe_")) for k in params)
+
+
+def test_an_auto_sweep_searches_for_its_slo():
+    spec = bs.BenchmarkSpec(kind="sweep", mode="auto", max_concurrency=256,
+                         slo={"ttft_ms": 2000, "ttft_percentile": "p90",
+                              "min_request_output_tps": 20})
+    params = bs.workload_module(spec)["params"]
+    assert params["search_mode"] == "auto" and "concurrencies" not in params
+    assert params["search_max_concurrency"] == 256 and params["probe_requests_per_concurrency"] == 5
+    assert params["search_granularity"] == 0 and params["max_total_seconds"] == 7200
+    assert (params["slo_max_ttft_ms"], params["slo_ttft_percentile"],
+            params["slo_min_request_output_tps"]) == (2000, "p90", 20)
+    assert spec.slug != bs.BenchmarkSpec(kind="sweep").slug
+    assert "concurrencies" not in spec.essentials(), "auto runs none of the grid's levels"
+    assert "searching up to concurrency 256" in spec.title
+
+
+def test_a_grid_sweep_may_report_a_fixed_level_or_its_peak():
+    fixed = bs.BenchmarkSpec(kind="sweep", concurrencies=[8, 32], report_level="fixed",
+                             fixed_level=32)
+    assert bs.workload_module(fixed)["params"]["fixed_level"] == 32
+    peak = bs.BenchmarkSpec(kind="sweep", report_level="peak")
+    assert bs.workload_module(peak)["params"]["report_level"] == "peak"
+    for bad in ({"report_level": "fixed", "fixed_level": 7, "concurrencies": [8]},
+                {"mode": "auto", "report_level": "peak"},
+                {"kind": "replay", "mode": "auto"},
+                {"slo": {"ttft_ms": 1, "nope": 2}}):
+        with pytest.raises(ValueError):
+            bs.BenchmarkSpec(**{"kind": "sweep", **bad})

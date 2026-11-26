@@ -11,11 +11,13 @@ because a newer SDK talking to an older platform must degrade, not 422.
 """
 
 from datetime import datetime
-from typing import Any, Literal
+from typing import Any, Literal, Self
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-CONTRACT_VERSION = "1.7"
+from app.evaluation.benchmark_spec import BenchmarkSpec
+
+CONTRACT_VERSION = "1.11"
 
 # Inbound payloads from policy containers: unknown fields are the future, not
 # an error.
@@ -78,6 +80,17 @@ class PolicySettings(BaseModel):
     # silently. With no vocabulary for the image, "refuse" (the default)
     # refuses env keys outright; "warn" lets them through with a warning.
     env_without_vocabulary: Literal["refuse", "warn"] = "refuse"
+    # (1.9) Other images of the campaign's engine a launch may name, besides
+    # the campaign's own: same model, recipe and configuration, another image.
+    images: list[str] = Field(default_factory=list, max_length=32)
+    # (1.9) A launch may mount files into its engine container (LaunchIn.files):
+    # a tuned kernel configuration, a chat template, a replaced module. Off
+    # unless the campaign allows it. `file_paths` narrows where: a mounted
+    # path must be under one of them; empty = any absolute path.
+    files: bool = False
+    file_paths: list[str] = Field(default_factory=list, max_length=32)
+    # (1.11) Existing benchmarks a probe may run by slug (LaunchBenchmarkIn).
+    benchmark_slugs: list[str] = Field(default_factory=list, max_length=8)
 
     def forbidden(self) -> list[str]:
         """The forbidden-parameter patterns in force for this campaign."""
@@ -108,9 +121,15 @@ class PolicySettings(BaseModel):
 class PolicyBase(BaseModel):
     name: str = Field(min_length=2, max_length=128)
     description: str = ""
-    image: str = Field(min_length=1, max_length=255)
+    # The container to run. An external policy has none to run and may leave
+    # this empty, or name what it is for people to read.
+    image: str = Field(default="", max_length=255)
     repo_url: str = ""
     version: str = ""
+    # Run outside the platform: no container is started, and the campaign's
+    # owner asks for the session's token (POST /campaigns/{id}/session-token)
+    # and drives the same policy API from wherever the policy runs.
+    external: bool = False
     # Off by default: most policies delegate, asking the platform to launch
     # engines, and need neither. A self-serving policy, which runs engines in
     # its own container, turns both on. (Rows registered before keep theirs.)
@@ -126,6 +145,19 @@ class PolicyBase(BaseModel):
     # The LLM endpoint (Settings → LLM endpoints) an agent policy calls; at
     # launch it sets LLM_BASE_URL, LLM_MODEL and LLM_API_KEY. None: no model.
     llm_endpoint_id: int | None = None
+
+    @model_validator(mode="after")
+    def _a_container_or_none(self) -> Self:
+        if not self.external:
+            if not self.image.strip():
+                raise ValueError("image: the container the platform runs for this policy")
+            return self
+        if self.gpus_in_container or self.needs_model:
+            raise ValueError(
+                "an external policy has no container on the machine: "
+                "gpus_in_container and needs_model do not apply to it"
+            )
+        return self
 
 
 class PolicyIn(PolicyBase):
@@ -143,6 +175,19 @@ class PolicyOut(PolicyBase):
     created_at: datetime | None = None
     # The names of the secret variables, never their values.
     secret_env_keys: list[str] = Field(default_factory=list)
+
+
+class SessionTokenOut(BaseModel):
+    """The credential of an external policy's session, shown once."""
+
+    session_id: int
+    # Sent as X-API-Key on every policy API call. Not stored: asking again
+    # issues a new one and ends this one.
+    token: str
+    expires_at: datetime
+    # Where the policy API is, as the platform is configured to be reached
+    # from outside ("" when it is not).
+    api_url: str = ""
 
 
 # -- the manifest (policy-facing) -------------------------------------------------
@@ -410,15 +455,91 @@ class LaunchIn(BaseModel):
     model_config = _lenient
 
     engine_args: dict[str, Any]
-    # The cards the config runs on, as many as it uses (tp×dp×pp). Empty only
-    # on a machine with no cards, whose session holds none.
+    # The cards the config runs on, as many as it uses (tp×dp×pp). (1.8)
+    # Empty: the platform takes that many free cards of the allocation itself.
     gpu_indices: list[int] = Field(default_factory=list)
     port: int | None = None
+    # (1.9) Run this image instead of the campaign's: one of the images the
+    # campaign allows (`policy_settings.images`). Empty: the campaign's.
+    image: str = ""
+    # (1.9) Files to mount into the engine container, by absolute path, read
+    # only, in place before the engine starts: {"/path": "<content>"}. Needs
+    # `policy_settings.files`. Stored with the launch, so a relaunch of it
+    # mounts the same files.
+    files: dict[str, str] = Field(default_factory=dict)
+
+    @field_validator("files")
+    @classmethod
+    def _files_fit(cls, files: dict[str, str]) -> dict[str, str]:
+        check_launch_files(files)
+        return files
+
+
+# (1.9) What a launch may mount: they travel in one ConfigMap, whose limit is
+# 1 MiB, so half of that, in at most 16 files.
+MAX_LAUNCH_FILES = 16
+MAX_LAUNCH_FILE_BYTES = 512 * 1024
+
+
+def check_launch_files(files: dict[str, str]) -> None:
+    if len(files) > MAX_LAUNCH_FILES:
+        raise ValueError(f"at most {MAX_LAUNCH_FILES} files")
+    total = 0
+    for path, content in files.items():
+        parts = path.split("/")
+        if not path.startswith("/") or path.endswith("/") or ".." in parts or "" in parts[1:]:
+            raise ValueError(f"{path!r}: a file's path is absolute, normalized, and names a file")
+        total += len(content.encode("utf-8"))
+    if total > MAX_LAUNCH_FILE_BYTES:
+        raise ValueError(f"the files come to {total} bytes; at most {MAX_LAUNCH_FILE_BYTES}")
+
+
+class LaunchFile(BaseModel):
+    path: str
+    sha256: str
+    bytes: int
+
+
+def launch_files(files: dict[str, str] | None) -> list[LaunchFile]:
+    import hashlib
+
+    return [
+        LaunchFile(
+            path=path,
+            sha256=hashlib.sha256(content.encode("utf-8")).hexdigest(),
+            bytes=len(content.encode("utf-8")),
+        )
+        for path, content in sorted((files or {}).items())
+    ]
+
+
+class ExecIn(BaseModel):
+    """(1.9) A shell line to run in a launch's engine container."""
+
+    model_config = _lenient
+
+    command: str = Field(min_length=1, max_length=8000)
+    timeout_s: int = Field(default=60, ge=1, le=600)
+
+
+class ExecOut(BaseModel):
+    exit_code: int
+    # stdout then stderr, the last 64 KB.
+    output: str
+    tainted: bool = True
 
 
 class LaunchOut(BaseModel):
     id: int
     status: str  # queued|launching|ready|serving|releasing|failed|released
+    # (1.8) The cards it holds (slots, on a node pool).
+    gpu_indices: list[int] = Field(default_factory=list)
+    # (1.9) The image the launch named; "" = the campaign's.
+    image: str = ""
+    # (1.9) A command was run in its engine (POST /launches/{id}/exec).
+    tainted: bool = False
+    # (1.9) The files mounted into its engine, by path and digest.
+    files: list[LaunchFile] = Field(default_factory=list)
     endpoint_url: str = ""
     launch_command: str = ""
     failure_class: str = ""
@@ -431,6 +552,12 @@ class LaunchOut(BaseModel):
     # and these say why and since when. It starts by itself once cards free up.
     waiting_reason: str = ""
     waiting_since: datetime | None = None
+    # (1.10) What it runs, as one document: the campaign's recipe with the
+    # config and the launch's image applied ({engine, chart, values,
+    # image_digest}), and the identity of that recipe with the launch's files.
+    # Without files, `config_hash` is the recipe's own hash.
+    recipe: dict[str, Any] = Field(default_factory=dict)
+    config_hash: str = ""
 
 
 # -- benchmarks ------------------------------------------------------------------------
@@ -444,12 +571,22 @@ class ExternalBenchmarkIn(BaseModel):
     # Empty only on a machine with no cards (see LaunchIn).
     gpu_indices: list[int] = Field(default_factory=list)
     suite: str = "screen"
+    # (1.8) See LaunchBenchmarkIn.
+    benchmark: BenchmarkSpec | None = None
 
 
 class LaunchBenchmarkIn(BaseModel):
     model_config = _lenient
 
     suite: str = "screen"
+    # (1.8) A probe: measure with this workload instead of a suite's. The
+    # platform creates the benchmark (the same description is always the same
+    # benchmark) and answers the result, without judging it by the campaign's
+    # objective or ranking it with the campaign's results. `suite` is ignored.
+    benchmark: BenchmarkSpec | None = None
+    # (1.11) A probe on an existing benchmark, by slug: one the campaign lists
+    # in `policy_settings.benchmark_slugs`. Answered like any probe.
+    benchmark_slug: str = ""
 
 
 class BenchmarkSummary(BaseModel):
@@ -478,10 +615,23 @@ class ScenarioMeasures(BaseModel):
     supports: list[str] = Field(default_factory=list)
 
 
+class ModuleProgress(BaseModel):
+    key: str
+    module: str = ""
+    status: str = ""
+
+
 class BenchmarkOut(BaseModel):
     id: int
     status: str  # queued|health_check|benching|succeeded|failed|killed
-    suite: str = "screen"
+    suite: str = "screen"  # screen | verify | probe (1.8)
+    # (1.8) The benchmark it ran on, for a probe; "" for a suite's.
+    benchmark_slug: str = ""
+    # (1.8) Each module run of the benchmark, in order, with its state
+    # (pending, running, done, failed, skipped) and the key its metrics are
+    # reported under. While the benchmark runs, `metrics` already holds the
+    # modules that are done; `summary` and `measures` wait for the end.
+    modules: list[ModuleProgress] = Field(default_factory=list)
     summary: BenchmarkSummary | None = None
     metrics: dict[str, Any] = Field(default_factory=dict)
     # (1.3) The same results as measures, one entry per module. `metrics` keeps
@@ -500,6 +650,8 @@ class ConfigCheckIn(BaseModel):
     model_config = _lenient
 
     engine_args: dict[str, Any]
+    # (1.9) Check against another of the campaign's images.
+    image: str = ""
 
 
 class ConfigProblem(BaseModel):

@@ -315,6 +315,11 @@ class Settings(BaseSettings):
     # Chart values every engine on this cluster gets (JSON), under the run's
     # own: resources a quota demands, securityContext, shm.
     k8s_site_values: str = ""
+    # The scheduler engine pods name ("" = the cluster's default) and the
+    # resource their cards are requested as ("" = k8s_gpu_resource, the one
+    # nodes are counted by). LLMService runs only.
+    k8s_scheduler_name: str = ""
+    k8s_gpu_request_resource: str = ""
     # The custom resource the operator reconciles (only used when
     # k8s_workload_kind="custom"). Defaults address the autotune-operator's
     # TuningRun CRD; override only if its group/kind changes. apiVersion is

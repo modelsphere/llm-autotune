@@ -92,6 +92,37 @@ registry and update the **Image** here, or build it from source with
 
 A policy used by a campaign can be edited but not removed.
 
+### A policy you run yourself
+
+A policy does not have to be a container the platform starts. An **external**
+policy runs wherever you run it (a laptop, another service, a notebook) and
+calls the same API. The platform reserves the machine and the cards for its
+session and starts nothing.
+
+It is registered through the API, with no image:
+
+```bash
+curl -X POST http://localhost:8080/api/policies -H "X-API-Key: $KEY" \
+  -H 'Content-Type: application/json' \
+  -d '{"name": "my-notebook", "external": true}'
+```
+
+When a campaign that uses it has its machine, ask for the session's token as
+the campaign's owner:
+
+```bash
+curl -X POST http://localhost:8080/api/campaigns/42/session-token -H "X-API-Key: $KEY"
+```
+
+- The answer has the `token`, when it expires and the `session_id`. The token
+  is shown once. Send it as `X-API-Key` on every policy API call.
+- The call answers 409 while the campaign is still waiting for a machine.
+- Asking again gives a new token and ends the one before.
+- The policy must send its first heartbeat within the start timeout (30
+  minutes by default) and keep sending them. A policy that goes silent ends
+  its search, and the session ends with the campaign's window as for any
+  policy.
+
 ## Writing a policy
 
 A policy is any container that implements a small HTTP API. The quickest

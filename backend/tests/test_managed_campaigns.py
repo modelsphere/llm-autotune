@@ -223,3 +223,17 @@ def test_a_plugin_changes_only_the_campaigns_it_runs(session):
             stop_managed_campaign(session, campaign, plugin=plugin)
         with pytest.raises(ManagedCampaignRefused, match="is not run by plugin"):
             start_managed_campaign(session, campaign, plugin=plugin, start_for=timedelta(1))
+
+
+def test_a_spec_may_carry_files_every_run_mounts(session):
+    files = {"/opt/moe/E=256.json": '{"1": {}}'}
+    campaign = create_managed_campaign(
+        session, owner=OWNER, owner_id=1, spec={**SPEC, "files": files}
+    )
+    session.commit()
+    assert campaign.files == files
+
+    with pytest.raises(ValueError, match="absolute"):
+        create_managed_campaign(
+            session, owner=OWNER, owner_id=1, spec={**SPEC, "files": {"opt/a.json": "x"}}
+        )

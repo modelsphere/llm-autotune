@@ -144,3 +144,97 @@ def test_a_service_that_names_its_cluster_ip_is_replaced_not_created():
     api.apply({"kind": "Service", "metadata": {"name": "r-np"},
                "spec": {"clusterIP": "10.96.0.9", "selector": {"app": "front"}}})
     assert core.calls == [("replace", "41")]
+
+
+def test_client_exec_never_swaps_the_shared_clients_request(monkeypatch):
+    """stream() swaps an ApiClient's request method for a websocket one while
+    it runs. On the shared client two execs at once left the websocket one in
+    place for good, and every later call of the process (node reads, pod
+    lists) failed with "'NoneType' object has no attribute 'decode'". Each
+    exec now has a client of its own."""
+    import functools
+    import threading
+
+    import kubernetes.stream
+    from kubernetes import client
+    from kubernetes.stream.stream import _websocket_request
+
+    cfg = client.Configuration()
+    cfg.host = "https://k8s.invalid"
+    api = ClientApi(_s(k8s_namespace="runs"))
+    api._ensure = lambda: None
+    api._cfg = cfg
+    api._api_client = client.ApiClient(configuration=cfg)
+    api._core = client.CoreV1Api(api._api_client)
+    api._ApiException = client.rest.ApiException
+    shared = api._api_client.request
+    both = threading.Barrier(2, timeout=5)
+    seen = []
+
+    class Resp:
+        returncode = 0
+
+        def __init__(self):
+            self.open = True
+
+        def is_open(self):
+            return self.open
+
+        def update(self, timeout):
+            self.open = False
+
+        def peek_stdout(self):
+            return False
+
+        def peek_stderr(self):
+            return False
+
+        def close(self):
+            pass
+
+    def fake_ws(configuration, _method, url, **kwargs):
+        # Both execs are inside stream() here at the same time.
+        seen.append(api._api_client.request == shared)
+        both.wait()
+        return Resp()
+
+    fake_stream = functools.partial(_websocket_request, fake_ws, None)
+    monkeypatch.setattr(kubernetes.stream, "stream", fake_stream)
+    results = []
+    threads = [
+        threading.Thread(target=lambda: results.append(api.exec("p", "c", ["true"], 5)))
+        for _ in range(2)
+    ]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert results == [(0, ""), (0, "")]
+    assert seen == [True, True]
+    assert api._api_client.request == shared
+
+
+def test_client_load_runs_once_and_sets_core_last(monkeypatch):
+    """Threads share a ClientApi: the first use loads it once, and a thread
+    that finds `_core` set finds every other client set too."""
+    import threading
+
+    api = ClientApi(_s(k8s_namespace="runs"))
+    loads = []
+    gate = threading.Event()
+
+    def slow_load():
+        loads.append(1)
+        gate.wait(2)
+        api._apps = api._custom = object()
+        api._core = object()
+
+    monkeypatch.setattr(api, "_load", slow_load)
+    threads = [threading.Thread(target=api._ensure) for _ in range(4)]
+    for t in threads:
+        t.start()
+    gate.set()
+    for t in threads:
+        t.join()
+    assert loads == [1]
+    assert api._apps is not None

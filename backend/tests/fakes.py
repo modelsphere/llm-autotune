@@ -49,6 +49,12 @@ class NullDriver(DeploymentDriver):
         self.restarts: dict[str, int] = {}
         self.replacements: dict[str, int] = {}
 
+    def exec_in(self, handle, command, timeout):
+        # (1.9) Commands a policy ran in an engine, and a canned answer.
+        self.execs = getattr(self, "execs", [])
+        self.execs.append((handle.container_name, command))
+        return 0, f"ran: {command}\n"
+
     def launch(self, spec):
         self._gone.discard(spec.container_name)  # a relaunch resurrects it
         self.launched.append(spec.container_name)
