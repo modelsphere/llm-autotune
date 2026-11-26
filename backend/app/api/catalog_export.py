@@ -39,7 +39,7 @@ from app.control.catalog_export.publish import publish
 from app.control.catalog_export.validation import validation_file
 from app.control.launch_config import LaunchConfig
 from app.control.recipe import Recipe
-from app.control.recipe.campaign import recipe_for
+from app.control.recipe.campaign import run_recipe
 from app.core import platform_settings
 from app.core.auth import Principal, get_principal
 from app.datasets.pinning import dataset_of
@@ -140,7 +140,7 @@ def _launched_recipe(campaign: Campaign, candidate: Candidate, run: Run) -> Reci
     launched = _RECIPE_HASH.search(run.launch_command or "")
     if not campaign.recipe and launched is None:
         return None  # a deprecated driver's run: its config is converted
-    recipe = recipe_for(campaign, dict(candidate.config or {}))
+    recipe = run_recipe(campaign, dict(candidate.config or {}), run.image or "")
     if launched is not None and launched.group(1) != recipe.hash():
         raise HTTPException(
             status.HTTP_409_CONFLICT,
@@ -156,6 +156,14 @@ async def _from_run(session: AsyncSession, item: CatalogVariantIn) -> tuple[Vari
     candidate = await session.get(Candidate, run.candidate_id) if run is not None else None
     if run is None or campaign is None or candidate is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"no run {item.run_id} on record")
+    if run.files:
+        # The catalog has no place for files mounted into the engine yet, and a
+        # variant without them is not the configuration that was measured.
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            f"run {run.id} mounted files into its engine ({', '.join(sorted(run.files))}); "
+            "publishing a configuration with files is not supported yet",
+        )
     result = await _latest_result(session, run.id)
     if result is None:
         raise HTTPException(
@@ -170,7 +178,7 @@ async def _from_run(session: AsyncSession, item: CatalogVariantIn) -> tuple[Vari
         recipe=recipe,
         config=LaunchConfig.from_campaign(
             campaign, dict(candidate.config or {}), gpu_type=await _card_type(session, run)
-        ),
+        ).model_copy(update={"image": run.image} if run.image else {}),
         role=item.role,
         label=item.label or f"{campaign.name} run {run.id}",
         nodes=item.nodes or 1,
@@ -184,7 +192,7 @@ async def _from_run(session: AsyncSession, item: CatalogVariantIn) -> tuple[Vari
             "direction": direction(campaign.objective or {}),
         },
         load_seconds=await _load_seconds(session, run.id),
-        image_digest=_digest_of(run.env_snapshot, campaign.image),
+        image_digest=_digest_of(run.env_snapshot, run.image or campaign.image),
         origin={"kind": "campaign_run", "campaign_id": campaign.id, "run_id": run.id},
         id=item.id,
         description=item.description,

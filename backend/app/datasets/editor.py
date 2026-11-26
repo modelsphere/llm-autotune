@@ -7,7 +7,7 @@ The profile reads from a VictoriaLogs store of the gateway's request logs.
 """
 
 import re
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -48,6 +48,13 @@ class DatasetForm(BaseModel):
     subwindow_minutes: int = Field(60, ge=1, le=24 * 60)
     max_carry_multiple: int = Field(4, ge=1, le=10_000)
     window_timezone: str = Field("UTC", min_length=1, max_length=64)
+    # sampled: single requests spread over the window. timed: every request of
+    # one stretch at typical load, in time order with sessions, for a 1×
+    # replay; sample_size is then how many requests the stretch holds.
+    layout: Literal["sampled", "timed"] = "sampled"
+    # Where the logs keep a session id (dotted field); empty = message prefixes.
+    session_field: str = Field("", max_length=200)
+    max_idle_gap_s: float = Field(5.0, ge=0.0, le=3600.0)
 
     @field_validator("model", "display_name", "name", "source_url", "extra_logsql")
     @classmethod
@@ -108,6 +115,10 @@ def profile_fields(form: DatasetForm, source_url: str) -> dict[str, Any]:
         "keep_builds": form.keep_builds,
         "schedule_interval_hours": 0,
         "max_age_hours": 0,
+        # Sent only for a timed dataset, so a sampled one's profile is what it
+        # always was (and an LLMBench without timed datasets is not asked).
+        **({"layout": "timed", "session_field": form.session_field,
+            "max_idle_gap_s": form.max_idle_gap_s} if form.layout == "timed" else {}),
     }
 
 
@@ -146,4 +157,7 @@ def form_of(profile: dict[str, Any], refresh_hours: int) -> dict[str, Any]:
         "subwindow_minutes": profile.get("subwindow_minutes", 60),
         "max_carry_multiple": profile.get("max_carry_multiple", 4),
         "window_timezone": profile.get("window_timezone") or "UTC",
+        "layout": profile.get("layout") or "sampled",
+        "session_field": profile.get("session_field") or "",
+        "max_idle_gap_s": profile.get("max_idle_gap_s", 5.0),
     }

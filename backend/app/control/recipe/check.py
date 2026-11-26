@@ -12,6 +12,7 @@ publish writes. The rules are the chart's and the catalog's, checked offline:
 - the chart's own render guards that can be read off the values (pd with
   lws, extraArgs under commandOverride);
 - parallelism against the cards the pods claim (shape.py);
+- a card count written twice: under model.gpus and again under resources;
 - an image with no tag, which would deploy the chart's default engine.
 
 Rendering the chart (`helm template`) catches the rest, where the binary and
@@ -25,7 +26,7 @@ from typing import Any
 from app.control.recipe import args as argv
 from app.control.recipe.address import BadAddress, is_managed, parse, value_key
 from app.control.recipe.model import ROLES, Recipe
-from app.control.recipe.shape import parallelism_problems
+from app.control.recipe.shape import accelerator_names, parallelism_problems
 
 # Top-level chart values a recipe may not set: the site's, the run's or a
 # deploy form's. The same set the catalog's validator refuses in a variant.
@@ -135,6 +136,27 @@ def config_problems(config: dict[str, Any]) -> list[dict[str, Any]]:
     return out
 
 
+def card_resource_problems(values: dict[str, Any]) -> list[dict[str, Any]]:
+    """The charts' render guard on the card count: `model.gpus` is rendered
+    under `model.gpuResource` (nvidia.com/gpu when unset), and naming that
+    resource under `resources` as well is refused. Read off a recipe's own
+    values here, and off the composed ones at launch, where the resource may
+    be the cluster's (compose.py)."""
+    resource = str(((values.get("model") or {}).get("gpuResource")) or "").strip()
+    resource = resource or "nvidia.com/gpu"
+    resources = values.get("resources") or {}
+    return [
+        problem(
+            "not_renderable",
+            f"resources.{section} names {resource}, which model.gpus already requests:"
+            f" keep the count in model.gpus and take it out of resources.{section}",
+            f"values.resources.{section}",
+        )
+        for section in ("limits", "requests")
+        if resource in (resources.get(section) or {})
+    ]
+
+
 def recipe_problems(recipe: Recipe) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     values = recipe.values
@@ -166,6 +188,7 @@ def recipe_problems(recipe: Recipe) -> list[dict[str, Any]]:
         )
     if (values.get("pd") or {}).get("enabled") and (values.get("lws") or {}).get("enabled"):
         out.append(problem("not_renderable", "pd and lws are exclusive", "values.lws.enabled"))
+    out.extend(card_resource_problems(values))
     if values.get("commandOverride") is None:
         for message in parallelism_problems(recipe):
             out.append(problem("placement", message))
@@ -179,6 +202,13 @@ def recipe_warnings(recipe: Recipe) -> list[str]:
     sets them at launch, and a config may never tune them (config_problems)."""
     out: list[str] = []
     values = recipe.values
+    named = accelerator_names(values)
+    if recipe.gpus > 0 and named and not card_resource_problems(values):
+        out.append(
+            f"model.gpus asks for {recipe.gpus} card(s) and resources names {', '.join(named)}"
+            " as well: the pod requests both. The count belongs in model.gpus; the resource"
+            " it is requested as is the cluster's"
+        )
     seen: set[str] = set()
     for path in _leaf_paths(values):
         if _site_path(path):

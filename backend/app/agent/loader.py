@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app import plugins
 from app.agent.overlay import RunOverlay
 from app.db.models import Campaign, Candidate, Machine, Result, Run
+from app.staging import PROBE
 
 
 @dataclass
@@ -39,7 +40,8 @@ async def load_run(session: AsyncSession, run_id: int) -> RunBundle | None:
     result = (
         await session.execute(
             select(Result)
-            .where(Result.run_id == run.id, Result.source == "llmbench")
+            # A probe's result is its run's result too (app/staging.py).
+            .where(Result.run_id == run.id, Result.source.in_(("llmbench", PROBE)))
             .order_by(Result.id.desc())
             .limit(1)
         )

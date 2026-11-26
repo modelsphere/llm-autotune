@@ -204,6 +204,43 @@ METRICS: list[dict[str, Any]] = [
        "regressed.", unit="ms", group=REPLAY_GROUP),
     _m(f"{REPLAY}.total_time_p99_ms", "Replay end-to-end p99", "lower",
        "Worst-case time to a complete answer.", unit="ms", group=REPLAY_GROUP),
+    # A timed replay (schedule "timed": every request on its recorded timing,
+    # production's own load) measures latency as users saw it, from each
+    # request's due time.
+    _m(f"{REPLAY}.e2e_p50_ms", "1x replay: latency median", "lower",
+       "Timed replay at production's own load: the typical time from a request's "
+       "due time to its last token. What a latency campaign ranks on.",
+       unit="ms", headline=True, group=REPLAY_GROUP),
+    _m(f"{REPLAY}.e2e_p90_ms", "1x replay: latency p90", "lower",
+       "Timed replay: the slow tail of request latency.", unit="ms", group=REPLAY_GROUP),
+    _m(f"{REPLAY}.e2e_mean_ms", "1x replay: latency mean", "lower",
+       "Timed replay: mean request latency.", unit="ms", group=REPLAY_GROUP),
+    _m(f"{REPLAY}.ttft_p90_ms", "Replay TTFT p90", "lower",
+       "Time to first token, 90th percentile (from the due time in a timed replay).",
+       unit="ms", group=REPLAY_GROUP),
+    _m(f"{REPLAY}.session_time_p50_s", "1x replay: session time median", "lower",
+       "Timed replay: first turn due to last turn done, for multi-turn sessions. "
+       "A faster engine brings each next turn sooner.", unit="s", group=REPLAY_GROUP),
+    _m(f"{REPLAY}.equivalent_tpm", "1x replay: equivalent throughput", "higher",
+       "Timed replay: the tokens per minute this config would serve behind a "
+       "least-connections balancer, at production's concurrency. From the run's "
+       "latency at each number of requests in flight (Little's law), weighted by "
+       "the time production spends there. What a busy backend's campaign ranks on.",
+       unit="tok/min", headline=True, group=REPLAY_GROUP),
+    _m(f"{REPLAY}.equivalent_coverage", "1x replay: equivalent coverage", "higher",
+       "Share of production's busy time (2+ in flight) the run measured itself. A "
+       "faster config reaches fewer of the busiest levels; those get a lower bound.",
+       group=REPLAY_GROUP),
+    _m(f"{REPLAY}.equivalent_busy_share", "1x replay: busy share", "higher",
+       "Share of production's time with 2+ requests in flight. Near 0 the traffic "
+       "is light and the equivalent throughput carries little: rank by latency.",
+       group=REPLAY_GROUP),
+    _m(f"{REPLAY}.equivalent_little_error", "1x replay: Little's law error", "lower",
+       "How far the run's latency curve misses the requests it completed. Within a "
+       "few percent the curve accounts for the run.", group=REPLAY_GROUP),
+    _m(f"{REPLAY}.fell_behind", "1x replay: client fell behind", "lower",
+       "1 when the replay client could not keep the recorded schedule; the run's "
+       "latencies are then not a fair reading.", group=REPLAY_GROUP),
     _m(f"{REPLAY}.output_tps_p10", "Slowest tenth, output tok/s", "higher",
        "Per-request decode rate for the slowest tenth of requests. The floor "
        "to put a minimum on: a config can win on aggregate throughput while "

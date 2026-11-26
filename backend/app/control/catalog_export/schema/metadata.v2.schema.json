@@ -47,7 +47,7 @@
       "$ref": "metadata.schema.json#/properties/deprecated"
     },
     "defaultVariant": {
-      "description": "The variant a UI preselects; the first by id when unset.",
+      "description": "The variant a UI preselects; the first by id when unset. While the model has variants it names one of them; with none, it may name a variant that is gone.",
       "$ref": "version.schema.json#/$defs/variant/properties/id"
     },
     "origins": {

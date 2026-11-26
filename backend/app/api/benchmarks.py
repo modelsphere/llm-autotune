@@ -67,7 +67,9 @@ async def describe_spec(body: BenchmarkSpec, target_metric: str = "",
     """Read-only: the slug and title the workload maps to, the module (and so
     the metric names) it reports, and whether LLMBench already has it — in
     which case a campaign reuses it rather than creating another. `exists` is
-    null when LLMBench could not be asked."""
+    null when LLMBench could not be asked. `modules` has the key of every
+    module run, in order, for a benchmark of several workloads or with a
+    quality suite: what each one's metrics are reported under."""
     body.require_ranking_metric(target_metric)
 
     def _exists() -> bool | None:
@@ -77,4 +79,5 @@ async def describe_spec(body: BenchmarkSpec, target_metric: str = "",
             return None
 
     return {"slug": body.slug, "name": body.title, "module": body.module,
+            "modules": body.modules,
             "group_tag": body.group_tag, "exists": await anyio.to_thread.run_sync(_exists)}

@@ -1,5 +1,5 @@
 {
-  "source": "github.com/modelsphere/model-catalog@a2d17cfbb582d00257bf427c3751a98950912085",
+  "source": "github.com/modelsphere/model-catalog@c7434c8600284fc48e2831ba959e021ba3d760c5",
   "minimumChartVersions": {
     "sglang": "0.8.0",
     "vllm": "0.5.0"

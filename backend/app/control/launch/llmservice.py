@@ -44,17 +44,23 @@ from app.control.launch.k8s import (
 )
 from app.control.launch.k8s_api import LLMSVC_RESOURCE, K8sError, port_taken
 from app.control.recipe import Recipe
-from app.control.recipe.check import recipe_problems
+from app.control.recipe.check import card_resource_problems, recipe_problems
 from app.control.recipe.compose import (
     API_VERSION,
+    DEFAULT_GPU_RESOURCE,
+    GPU_RESOURCE_SINCE,
     KIND,
     MANAGED_LABEL,
     RunPlan,
     Site,
+    effective_values,
+    files_keys,
+    get_value,
     llmservice,
     merge,
     service_name,
     service_port,
+    unanswered_inputs,
 )
 from app.control.recipe.legacy import from_fields
 
@@ -67,6 +73,15 @@ _ENGINE_CONTAINERS = ("sglang", "vllm")
 # On the fixed-port Service while it only holds the port: no pod carries it,
 # so the Service selects nothing until the chart's front door exists.
 _CLAIM_LABEL = "autotune.modelsphere.dev/port-claim"
+
+
+def _exact_version(text: str) -> tuple[int, ...] | None:
+    """`0.9.4` as (0, 9, 4); None for a range or anything else, which the
+    operator resolves and this driver cannot judge."""
+    parts = text.strip().lstrip("v").split("-", 1)[0].split(".")
+    if len(parts) != 3 or not all(p.isdigit() for p in parts):
+        return None
+    return tuple(int(p) for p in parts)
 
 
 def recipe_of(spec: LaunchSpec) -> Recipe:
@@ -85,12 +100,23 @@ def recipe_of(spec: LaunchSpec) -> Recipe:
     )
 
 
+def files_configmap(release: str) -> str:
+    """(1.9) The ConfigMap holding a run's mounted files."""
+    return f"{release}-files"[:63].rstrip("-")
+
+
 class LLMServiceDriver(K8sDriver):
     name = "k8s"
+    # (1.9) A launch's files go in a ConfigMap the chart mounts (`volumes`).
+    mounts_files = True
 
     @property
     def _resource(self) -> str:
         return LLMSVC_RESOURCE
+
+    def card_request_resource(self) -> str:
+        s = self.settings
+        return (s.k8s_gpu_request_resource or s.k8s_gpu_resource).strip()
 
     def _run_selector(self, spec_or_handle) -> str:
         if getattr(spec_or_handle, "workload", False):
@@ -142,6 +168,8 @@ class LLMServiceDriver(K8sDriver):
             image_mirror=s.k8s_image_mirror,
             node_selector=_node_selector(spec, s),
             tolerations=_tolerations(gpus, s),
+            gpu_resource=self.card_request_resource(),
+            scheduler_name=s.k8s_scheduler_name.strip(),
             extra_values=extra,
             endpoint=s.k8s_endpoint or "dns",
         )
@@ -163,8 +191,46 @@ class LLMServiceDriver(K8sDriver):
             run_id=spec.run_id,
             release=spec.container_name,
             allowed_nodes=list(spec.allowed_nodes),
+            files=files_keys(spec.files),
+            files_configmap=files_configmap(spec.container_name) if spec.files else "",
         )
-        return recipe, llmservice(recipe, self.site(spec, recipe), run, spec.chart_version)
+        obj = llmservice(recipe, self.site(spec, recipe), run, spec.chart_version)
+        self._check_composed(recipe, obj)
+        return recipe, obj
+
+    @staticmethod
+    def _check_composed(recipe: Recipe, obj: dict[str, Any]) -> None:
+        """What only shows once the cluster's layer is on the recipe, checked
+        here so the run fails at launch with the reason, not minutes later on
+        the cluster with the chart's."""
+        values = effective_values(
+            [(layer["name"], layer["values"]) for layer in obj["spec"]["layers"]]
+        )
+        blocking = card_resource_problems(values)
+        if blocking:
+            raise RuntimeError(
+                "the chart refuses this config: " + "; ".join(p["message"] for p in blocking)
+            )
+        resource = str(get_value(values, "model.gpuResource") or "").strip()
+        chart = obj["spec"]["chart"]
+        since = GPU_RESOURCE_SINCE.get(str(chart.get("name") or ""))
+        version = _exact_version(str(chart.get("version") or ""))
+        if resource and resource != DEFAULT_GPU_RESOURCE and since and version:
+            if version < _exact_version(since):
+                raise RuntimeError(
+                    f"cluster setup: this cluster's cards are requested as {resource}, which"
+                    f" needs chart {chart['name']} {since} or newer (model.gpuResource), not"
+                    f" {chart['version']}; name a chart version of at least {since}"
+                )
+        missing = unanswered_inputs(recipe, values)
+        if missing:
+            raise RuntimeError(
+                "cluster setup: this recipe leaves "
+                + ", ".join(missing)
+                + " to the cluster; set "
+                + ("it" if len(missing) == 1 else "them")
+                + " in the cluster's site values"
+            )
 
     # -- DeploymentDriver ----------------------------------------------------
 
@@ -176,8 +242,13 @@ class LLMServiceDriver(K8sDriver):
             # waits. Applying the engine first would create and withdraw an
             # LLMService on every tick of the wait.
             self._claim_port(spec, service_port(recipe))
+        if spec.files:
+            # Before the engine, so its pods never wait on a missing volume.
+            self.api.apply(self._files_configmap(spec))
         try:
             self.api.apply(obj)
+            if spec.files:
+                self._own_files(spec)
             if fixed:
                 # Owned by the LLMService from here, so it goes with the run
                 # whichever way the run ends.
@@ -185,6 +256,8 @@ class LLMServiceDriver(K8sDriver):
         except BaseException:
             if fixed:
                 self.api.delete("service", fixed_port_service(spec.container_name))
+            if spec.files and self.api.get(self._resource, spec.container_name) is None:
+                self.api.delete("configmap", files_configmap(spec.container_name))
             raise
         handle = DeploymentHandle(
             driver=self.name,
@@ -247,6 +320,13 @@ class LLMServiceDriver(K8sDriver):
             super().teardown(handle)
             return
         self.api.delete(self._resource, handle.container_name)
+        # Owned by the LLMService, so collected with it anyway; a launch that
+        # stopped between the two writes left it unowned.
+        try:
+            if self.api.get("configmap", files_configmap(handle.container_name)) is not None:
+                self.api.delete("configmap", files_configmap(handle.container_name))
+        except Exception:  # noqa: BLE001 - collected with its owner
+            pass
         if self.settings.k8s_service_nodeport:
             # Owned by the LLMService, so collected with it anyway; deleted
             # here so the fixed port is free for the next run at once.
@@ -417,6 +497,30 @@ class LLMServiceDriver(K8sDriver):
             return
         selector = dict((current.get("spec") or {}).get("selector") or {})
         self.api.apply(self._port_service(spec, port, selector, uid, current))
+
+    def _files_configmap(self, spec: LaunchSpec, owner_uid: str = "") -> dict[str, Any]:
+        keys = files_keys(spec.files)
+        return {
+            "apiVersion": "v1",
+            "kind": "ConfigMap",
+            "metadata": {
+                "name": files_configmap(spec.container_name),
+                "namespace": self.settings.k8s_namespace,
+                "labels": {RUN_LABEL: str(spec.run_id), MANAGED_LABEL: "true"},
+                "ownerReferences": [{
+                    "apiVersion": API_VERSION, "kind": KIND,
+                    "name": spec.container_name, "uid": owner_uid,
+                }] if owner_uid else [],
+            },
+            "data": {keys[path]: content for path, content in spec.files.items()},
+        }
+
+    def _own_files(self, spec: LaunchSpec) -> None:
+        """Hand the files to the LLMService just applied, so they go with it."""
+        owner = self.api.get(self._resource, spec.container_name) or {}
+        uid = (owner.get("metadata") or {}).get("uid", "")
+        if uid:
+            self.api.apply(self._files_configmap(spec, uid))
 
     def _fixed_port(
         self, spec: LaunchSpec, front: dict[str, Any], port: int,

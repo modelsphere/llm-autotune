@@ -34,7 +34,7 @@ from app.datasets import pinning
 from app.db.models import is_baseline_candidate, is_baseline_config
 from app.evaluation.aggregate import summary_of
 from app.hardware import normalize_gpu_type
-from app.objective import sort_key, target_metric
+from app.objective import is_timed, sort_key, target_metric
 from app.schemas.core import LeaderboardEntry
 from app.staging import VERIFY, stage_of
 from app.staging import objective as stage_objective
@@ -92,12 +92,17 @@ def leaderboard_entries(campaign, rows: list[tuple[Any, Any, Any]]) -> list[Lead
             measured.setdefault(stage, []).append((value, card_type_of(_run)))
     baseline_by_stage: dict[str, float] = {}
     baseline_card_by_stage: dict[str, str] = {}
+    noise_by_stage: dict[str, float] = {}
     for stage, values in measured.items():
         cards = [card for _value, card in values]
         card = max(dict.fromkeys(cards), key=cards.count)
         same = [value for value, c in values if c == card]
         baseline_by_stage[stage] = sum(same) / len(same)
         baseline_card_by_stage[stage] = card
+        # A timed replay measures production twice: how far apart the two
+        # are is how far apart two measurements of the same config can be.
+        if len(same) >= 2 and is_timed(stage_objective(campaign, stage)):
+            noise_by_stage[stage] = (max(same) - min(same)) / baseline_by_stage[stage]
 
     entries: list[LeaderboardEntry] = []
     for run, candidate, result in rows:
@@ -117,6 +122,8 @@ def leaderboard_entries(campaign, rows: list[tuple[Any, Any, Any]]) -> list[Lead
         ref_card = baseline_card_by_stage.get(stage, "")
         off_card = bool(card_type and ref_card and card_type != ref_card)
         reference = None if off_card else baseline_by_stage.get(stage)
+        vs = (score / reference) if (reference and score is not None) else None
+        noise = noise_by_stage.get(stage)
         entries.append(
             LeaderboardEntry(
                 run_id=run.id,
@@ -129,7 +136,10 @@ def leaderboard_entries(campaign, rows: list[tuple[Any, Any, Any]]) -> list[Lead
                 target_metric=target_metric(objective),
                 comparable=pinning.comparable(campaign, result.metrics or {}),
                 dataset_build_id=replayed[0] if replayed else "",
-                vs_baseline=(score / reference) if (reference and score is not None) else None,
+                vs_baseline=vs,
+                noise=noise,
+                within_noise=(abs(vs - 1.0) <= noise) if (vs is not None and noise is not None)
+                else None,
                 is_baseline=_is_baseline(candidate),
                 card_type=card_type,
             )
@@ -180,9 +190,13 @@ def _production_configs(campaign, rows: list[tuple[Any, Any, Any]]) -> list[dict
 
 def winner(entries: list[LeaderboardEntry]) -> LeaderboardEntry | None:
     """The top of the board, skipping the production baseline row: it is the
-    reference the candidates are measured against, not a candidate."""
+    reference the candidates are measured against, not a candidate. A top
+    whose gain is within the measured noise is no winner either: nothing is
+    promoted on a gain the baseline's own repeat could produce."""
     for entry in entries:
         if entry.is_baseline:
             continue
+        if entry.within_noise:
+            return None
         return entry
     return None

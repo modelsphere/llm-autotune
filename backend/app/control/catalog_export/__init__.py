@@ -14,8 +14,9 @@ What the catalog already holds is read from its published index
 (catalog_index.py): an exported id it already has becomes the next version of
 that variant, or no file at all when nothing changed. Every document is
 validated against the catalog's own schemas (vendored under schema/, with the
-minimum chart versions in schema/pins.json; re-copy when the catalog changes
-them) and the rules its validator adds on top.
+minimum chart versions in schema/pins.json; scripts/sync_catalog_schema.py
+refreshes both, and with --check says when they are behind) and the rules its
+validator adds on top.
 
 What is deliberately left out, because the catalog forbids or cannot use it:
 - `model.localPath`, host paths, namespaces, scheduling, replicas: site- and
@@ -651,6 +652,12 @@ def _variant_from_recipe(
             )
         details.append(f"{vid}: no gpuProduct, as requires.gpus is 0")
     else:
+        # The card's brand, when it is not the catalog's default: with a count
+        # under requires.gpus it is what tells a deploy which resource to
+        # request, since the variant names none.
+        vendor = card_vendor(src.config.gpu_type)
+        if vendor not in ("", "nvidia"):
+            requires["vendor"] = vendor
         products = (
             src.gpu_product or opts.gpu_product or GPU_PRODUCTS.get(src.config.gpu_type, [])
         )
@@ -662,6 +669,10 @@ def _variant_from_recipe(
                 " gpuProduct under Advanced"
             )
     variant["requires"] = requires
+    if body.get("inputs"):
+        # What the recipe left to the deploy stays left to it: the answers this
+        # site gave were its site layer's and are in no value below.
+        variant["inputs"] = body["inputs"]
     variant["values"] = body["values"]
     details.append(f"{vid}: the recipe the run measured, published unchanged")
     return variant

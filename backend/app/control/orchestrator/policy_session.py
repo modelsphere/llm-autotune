@@ -1,6 +1,9 @@
 """The policy-session state machine — the worker side of the policy contract.
 
-One session is one policy container's night on one machine:
+One session is one policy's night on one machine. The policy is a container
+the platform starts, or an external one (Policy.external) that runs elsewhere
+and has no container here: every step that touches the container then has
+nothing to touch, and the heartbeat alone says the policy is alive.
 
     PENDING -> STARTING -> SEARCHING -> FINALIZING -> VALIDATING -> DONE
                                                         (FAILED / ABORTED)
@@ -292,22 +295,24 @@ class PolicySessionEngine:
             s.value for s in TERMINAL_SESSION_STATES
         }:
             return
-        key = db.scalars(
-            select(ApiKey).where(ApiKey.policy_session_id == session.id)
-        ).first()
-        if key is None:
-            return
         want = token_expiry(hard, self.sup.settings)
-        if as_utc(key.expires_at) != want:
-            key.expires_at = want
+        for key in db.scalars(
+            select(ApiKey).where(ApiKey.policy_session_id == session.id)
+        ).all():
+            # A token an external policy replaced was ended on purpose, and
+            # stays ended.
+            expires = as_utc(key.expires_at)
+            if expires is not None and expires <= now():
+                continue
+            if expires != want:
+                key.expires_at = want
 
     def waiting(self, db: Session) -> list[PolicySession]:
         """Pending sessions with no machine yet — waiters in the machine queue.
         One the pending step is about to fail (no API URL, no policy row) or a
         human is aborting is not waiting for hardware."""
         settings = self.sup.settings
-        if not (settings.public_api_url or settings.internal_api_url):
-            return []
+        callable_home = bool(settings.public_api_url or settings.internal_api_url)
         out = []
         for row in db.scalars(
             select(PolicySession)
@@ -321,8 +326,11 @@ class PolicySessionEngine:
             campaign = db.get(Campaign, row.campaign_id)
             if campaign is None or campaign.status != CampaignStatus.ACTIVE.value:
                 continue
-            if db.get(Policy, row.policy_id) is None:
+            policy = db.get(Policy, row.policy_id)
+            if policy is None:
                 continue
+            if not callable_home and not policy.external:
+                continue  # its container could not call home; pending fails it
             out.append(row)
         return out
 
@@ -353,7 +361,9 @@ class PolicySessionEngine:
             session.machine_id = m.id
             session.gpu_indices = cards
             session.ports = ports
-            session.container_name = f"autotune-policy-{session.id}"
+            # An external policy has no container, and so no name for one:
+            # the empty name is what every container step checks.
+            session.container_name = "" if policy.external else f"autotune-policy-{session.id}"
             self.sup._event(
                 db, "policy_session_reserved", campaign_id=campaign.id,
                 payload={"session_id": session.id, "machine": m.name,
@@ -499,17 +509,20 @@ class PolicySessionEngine:
         self, db: Session, session: PolicySession, campaign: Campaign, machine
     ) -> None:
         settings = self.sup.settings
-        if not (settings.public_api_url or settings.internal_api_url):
-            self._terminate(
-                db, session, PolicySessionStatus.FAILED,
-                "AUTOTUNE_PUBLIC_API_URL is not set — a policy container cannot call home",
-                failure_class="config",
-            )
-            return
         policy = db.get(Policy, session.policy_id)
         if policy is None:
             self._terminate(
                 db, session, PolicySessionStatus.FAILED, "policy row deleted",
+                failure_class="config",
+            )
+            return
+        if policy.external:
+            self._start_external(db, session, campaign)
+            return
+        if not (settings.public_api_url or settings.internal_api_url):
+            self._terminate(
+                db, session, PolicySessionStatus.FAILED,
+                "AUTOTUNE_PUBLIC_API_URL is not set — a policy container cannot call home",
                 failure_class="config",
             )
             return
@@ -637,6 +650,35 @@ class PolicySessionEngine:
         )
         self._read_vocabulary(db, campaign, target)
 
+    def _start_external(self, db: Session, session: PolicySession, campaign: Campaign) -> None:
+        """An external policy's session starts the moment it has its machine:
+        there is no image to pull, no container to launch and no token to hand
+        over here. The campaign's owner asks for the token
+        (POST /campaigns/{id}/session-token) and the policy's first heartbeat
+        moves the session on, within the same start timeout as a container's."""
+        if session.machine_id is None:
+            return  # still the machine queue's to hand out
+        target = db.get(Machine, session.machine_id)
+        if target is None:
+            self._terminate(
+                db, session, PolicySessionStatus.FAILED,
+                "reserved machine vanished before launch", failure_class="launch",
+            )
+            return
+        session.started_at = now()
+        session.status = PolicySessionStatus.STARTING.value
+        target.state = MachineState.RESERVED.value
+        self.sup._event(
+            db, "policy_session_started", campaign_id=campaign.id,
+            payload={
+                "session_id": session.id, "machine": target.name, "external": True,
+                "gpus": session.gpu_indices, "ports": session.ports,
+            },
+        )
+        logger.info("policy session %d is open for its external policy on %s",
+                    session.id, target.name)
+        self._read_vocabulary(db, campaign, target)
+
     def _read_vocabulary(self, db: Session, campaign: Campaign, target) -> None:
         """Read, in the background, what the platform does not know yet: the
         engine image's flags and env vars (what env keys and flags are checked
@@ -657,12 +699,15 @@ class PolicySessionEngine:
             ):
                 return
             settings = self.sup.settings
-            if vocabulary_store.needs_reading(db, campaign.engine, campaign.image):
-                vocabulary_store.in_background(
-                    self.sup.session_factory, ("image", campaign.image),
-                    lambda: EngineVocabulary(**vocabulary_store.read_image(
-                        driver, info, campaign.engine, campaign.image)),
-                )
+            # (1.9) and every other image the campaign lets a launch name
+            extra = [str(i) for i in ((campaign.policy_settings or {}).get("images") or [])]
+            for image in dict.fromkeys([campaign.image, *extra]):
+                if image and vocabulary_store.needs_reading(db, campaign.engine, image):
+                    vocabulary_store.in_background(
+                        self.sup.session_factory, ("image", image),
+                        lambda image=image: EngineVocabulary(**vocabulary_store.read_image(
+                            driver, info, campaign.engine, image)),
+                    )
             if campaign.model_path and vocabulary_store.needs_model_reading(
                 db, campaign.model_path
             ):
@@ -706,10 +751,16 @@ class PolicySessionEngine:
                 db, session, failure[0], f"policy container cannot start: {failure[1]}"
             )
         elif waited > self.sup.settings.policy_start_timeout_minutes * 60:
+            hint = (
+                "an external policy asks for its token "
+                "(POST /campaigns/{id}/session-token) and sends its first heartbeat itself"
+                if not session.container_name
+                else "is AUTOTUNE_API_URL reachable from the machine?"
+            )
             self._fail_toward_validation(
                 db, session, "ready_timeout",
                 f"no heartbeat after {self.sup.settings.policy_start_timeout_minutes} min — "
-                "is AUTOTUNE_API_URL reachable from the machine?",
+                + hint,
             )
 
     # -- SEARCHING: the policy explores; we watch liveness and the clock -------
@@ -1079,6 +1130,7 @@ class PolicySessionEngine:
             gpu_indices=cards,
             service_port=port,
             policy_session_id=session.id,
+            files=dict(campaign.files or {}),
             started_at=now(),  # like the classic scheduler; no null on this path
         )
         db.add(run)
@@ -1101,6 +1153,11 @@ class PolicySessionEngine:
     # ------------------------------------------------------------- plumbing
 
     def _workload_state(self, db: Session, session: PolicySession, machine) -> WorkloadState:
+        policy = db.get(Policy, session.policy_id)
+        if policy is not None and policy.external:
+            # Nothing here to be gone: an external policy that stops is seen
+            # by its silence (the start timeout, then the heartbeat timeout).
+            return WorkloadState.RUNNING
         if machine is None or not session.container_name:
             return WorkloadState.GONE
         info = self.sup._machine_info(machine)
@@ -1329,11 +1386,10 @@ class PolicySessionEngine:
 
         # The token dies with the session, plus the grace the contract promises
         # (a policy that gets 410 on its next heartbeat may still want to read).
-        key = db.scalars(
+        grace = now() + timedelta(hours=self.sup.settings.policy_token_grace_hours)
+        for key in db.scalars(
             select(ApiKey).where(ApiKey.policy_session_id == session.id)
-        ).first()
-        if key is not None:
-            grace = now() + timedelta(hours=self.sup.settings.policy_token_grace_hours)
+        ).all():
             key.expires_at = min(as_utc(key.expires_at) or grace, grace)
 
         machine = db.get(Machine, session.machine_id) if session.machine_id else None

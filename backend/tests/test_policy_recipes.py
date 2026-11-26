@@ -15,7 +15,7 @@ async def test_the_manifest_carries_the_recipe(night):  # noqa: F811
     supervisor, driver, http = night
     policy = await _boot(supervisor, driver, http)
     manifest = (await policy.get("/session")).json()
-    assert manifest["contract"]["version"] == "1.7"
+    assert manifest["contract"]["version"] == "1.11"
     assert manifest["services"]["recipes"] is True
     recipe = manifest["model"]["recipe"]
     assert recipe["chart"]["name"] == "sglang"

@@ -22,7 +22,9 @@ Knobs:
 
 import email
 import email.policy
+import gzip
 import hashlib
+import json
 import os
 import threading
 import time
@@ -223,12 +225,34 @@ def _new_build() -> dict[str, Any]:
     return row
 
 
+def _load_reading() -> dict[str, Any]:
+    """A quiet backend, as LLMBench's load reading reports one: the same
+    request barely slows with load, no knee within what production reached."""
+    groups, above = [], 5200
+    for g, n, s in ((1, 3100, 1.0), (2, 1500, 1.03), (3, 600, 1.08)):
+        groups.append({"group": g, "requests": n, "c_mean": g + 0.02, "share_from": above / 5200,
+                       "slowdown": s, "raw_slowdown": s, "e_into": None if g == 1 else 0.9,
+                       "latency_median_s": 2.1 * s, "prompt_mean": 14000, "output_mean": 300,
+                       "cached_share": 0.6})
+        above -= n
+    return {"version": 1, "status": "ok", "category": "idle", "fitted_category": "idle",
+            "knee_group": None, "w_log": 0.0, "crossings": 0, "requests": 5200, "c_typ": 1.3,
+            "c_peak": 2.1, "c_req_max": 3.4, "window_hours": 168, "groups": groups,
+            "thresholds": {"idle_below": 0.1, "busy_from": 0.5, "min_group": 300},
+            "fit": {"r2_log": 0.81, "residual_by_utc_block": {}, "size_coefficients_s": {},
+                    "halves": {"even_days": {"knee_group": None, "w_log": 0.0, "category": "idle"},
+                               "odd_days": {"knee_group": None, "w_log": 0.0, "category": "idle"}},
+                    "checks": {"r2": True, "no_drift_by_time_of_day": True, "halves_agree": True,
+                               "single_crossing": True}}}
+
+
 def _profile_out() -> dict[str, Any]:
     if not _current_build:
         _new_build()
     keys = ("build_id", "sha256", "records", "window_start", "window_end")
     current = {k: _current_build[k] for k in keys}
     current["built_at"] = _current_build["finished_at"]
+    current["load"] = _load_reading()
     return {**PROFILE, "enabled": True, "schedule_interval_hours": 0, "current": current}
 
 
@@ -267,9 +291,35 @@ FROZEN = {
 }
 
 
+IMPORTED: list[dict[str, Any]] = []
+
+
 @app.get("/replay-datasets/frozen")
 def list_frozen():
-    return {"frozen": [FROZEN], "collector_configured": True}
+    return {"frozen": [FROZEN, *IMPORTED], "collector_configured": True}
+
+
+@app.put("/replay-datasets/frozen/{name}", status_code=201)
+async def import_frozen(name: str, request: Request):
+    """LLMBench's import: the body is the file; a taken name is a 409, an
+    empty or unreadable one a 422 (here: any line that is not JSON)."""
+    if name == FROZEN["name"] or any(d["name"] == name for d in IMPORTED):
+        raise HTTPException(409, f"A frozen dataset named {name!r} exists")
+    body = await request.body()
+    raw = gzip.decompress(body) if body[:2] == b"\x1f\x8b" else body
+    lines = [line for line in raw.splitlines() if line.strip()]
+    try:
+        for line in lines:
+            json.loads(line)
+    except ValueError:
+        raise HTTPException(422, "not a replay dataset: a line is not JSON") from None
+    if not lines:
+        raise HTTPException(422, "the request body is empty")
+    entry = {**FROZEN, "name": name, "path": f"/app/dataset/replay/frozen/{name}.jsonl",
+             "bytes": len(raw), "records": len(lines), "sha256": hashlib.sha256(raw).hexdigest(),
+             "origin": "upload", "source_profile": "", "source_build_id": ""}
+    IMPORTED.append(entry)
+    return entry
 
 
 @app.get("/replay-datasets/builds/{build_row_id}")
@@ -360,6 +410,28 @@ def _replay_metrics(seed: int, cards: int) -> dict[str, Any]:
     }
 
 
+def _timed_metrics(seed: int) -> dict[str, Any]:
+    """A timed replay (1x load): latency from each request's due time; the
+    schedule sets the throughput, so the flat TPM keys are empty."""
+    e2e = 3000.0 + seed % 600
+    return {
+        "e2e_p50_ms": e2e, "e2e_p90_ms": e2e * 2.5, "e2e_mean_ms": e2e * 1.3,
+        "ttft_p50_ms": 250.0 + seed % 100, "ttft_p90_ms": 700.0 + seed % 200,
+        "tpot_p50_ms": 18.0 + seed % 5,
+        "session_time_p50_s": e2e * 6 / 1000, "sessions_measured": 40,
+        "measured_requests": 380, "warmup_requests": 20, "schedule_s": 420.0,
+        "replay_s": 431.0, "schedule_lag_p99_s": 0.02, "fell_behind": 0,
+        "max_in_flight_hit": 0, "in_flight_mean": 2.1, "in_flight_max": 9,
+        "cache_flushed": 1,
+        # equivalent throughput: faster (lower e2e) serves more
+        "equivalent_tpm": 9.0e8 / e2e, "equivalent_tpm_logged": 3.0e5,
+        "equivalent_coverage": 0.93, "equivalent_busy_share": 0.71,
+        "equivalent_size_matched": 1, "equivalent_size_r2": 0.82,
+        "equivalent_little_error": 0.02, "equivalent_levels": 7,
+        "input_tpm": None, "output_tpm": None, "cached_tpm": None, "uncached_input_tpm": None,
+    }
+
+
 def _bfcl_metrics(seed: int, params: dict) -> dict[str, Any]:
     task_set = params.get("task_set", "bfcl-v4-tool-use-v1")
     categories = (["multi_turn_long_context"] if "long-context" in task_set else
@@ -395,6 +467,8 @@ def _runs(submission: dict[str, Any], not_passed: bool) -> list[dict[str, Any]]:
             if not _current_build:
                 _new_build()
             metrics = _replay_metrics(seed, cards)
+            if (mod["params_json"] or {}).get("schedule") == "timed":
+                metrics = {**metrics, **_timed_metrics(seed)}
             params = {**mod["params_json"], "dataset_resolved": {
                 "build_id": _current_build["build_id"], "sha256": _current_build["sha256"]}}
         elif mod["module_name"] == "bfcl_v4":

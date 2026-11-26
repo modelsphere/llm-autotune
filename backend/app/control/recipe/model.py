@@ -47,6 +47,11 @@ class Recipe(BaseModel):
     # The image digest the configuration was measured on, when known. Not a
     # chart value: the charts name an image by repository and tag.
     image_digest: str = ""
+    # Chart values the recipe leaves to whoever deploys it (the catalog's
+    # `inputs`): the address of a service the site runs, say. Each names one
+    # value by its dotted key, with an optional default. Not identity: the
+    # answers are the site's (compose.py).
+    inputs: list[dict[str, Any]] = Field(default_factory=list)
 
     # -- the projected fields ------------------------------------------------
 
@@ -125,7 +130,7 @@ class Recipe(BaseModel):
 
     def to_variant(self) -> dict[str, Any]:
         """The variant fields this recipe fills: engine, chart, image,
-        servedName, requires.gpus and values. The rest of a variant (id,
+        servedName, requires.gpus, inputs and values. The rest of a variant (id,
         version, description, requires.gpuProduct...) belongs to whoever
         publishes it."""
         values = copy.deepcopy(self.values)
@@ -153,6 +158,8 @@ class Recipe(BaseModel):
         if (values.get("rdma") or {}).get("enabled"):
             requires["rdma"] = True
         out["requires"] = requires
+        if self.inputs:
+            out["inputs"] = copy.deepcopy(self.inputs)
         out["values"] = values
         return out
 
@@ -183,4 +190,5 @@ class Recipe(BaseModel):
             ),
             values=values,
             image_digest=str(image.get("digest") or ""),
+            inputs=[copy.deepcopy(i) for i in variant.get("inputs") or [] if isinstance(i, dict)],
         )

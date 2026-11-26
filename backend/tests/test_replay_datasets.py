@@ -352,3 +352,24 @@ async def test_a_first_sample_that_cannot_start_is_reported_not_fatal(api):
 async def test_an_id_that_cannot_be_a_profile_name_is_refused(api, name):
     resp = await api.post("/datasets", json={"model": "qwen3-8b", "name": name})
     assert resp.status_code == 422
+
+
+async def test_the_list_carries_the_load_reading_of_the_sample(api):
+    reading = {"version": 1, "status": "ok", "category": "moderate", "w_log": 0.22, "knee_group": 4}
+    profile = _profile("prod", pid=9, owner=1, built_at=NOW)
+    profile["current"]["load"] = reading
+    FakeBench.profiles["prod"] = profile
+    listed = {d["name"]: d for d in (await api.get("/datasets")).json()["datasets"]}
+    assert listed["prod"]["current"]["load"] == reading
+
+
+def test_a_timed_form_sends_its_layout_and_a_sampled_one_sends_nothing_new():
+    timed_form = editor.DatasetForm(model="m", layout="timed", session_field="req_headers.x-s",
+                                    max_idle_gap_s=3)
+    fields = editor.profile_fields(timed_form, "http://victorialogs:9428")
+    assert fields["layout"] == "timed" and fields["session_field"] == "req_headers.x-s"
+    assert fields["max_idle_gap_s"] == 3
+    sampled = editor.profile_fields(editor.DatasetForm(model="m"), "http://victorialogs:9428")
+    assert not {"layout", "session_field", "max_idle_gap_s"} & set(sampled)
+    back = editor.form_of({**fields, "name": "m"}, 0)
+    assert back["layout"] == "timed" and back["max_idle_gap_s"] == 3

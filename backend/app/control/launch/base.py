@@ -139,6 +139,10 @@ class LaunchSpec(BaseModel):
     port: int = 28200
     env: dict[str, str] = Field(default_factory=dict)
     volumes: dict[str, str] = Field(default_factory=dict)  # host_path -> container_path
+    # (1.9) Files mounted read-only into the engine container before it starts,
+    # {container path: content}: a policy's launch (Run.files). Only a driver
+    # with `mounts_files` launches a spec that has any.
+    files: dict[str, str] = Field(default_factory=dict)
     # -- the node plan --------------------------------------------------------
     #
     # Every machine this deployment spans, in rank order, master (rank 0) first.
@@ -322,8 +326,10 @@ class DeploymentDriver(ABC):
         """Whether `model_path` is where a run on this machine would mount it,
         node by node: `[{"node", "present", "detail"}]`, `present` None when
         it could not be told. A machine that is one box answers for itself; a
-        k8s machine answers for every node its selector matches. Empty when the
-        substrate cannot check. Never raises."""
+        k8s machine answers for every node its selector matches, and adds
+        `cards`: what the node offers of the resource a run asks its cards
+        under (a node can hold the weights and none of the cards). Empty when
+        the substrate cannot check. Never raises."""
         return []
 
     # -- multi-node -----------------------------------------------------------
@@ -577,6 +583,14 @@ class DeploymentDriver(ABC):
         `progress` hears each step as it starts and ends (see SmokeSteps).
         Shape when supported: see `smoke_result`."""
         return {"supported": False}
+
+    # -- one command in a running engine -------------------------------------------
+
+    def exec_in(self, handle: DeploymentHandle, command: str, timeout: int) -> tuple[int, str]:
+        """Run `command` (a shell line) in the engine container of a running
+        launch: (exit code, output). For diagnosing it; the caller marks the run
+        tainted. Raises RuntimeError with the reason when it cannot."""
+        raise NotImplementedError(f"{self.name} cannot run a command in an engine")
 
     # -- one command in an image -------------------------------------------------
 

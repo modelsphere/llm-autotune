@@ -123,6 +123,13 @@ async def dataset_profiles(_: User = Depends(get_current_user)):
                 "built_at": current.get("built_at", ""),
                 "window_start": current.get("window_start", ""),
                 "window_end": current.get("window_end", ""),
+                # A timed profile keeps every request of one stretch, in order,
+                # for a replay on its recorded timing (1x load).
+                "layout": profile.get("layout") or "sampled",
+                # How busy the backend is, read from its logs: what decides
+                # whether a 1x latency test fits (idle) or not yet (busy).
+                "load": current.get("load"),
+                "timed": current.get("timed"),
             }
         )
     return out
@@ -707,9 +714,7 @@ def _with_specs(
             continue
         setattr(body, slug_field, spec.slug)
         if catalog is not None:
-            catalog.setdefault(spec.slug, [spec.module]
-                               + (["opencompass"] if spec.quality is not None else [])
-                               + (["bfcl_v4"] if spec.bfcl_quality is not None else []))
+            catalog.setdefault(spec.slug, spec.modules)
         if wired is not None:
             replays = spec.dataset_profile.strip() if spec.kind == "replay" else ""
             wired.setdefault(spec.slug, replays)
@@ -1249,7 +1254,10 @@ async def validate_configs(
         campaign.verify_top_k = max(campaign.verify_top_k or 0, len(body.configs))
     if body.quality_max_drop is not None:
         base = dict(campaign.verify_objective or campaign.objective or {})
-        kept = [r for r in base.get("redlines") or [] if not r.get("relative_to")]
+        # Replace the quality floors; keep every other redline (a latency
+        # guardrail relative to production included).
+        kept = [r for r in base.get("redlines") or []
+                if not (r.get("relative_to") and "factor" not in r)]
         base["redlines"] = kept + quality.quality_floor(
             body.quality_tasks, body.quality_max_drop / 100, metrics=body.quality_metrics)
         campaign.verify_objective = base

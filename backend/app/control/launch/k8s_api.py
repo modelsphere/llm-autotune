@@ -36,6 +36,8 @@ import logging
 import os
 import subprocess
 import tempfile
+import threading
+import time
 from abc import ABC, abstractmethod
 from typing import Any
 
@@ -130,6 +132,12 @@ class K8sApi(ABC):
         Read-only, for counting the cards other workloads hold on a node. A
         transport without it raises NotImplementedError; a credential the
         cluster refuses raises K8sError."""
+        raise NotImplementedError
+
+    def exec(self, pod: str, container: str, command: list[str], timeout: int) -> tuple[int, str]:
+        """Run `command` in a container of a running pod: (exit code, output,
+        stdout then stderr). 124 when it ran out of time. Raises K8sError when
+        the cluster refuses."""
         raise NotImplementedError
 
     @abstractmethod
@@ -294,6 +302,17 @@ class KubectlApi(K8sApi):
             return False
         raise K8sError(f"kubectl auth can-i failed: {result.stderr.strip()[:500]}")
 
+    def exec(self, pod: str, container: str, command: list[str], timeout: int) -> tuple[int, str]:
+        try:
+            done = subprocess.run(
+                self._base() + ["exec", pod, "-c", container, "--", *command],
+                capture_output=True, text=True, timeout=timeout, check=False,
+            )
+        except subprocess.TimeoutExpired as exc:
+            out = (exc.stdout or "") if isinstance(exc.stdout, str) else ""
+            return 124, out + f"\n(timed out after {timeout}s)"
+        return done.returncode, done.stdout + done.stderr
+
     def logs(self, label_selector: str, tail: int = 200) -> str:
         # --all-containers so the engine's log is captured even when the pod
         # runs a sidecar; --prefix so multi-pod output stays attributable.
@@ -331,6 +350,7 @@ class ClientApi(K8sApi):
     def __init__(self, cluster: K8sClusterSettings | Any | None = None):
         self.cluster = as_cluster(cluster)
         self._core = None  # set on first use by _ensure()
+        self._loading = threading.Lock()
 
     @property
     def _ns(self) -> str:
@@ -352,13 +372,22 @@ class ClientApi(K8sApi):
             return "job"
         if kind == "Pod":
             return "pod"
+        if kind == "ConfigMap":
+            return "configmap"
         if kind == "LLMService":
             return LLMSVC_RESOURCE
         return f"{self.cluster.k8s_cr_plural}.{self.cluster.k8s_cr_group}"
 
     def _ensure(self) -> None:
+        # Threads share this object: one loads the client while the others
+        # wait, and `_core` is set last, so a thread that sees it sees the rest.
         if self._core is not None:
             return
+        with self._loading:
+            if self._core is None:
+                self._load()
+
+    def _load(self) -> None:
         try:
             from kubernetes import client, config
             from kubernetes.client.rest import ApiException
@@ -396,13 +425,14 @@ class ClientApi(K8sApi):
             # Ambient kubeconfig (KUBECONFIG / ~/.kube/config) — dev convenience.
             config.load_kube_config(context=s.k8s_context or None, client_configuration=cfg)
         self._ApiException = ApiException
+        self._cfg = cfg
         self._api_client = client.ApiClient(configuration=cfg)
-        self._core = client.CoreV1Api(self._api_client)
         self._apps = client.AppsV1Api(self._api_client)
         self._batch = client.BatchV1Api(self._api_client)
         self._custom = client.CustomObjectsApi(self._api_client)
         self._authz = client.AuthorizationV1Api(self._api_client)
         self._client_models = client
+        self._core = client.CoreV1Api(self._api_client)
 
     def _sanitize(self, obj) -> dict:
         """Typed model -> the camelCase JSON dict the driver reads."""
@@ -429,6 +459,11 @@ class ClientApi(K8sApi):
             return (
                 lambda item: self._core.create_namespaced_pod(self._ns, item),
                 lambda name, item: self._core.replace_namespaced_pod(name, self._ns, item),
+            )
+        if kind == "ConfigMap":
+            return (
+                lambda item: self._core.create_namespaced_config_map(self._ns, item),
+                lambda name, item: self._core.replace_namespaced_config_map(name, self._ns, item),
             )
         g, v, plural = (
             (LLMSVC_GROUP, LLMSVC_VERSION, LLMSVC_PLURAL) if kind == "LLMService" else self._cr()
@@ -488,6 +523,8 @@ class ClientApi(K8sApi):
                 return self._sanitize(self._batch.read_namespaced_job(name, self._ns))
             if resource == "pod":
                 return self._sanitize(self._core.read_namespaced_pod(name, self._ns))
+            if resource == "configmap":
+                return self._sanitize(self._core.read_namespaced_config_map(name, self._ns))
             if resource == "endpoints":
                 return self._sanitize(self._core.read_namespaced_endpoints(name, self._ns))
             if resource == LLMSVC_RESOURCE:
@@ -517,6 +554,8 @@ class ClientApi(K8sApi):
                 )
             elif resource == "pod":
                 self._core.delete_namespaced_pod(name, self._ns, grace_period_seconds=0)
+            elif resource == "configmap":
+                self._core.delete_namespaced_config_map(name, self._ns)
             elif resource == LLMSVC_RESOURCE:
                 self._custom.delete_namespaced_custom_object(
                     LLMSVC_GROUP, LLMSVC_VERSION, self._ns, LLMSVC_PLURAL, name
@@ -589,6 +628,58 @@ class ClientApi(K8sApi):
         except self._ApiException as exc:
             raise K8sError(f"client access review failed: {exc.reason}") from exc
         return bool(resp.status and resp.status.allowed)
+
+    def exec(self, pod: str, container: str, command: list[str], timeout: int) -> tuple[int, str]:
+        self._ensure()
+        from kubernetes import client
+        from kubernetes.stream import stream
+
+        # A client of its own for every exec: stream() swaps the ApiClient's
+        # request method for a websocket one while it runs and puts back what
+        # it found. On the shared client two execs at once leave the websocket
+        # one in place for good, and from then every call this process makes
+        # (node reads, pod lists, logs) fails with "'NoneType' object has no
+        # attribute 'decode'"; meanwhile other threads' calls fail too.
+        api_client = client.ApiClient(configuration=self._cfg)
+        try:
+            core = client.CoreV1Api(api_client)
+            return self._exec(core, stream, pod, container, command, timeout)
+        finally:
+            api_client.close()
+
+    def _exec(
+        self, core, stream, pod: str, container: str, command: list[str], timeout: int
+    ) -> tuple[int, str]:
+        try:
+            resp = stream(
+                core.connect_get_namespaced_pod_exec, pod, self._ns,
+                container=container, command=command,
+                stdout=True, stderr=True, stdin=False, tty=False, _preload_content=False,
+            )
+        except self._ApiException as exc:
+            raise K8sError(f"exec in {pod}: {exc.reason}") from exc
+        except AttributeError as exc:
+            # The client loses a refused websocket's reason: the handshake
+            # failed (403 when the account lacks `get` on pods/exec) and its
+            # error handling then calls .decode() on a missing body.
+            raise K8sError(
+                f"exec in {pod}: the cluster refused the websocket (often a 403: the "
+                "account needs get and create on pods/exec; rerun deploy/gpu-cluster.sh)"
+            ) from exc
+        out, err = [], []
+        deadline = time.monotonic() + timeout
+        while resp.is_open() and time.monotonic() < deadline:
+            resp.update(timeout=1)
+            if resp.peek_stdout():
+                out.append(resp.read_stdout())
+            if resp.peek_stderr():
+                err.append(resp.read_stderr())
+        timed_out = resp.is_open()
+        resp.close()
+        text = "".join(out) + "".join(err)
+        if timed_out:
+            return 124, text + f"\n(timed out after {timeout}s)"
+        return int(resp.returncode or 0), text
 
     def logs(self, label_selector: str, tail: int = 200) -> str:
         self._ensure()

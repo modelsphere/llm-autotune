@@ -34,6 +34,7 @@ export const PORTABLE_KEYS = [
   'recipe',
   'chart_version',
   'recipe_source',
+  'files',
   'objective',
   'benchmark_slug',
   'confirm_top_k',

@@ -23,12 +23,15 @@ api.interceptors.response.use(
  *  (application/x-ndjson): for long checks that report as they go. Rejects
  *  with the server's message on an error status. */
 export async function postLines(
-  url: string, onEvent: (event: any) => void, signal?: AbortSignal,
+  url: string, onEvent: (event: any) => void, signal?: AbortSignal, body?: unknown,
 ): Promise<void> {
   const token = localStorage.getItem('autotune_token')
+  const headers: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {}
+  if (body !== undefined) headers['Content-Type'] = 'application/json'
   const response = await fetch(`/api${url}`, {
     method: 'POST',
-    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    headers,
+    body: body === undefined ? undefined : JSON.stringify(body),
     signal,
   })
   if (!response.ok || !response.body) {
@@ -137,6 +140,10 @@ export interface Cluster {
   endpoint: 'dns' | 'nodeport'
   image_mirror: string
   site_values: string
+  /** The scheduler engine pods name; empty = the cluster's default. LLMService runs. */
+  scheduler_name: string
+  /** The resource engine pods request their cards as; empty = gpu_resource. LLMService runs. */
+  gpu_request_resource: string
   /** Host LLMBench is given for a run's NodePort endpoint. Empty = derive from
    *  a node InternalIP, which needs the cluster-scoped `nodes` read. */
   node_host: string
@@ -190,6 +197,8 @@ export interface ClusterInput {
   endpoint?: string
   image_mirror?: string
   site_values?: string
+  scheduler_name?: string
+  gpu_request_resource?: string
   node_host?: string
   gpu_resource?: string
   gpu_product_label?: string
@@ -790,6 +799,9 @@ export interface ReplayDatasetForm {
   subwindow_minutes: number
   max_carry_multiple: number
   window_timezone: string
+  layout?: 'sampled' | 'timed'
+  session_field?: string
+  max_idle_gap_s?: number
 }
 
 export interface TokenSpread {
@@ -817,6 +829,69 @@ export interface DatasetSample {
     cache_hit_rate?: number
     forwarded_to?: Record<string, number>
   } | null
+  /** How loaded the backend was over the week before the sample, read by
+   *  LLMBench from the gateway logs alone. Absent on older samples. */
+  load?: LoadReading | null
+  /** Timed datasets only: the stretch kept whole and how it replays. */
+  timed?: {
+    requests: number
+    sessions: number
+    following_share: number
+    window_s: number
+    replay_s: number
+    c_req_median: number
+    missing_share: number
+  } | null
+}
+
+export interface LoadReadingGroup {
+  /** Requests in flight while it ran, rounded. */
+  group: number
+  requests: number
+  c_mean: number
+  /** Share of requests at this level or above. */
+  share_from: number
+  /** The same request, relative to level 1. */
+  slowdown: number
+  /** Median latency relative to level 1, uncorrected for request mix. */
+  raw_slowdown: number
+  e_into: number | null
+  latency_median_s: number
+  prompt_mean: number
+  output_mean: number
+  cached_share: number | null
+}
+
+export interface LoadReading {
+  version: number
+  status: 'ok' | 'unclear' | 'too_little_traffic' | 'no_traffic' | 'failed'
+  category: 'idle' | 'moderate' | 'busy' | 'unclear'
+  fitted_category?: 'idle' | 'moderate' | 'busy'
+  knee_group?: number | null
+  /** Share of requests served at or past the knee. */
+  w_log?: number
+  crossings?: number
+  requests?: number
+  c_typ?: number
+  c_peak?: number
+  c_req_max?: number
+  /** With no second level to compare: share of requests that ran with 2+ in flight. */
+  overlapped_share?: number
+  window_start?: string
+  window_end?: string
+  window_hours?: number
+  groups?: LoadReadingGroup[]
+  thresholds?: { idle_below: number; busy_from: number; min_group: number }
+  fit?: {
+    r2_log: number | null
+    size_coefficients_s: Record<string, number>
+    halves: Record<string, { knee_group: number | null; w_log: number; category: string } | null>
+    checks: Record<string, boolean | null>
+    /** Checks that make the reading unclear when they fail; the rest are notes. */
+    hard_checks?: string[]
+  }
+  note?: string
+  error?: string
 }
 
 export interface DatasetBuildState {
@@ -894,6 +969,11 @@ export interface DatasetProfile {
   built_at: string
   window_start: string
   window_end: string
+  /** `timed` keeps every request of one stretch, in order, for a 1x replay. */
+  layout?: 'sampled' | 'timed'
+  /** How busy the backend is, read from its logs. */
+  load?: LoadReading | null
+  timed?: Record<string, unknown> | null
 }
 
 export interface Objective {

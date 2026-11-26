@@ -13,6 +13,8 @@ import { specOf, type BenchmarkChoice, type Workload } from '../utils/workload'
 import { useI18n } from '../i18n'
 import DatasetDialog from './DatasetDialog.vue'
 import InfoHint from './InfoHint.vue'
+import LoadReadingPanel from './LoadReadingPanel.vue'
+import { useFlash } from '../utils/flash'
 import BFCLFields from './BFCLFields.vue'
 
 const props = defineProps<{
@@ -23,6 +25,9 @@ const props = defineProps<{
   /** The second stage offers replay, BFCL or an existing benchmark. */
   targetMetric?: string
   noSweep?: boolean
+  /** What the campaign's objective ranks by, so the recommendation can tell
+   *  whether it is already followed. */
+  objectiveKind?: 'latency' | 'throughput' | ''
 }>()
 const w = defineModel<Workload>({ required: true })
 /** Take a fresh sample of a rolling dataset when the campaign starts. */
@@ -31,6 +36,8 @@ const emit = defineEmits<{
   module: [name: string]
   /** A dataset was set up from here: the list of profiles is out of date. */
   'datasets-changed': []
+  /** The user took the load reading's recommendation: rank by this. */
+  recommend: [what: 'latency' | 'throughput']
 }>()
 const { t } = useI18n()
 const newDatasetOpen = ref(false)
@@ -102,9 +109,47 @@ watch(() => w.value.slug, (slug) => {
 const chosenProfile = computed(
   () => props.profiles.find((p) => p.name === w.value.dataset_profile) ?? null)
 
+/** A timed replay needs a timed dataset: a timed profile, or a frozen file
+ *  (which may be one; LLMBench refuses it at the start if not). */
+const timedOk = computed(() => !!w.value.dataset_frozen || chosenProfile.value?.layout === 'timed')
+watch(timedOk, (ok) => { if (!ok && w.value.schedule === 'timed') w.value.schedule = 'closed' })
+
+/** What the load reading recommends. Light traffic: Original load ranked by
+ *  latency — requests rarely slow each other, so latency is what tuning
+ *  changes. Moderate or busy: Fixed load ranked by throughput — requests
+ *  queue, so capacity decides. Nothing when the reading cannot be trusted. */
+const rec = computed(() => {
+  const load = chosenProfile.value?.load
+  if (!load || w.value.mode !== 'replay') return null
+  const cat = load.category
+  if (cat !== 'idle' && cat !== 'moderate' && cat !== 'busy') return null
+  const timed = cat === 'idle'
+  const schedule: 'timed' | 'closed' = timed ? 'timed' : 'closed'
+  const objective: 'latency' | 'throughput' = timed ? 'latency' : 'throughput'
+  return {
+    cat,
+    schedule,
+    objective,
+    needsDataset: timed && !timedOk.value,
+    applied: w.value.schedule === schedule && props.objectiveKind === objective,
+  }
+})
+
+const modeFlash = useFlash()
+function applyRec() {
+  if (!rec.value || rec.value.needsDataset) return
+  w.value.schedule = rec.value.schedule
+  modeFlash.fire()
+  emit('recommend', rec.value.objective)
+}
+
 function profileNote(p: DatasetProfile): string {
   const size = p.records != null ? t('campaignNew.wl.requestsN', { n: p.records.toLocaleString() }) : t('campaignNew.wl.empty')
-  return p.managed ? size : `${size} · ${t('campaignNew.wl.resampled', { h: p.schedule_hours })}`
+  const parts = [size]
+  if (p.layout === 'timed') parts.push(t('campaignNew.wl.timedLayout'))
+  if (p.load?.category && p.load.category !== 'unclear') parts.push(t(`datasets.load.cat.${p.load.category}`))
+  if (!p.managed) parts.push(t('campaignNew.wl.resampled', { h: p.schedule_hours }))
+  return parts.join(' · ')
 }
 </script>
 
@@ -193,7 +238,41 @@ function profileNote(p: DatasetProfile): string {
         </el-select>
       </label>
       <DatasetDialog v-model="newDatasetOpen" @saved="onDatasetSaved" />
-      <div class="grid">
+      <div v-if="chosenProfile?.load" class="reading">
+        <LoadReadingPanel :reading="chosenProfile.load" compact />
+        <div v-if="rec" class="rec" :class="{ applied: rec.applied, clickable: !rec.applied && !rec.needsDataset }"
+          :role="!rec.applied && !rec.needsDataset ? 'button' : undefined"
+          :tabindex="!rec.applied && !rec.needsDataset ? 0 : undefined"
+          @click="!rec.applied && applyRec()" @keydown.enter="!rec.applied && applyRec()">
+          <div class="rec-text">
+            <div class="rec-title">
+              {{ t('campaignNew.wl.rec.title', { cat: t(`datasets.load.cat.${rec.cat}`) }) }}:
+              <b>{{ t(`campaignNew.wl.rec.${rec.schedule}`) }}</b>
+            </div>
+            <div class="rec-why">
+              {{ rec.needsDataset ? t('campaignNew.wl.rec.needsDataset') : t(`campaignNew.wl.rec.why.${rec.cat}`) }}
+            </div>
+          </div>
+          <span v-if="rec.applied" class="rec-done">✓ {{ t('campaignNew.wl.rec.applied') }}</span>
+          <el-button v-else-if="rec.needsDataset" size="small" @click.stop="newDatasetOpen = true">
+            {{ t('campaignNew.wl.rec.createDataset') }}</el-button>
+          <el-button v-else size="small" type="primary" @click.stop="applyRec">
+            {{ t('campaignNew.wl.rec.apply') }}</el-button>
+        </div>
+      </div>
+
+      <div class="modes-row">
+        <span class="row-label">{{ t('campaignNew.wl.schedule') }}
+          <InfoHint :width="380">{{ t('campaignNew.wl.scheduleHint') }}</InfoHint></span>
+        <span class="flashable" :class="{ flash: modeFlash.on.value }">
+          <el-radio-group v-model="w.schedule" size="small">
+            <el-radio-button value="closed">{{ t('campaignNew.wl.scheduleClosed') }}</el-radio-button>
+            <el-radio-button value="timed" :disabled="!timedOk">{{ t('campaignNew.wl.scheduleTimed') }}</el-radio-button>
+          </el-radio-group>
+        </span>
+        <span v-if="!timedOk" class="muted tiny">{{ t('campaignNew.wl.timedNeedsDataset') }}</span>
+      </div>
+      <div v-if="w.schedule !== 'timed'" class="grid">
         <label class="field">
           <span class="muted tiny">{{ t('campaignNew.wl.requests') }}
             <InfoHint>{{ t('campaignNew.wl.requestsHint') }}</InfoHint></span>
@@ -207,15 +286,27 @@ function profileNote(p: DatasetProfile): string {
             size="small" controls-position="right" />
         </label>
       </div>
-      <el-checkbox v-if="chosenProfile" v-model="rebuild" size="small">
-        {{ t('campaignNew.wl.resample') }}
-        <InfoHint :width="340">
-          {{ t('campaignNew.wl.resampleHint') }}
-          <template v-if="!chosenProfile.managed">
-            {{ t('campaignNew.wl.resampleOwn', { h: chosenProfile.schedule_hours }) }}
-          </template>
-        </InfoHint>
-      </el-checkbox>
+      <el-collapse v-if="chosenProfile || w.schedule === 'timed'" class="wl-advanced">
+        <el-collapse-item name="adv" :title="t('campaignNew.wl.advanced')">
+          <div class="adv-body">
+            <label v-if="w.schedule === 'timed'" class="field warmup">
+              <span class="muted tiny">{{ t('campaignNew.wl.warmup') }}
+                <InfoHint>{{ t('campaignNew.wl.warmupHint') }}</InfoHint></span>
+              <el-input-number v-model="w.warmup_s" :min="0" :max="3600" :step="10"
+                size="small" controls-position="right" />
+            </label>
+            <el-checkbox v-if="chosenProfile" v-model="rebuild" size="small">
+              {{ t('campaignNew.wl.resample') }}
+              <InfoHint :width="340">
+                {{ t('campaignNew.wl.resampleHint') }}
+                <template v-if="!chosenProfile.managed">
+                  {{ t('campaignNew.wl.resampleOwn', { h: chosenProfile.schedule_hours }) }}
+                </template>
+              </InfoHint>
+            </el-checkbox>
+          </div>
+        </el-collapse-item>
+      </el-collapse>
     </template>
 
     <el-select v-else v-model="w.slug" size="small" filterable allow-create default-first-option
@@ -244,4 +335,41 @@ function profileNote(p: DatasetProfile): string {
 .field { display: flex; flex-direction: column; gap: 2px; }
 .field :deep(.el-input-number) { width: 100%; }
 .opt-help { margin-left: 8px; font-size: 12px; }
+.row-label { font-size: 13px; color: var(--autotune-text); display: inline-flex; align-items: center; gap: 4px; }
+
+/* The reading and what it recommends are one block: the recommendation is
+   visibly the reading's conclusion, not a separate notice. */
+.reading { border: 1px solid var(--autotune-border); border-radius: 6px; background: var(--autotune-bg); overflow: hidden; }
+.reading :deep(.load.compact) { padding: 12px 14px 4px; }
+.rec {
+  display: flex; align-items: center; gap: 12px; padding: 10px 14px;
+  border-top: 1px solid var(--el-color-primary-light-7);
+  background: var(--el-color-primary-light-9); border-left: 3px solid var(--el-color-primary);
+}
+.rec.clickable { cursor: pointer; }
+.rec.clickable:hover { background: var(--el-color-primary-light-8); }
+.rec.applied {
+  background: var(--el-color-success-light-9); border-top-color: var(--el-color-success-light-7);
+  border-left-color: var(--el-color-success);
+}
+.rec-text { flex: 1 1 auto; min-width: 0; }
+.rec-title { font-size: 13.5px; color: var(--autotune-text); }
+.rec-why { font-size: 12px; color: var(--autotune-muted); margin-top: 2px; }
+.rec-done { font-size: 12.5px; color: var(--el-color-success-dark-2); white-space: nowrap; }
+
+.wl-advanced { border-top: none; border-bottom: none; }
+.wl-advanced :deep(.el-collapse-item__header) { height: 30px; font-size: 12.5px; color: var(--autotune-muted); border-bottom: none; background: transparent; }
+.wl-advanced :deep(.el-collapse-item__wrap) { border-bottom: none; background: transparent; }
+.wl-advanced :deep(.el-collapse-item__content) { padding-bottom: 4px; }
+.adv-body { display: flex; align-items: flex-end; gap: 20px; flex-wrap: wrap; }
+.adv-body .warmup { width: 150px; }
+
+/* A field the recommendation just changed pulses twice. */
+.flashable { display: inline-flex; border-radius: 6px; }
+.flash { animation: changed 0.8s ease-out 2; }
+@keyframes changed {
+  0% { box-shadow: 0 0 0 0 var(--el-color-primary-light-5); }
+  35% { box-shadow: 0 0 0 5px var(--el-color-primary-light-5); }
+  100% { box-shadow: 0 0 0 0 transparent; }
+}
 </style>

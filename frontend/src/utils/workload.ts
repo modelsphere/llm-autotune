@@ -18,13 +18,19 @@ export interface Workload {
   dataset_frozen: string
   requests: number
   concurrency: number
+  /** How a replay sends: `closed` keeps `concurrency` in flight (capacity);
+   *  `timed` sends each request of a timed dataset on its recorded timing (1x
+   *  production load) and measures latency. */
+  schedule: 'closed' | 'timed'
+  /** Timed only: the first seconds of the schedule are sent but not measured. */
+  warmup_s: number
   slug: string
 }
 
 export function defaultWorkload(mode: Workload['mode'] = 'sweep'): Workload {
   return {
     mode, bfcl: defaultBFCL(), input_tokens: 2048, output_tokens: 512, concurrencies: '1, 4, 16, 64',
-    requests_per_concurrency: 20, max_seconds_per_level: 600, dataset_profile: '', dataset_frozen: '', requests: 500, concurrency: 16, slug: '',
+    requests_per_concurrency: 20, max_seconds_per_level: 600, dataset_profile: '', dataset_frozen: '', requests: 500, concurrency: 16, schedule: 'closed', warmup_s: 30, slug: '',
   }
 }
 
@@ -40,11 +46,12 @@ export function specOf(w: Workload): Record<string, unknown> | null {
       max_seconds_per_level: w.max_seconds_per_level,
     }
   }
-  return {
-    kind: 'replay', requests: w.requests, concurrency: w.concurrency,
-    ...(w.dataset_frozen ? { dataset_frozen: w.dataset_frozen }
-      : { dataset_profile: w.dataset_profile }),
+  const dataset = w.dataset_frozen ? { dataset_frozen: w.dataset_frozen }
+    : { dataset_profile: w.dataset_profile }
+  if (w.schedule === 'timed') {
+    return { kind: 'replay', schedule: 'timed', warmup_s: w.warmup_s, ...dataset }
   }
+  return { kind: 'replay', requests: w.requests, concurrency: w.concurrency, ...dataset }
 }
 
 export interface BenchmarkChoice {
@@ -52,6 +59,26 @@ export interface BenchmarkChoice {
   name: string
   modules: string[]
   replays_profile: string
+}
+
+/** The metrics only a timed replay reports (backend app/objective.py
+ *  TIMED_KEYS): latency as users saw it, and the equivalent throughput (the
+ *  traffic a config would carry behind a least-connections balancer). */
+export const TIMED_LATENCY_KEYS = ['e2e_p50_ms', 'e2e_p90_ms', 'e2e_mean_ms',
+  'session_time_p50_s', 'session_time_mean_s']
+export const TIMED_THROUGHPUT_KEYS = ['equivalent_tpm']
+
+function key(target: string): string {
+  return target.split('.').pop() ?? ''
+}
+
+export function isTimedLatency(target: string): boolean {
+  return TIMED_LATENCY_KEYS.includes(key(target))
+}
+
+/** The objective needs an Original load (timed) replay. */
+export function isTimed(target: string): boolean {
+  return isTimedLatency(target) || TIMED_THROUGHPUT_KEYS.includes(key(target))
 }
 
 export interface BFCLConfig {

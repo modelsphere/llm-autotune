@@ -35,7 +35,8 @@ from app.control.engines.flags import (
     normalize_args,
     render_flag,
 )
-from app.control.launch import MachineInfo, get_driver, preflight
+from app.control.launch import DeploymentHandle, MachineInfo, get_driver, preflight
+from app.control.launch.base import LaunchSpec
 from app.control.launch_config import LaunchConfig
 from app.control.managed import (
     ManagedCampaignRefused,
@@ -62,7 +63,8 @@ from app.control.orchestrator.machine_queue import campaign_key, session_key
 from app.control.orchestrator.occupancy import Reservation, busy_reason, reservations_on
 from app.control.orchestrator.policy_lifecycle import settings_of as policy_settings_of
 from app.control.orchestrator.supervisor import Supervisor
-from app.control.recipe.check import recipe_problems
+from app.control.recipe.campaign import config_hash, file_digests, run_recipe
+from app.control.recipe.check import recipe_problems, recipe_warnings
 from app.control.recipe.command import command_flags as recipe_command_flags
 from app.control.recipe.command import recipe_flags
 from app.control.recipe.importer import NotARecipe
@@ -125,12 +127,18 @@ from app.db.models import (
 from app.db.models import JsonCol as JsonType
 from app.evaluation import scenarios
 from app.evaluation.aggregate import ResultSummary, summary_of
+from app.evaluation.benchmark_spec import BenchmarkSpec, ensure_spec, metric_problem
+from app.evaluation.benchmark_spec import document as benchmark_document
+from app.evaluation.benchmarks import GROUP_TAG as BENCHMARK_GROUP_TAG
+from app.evaluation.benchmarks import BenchmarkRefused, ensure_document
 from app.evaluation.bfcl_sweep import BFCLSweepPlan, bfcl_levels, select_bfcl_level
 from app.evaluation.gate import Gate
 from app.evaluation.llmbench import LLMBenchClient, instance_keys, module_reports
 from app.hardware import coerce_gpu_type, normalize_gpu_type
+from app.measures import Reader as MeasureReader
+from app.measures import problem_with as measure_problem
 from app.metrics_catalog import DEFAULT_TARGET_METRIC, DEFAULT_VERIFY_TARGET_METRIC
-from app.objective import direction, improvement_pct, sort_key, target_metric
+from app.objective import direction, evaluate_redlines, improvement_pct, sort_key, target_metric
 from app.plugins import (
     PLUGIN_API_VERSION,
     CampaignCreated,
@@ -142,6 +150,7 @@ from app.plugins import (
     TickStep,
     migration_env,
 )
+from app.quality import resolve as resolve_relative_redlines
 from app.schemas.agent import (
     SCHEMA_VERSION,
     BenchmarkLLMBenchOut,
@@ -151,6 +160,7 @@ from app.schemas.agent import (
     RunGroup,
 )
 from app.schemas.core import CampaignCreate, MachineWarningOut, UserOut
+from app.schemas.policy import check_launch_files
 from app.staging import SCREEN, VERIFY
 
 __all__ = [
@@ -167,6 +177,24 @@ __all__ = [
     "Supervisor",
     "TickStep",
     "migration_env",
+    # Benchmarks described by their workload: created and locked on LLMBench
+    "BenchmarkRefused",
+    "BenchmarkSpec",
+    "ensure_spec",
+    "metric_problem",
+    # ...and any LLMBench export-format document: a spec's, or one a plugin
+    # derives (a benchmark's modules split in two), created once and locked.
+    "BENCHMARK_GROUP_TAG",
+    "benchmark_document",
+    "ensure_document",
+    # Why a benchmark running these modules can never report a measure ref.
+    "measure_problem",
+    # Judging runs a plugin measured: a run's numbers by any name (measure ref
+    # or raw key), relative redlines made absolute from the start's scores,
+    # and every redline's verdict.
+    "MeasureReader",
+    "evaluate_redlines",
+    "resolve_relative_redlines",
     # Managed campaigns: how a plugin runs work
     "CampaignCreate",
     "ManagedCampaignRefused",
@@ -220,6 +248,8 @@ __all__ = [
     "require_admin_principal",
     "sync_session_factory",
     # Machines, the queue and the clock
+    "LaunchSpec",
+    "DeploymentHandle",
     "MachineInfo",
     "MachineWarningOut",
     "accepts_new_work",
@@ -261,7 +291,13 @@ __all__ = [
     "recipe_flags",
     "recipe_pod_gpus",
     "recipe_problems",
+    "recipe_warnings",
     "recipe_shape",
+    # What a run ran, as a recipe with its image, and its identity with its files
+    "check_launch_files",
+    "config_hash",
+    "file_digests",
+    "run_recipe",
     # Engines and configs
     "MODEL_MOUNT",
     "LaunchConfig",

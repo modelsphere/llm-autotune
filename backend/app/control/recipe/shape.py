@@ -87,6 +87,22 @@ def accelerator_request(values: dict[str, Any]) -> int:
     return 0
 
 
+def accelerator_names(values: dict[str, Any]) -> list[str]:
+    """The accelerator resources `resources` names, in the order written."""
+    resources = values.get("resources") or {}
+    out: list[str] = []
+    for part in ("limits", "requests"):
+        for name, qty in (resources.get(part) or {}).items():
+            if (
+                name not in _NOT_CARDS
+                and not name.startswith(("hugepages-", "rdma/"))
+                and _int(qty)
+                and name not in out
+            ):
+                out.append(name)
+    return out
+
+
 def pod_gpus(recipe: Recipe) -> int:
     """Cards each engine pod claims: `model.gpus`, else what its resources name."""
     return recipe.gpus or accelerator_request(recipe.values)

@@ -79,8 +79,8 @@ def test_a_baseline_and_its_tuned_recipe_are_two_variants_with_the_uplift():
     assert out.metadata["tuning"][0]["uplift"] == 25.0
 
 
-def _run(command: str) -> SimpleNamespace:
-    return SimpleNamespace(id=7, launch_command=command)
+def _run(command: str, image: str = "") -> SimpleNamespace:
+    return SimpleNamespace(id=7, launch_command=command, image=image)
 
 
 def test_only_the_measured_recipe_is_published():
@@ -95,6 +95,24 @@ def test_only_the_measured_recipe_is_published():
     with pytest.raises(HTTPException) as exc:
         _launched_recipe(campaign, candidate, _run(launched))
     assert exc.value.status_code == 409
+
+
+def test_a_launch_on_another_image_publishes_that_image():
+    """A launch that named another of its campaign's images ran that image
+    (contract 1.9), so that is the recipe it measured and the one published."""
+    recipe = Recipe.from_variant(yaml.safe_load(QWEN.read_text()))
+    campaign = SimpleNamespace(recipe=recipe.model_dump(), search_space={})
+    candidate = SimpleNamespace(config={"mem_fraction_static": 0.81})
+    repository = recipe.values["image"]["repository"]
+    other = f"{repository}:next"
+    measured = apply(recipe, candidate.config)
+    measured.values["image"] = {**measured.values["image"], "tag": "next"}
+    launched = f"autotune.modelsphere.dev/recipe-hash: {measured.hash()}\n"
+    published = _launched_recipe(campaign, candidate, _run(launched, other))
+    assert published.image == other and published.hash() == measured.hash()
+    # The campaign's own image would not be what that run measured.
+    with pytest.raises(HTTPException):
+        _launched_recipe(campaign, candidate, _run(launched))
 
 
 def test_a_deprecated_drivers_run_keeps_the_conversion():
@@ -273,3 +291,53 @@ def test_the_measured_cards_names_are_written_and_reported():
     out = build_catalog_entry([_source(Recipe.from_variant(variant))], _opts())
     (row,) = out.payload()["variants"]
     assert (row["gpu_type"], row["gpu_product"]) == ("H100", ["NVIDIA-H100-80GB-HBM3"])
+
+
+def test_inputs_and_a_cards_brand_are_published_with_the_recipe():
+    variant = yaml.safe_load(QWEN.read_text())
+    variant["inputs"] = [
+        {
+            "key": "storageKVOffload.mooncake.master",
+            "title": "Mooncake master",
+            "pattern": r"[^\s:/]+:[0-9]+",
+            "example": "mooncake-master.example:50051",
+        }
+    ]
+    recipe = Recipe.from_variant(variant)
+    out = build_catalog_entry([_source(recipe)], _opts())
+    assert out.errors == [], out.errors
+    (doc,) = [v.document for v in out.variants]
+    assert doc["inputs"] == variant["inputs"]
+    assert "vendor" not in doc["requires"], "nvidia is the catalog's default"
+
+    # Cards counted under requires.gpus on another brand: the variant names no
+    # resource, so the brand is what a deploy picks one by.
+    source = _source(recipe)
+    source.config.gpu_type = "ASCEND-910B4-1"
+    out = build_catalog_entry([source], _opts())
+    assert out.errors == [], out.errors
+    (doc,) = [v.document for v in out.variants]
+    assert doc["requires"]["vendor"] == "ascend"
+    assert doc["requires"]["gpuProduct"] == ["Ascend-910B4"]
+
+
+async def test_a_run_with_files_is_not_published_yet():
+    """The catalog has no place for files mounted into the engine, and a
+    variant without them is not what was measured: refused, saying so."""
+    from app.api.catalog_export import _from_run
+    from app.db.models import Campaign, Candidate, Run
+
+    rows = {
+        Run: SimpleNamespace(id=7, campaign_id=1, candidate_id=2, files={"/opt/moe.json": "{}"}),
+        Campaign: SimpleNamespace(id=1),
+        Candidate: SimpleNamespace(id=2),
+    }
+
+    class Session:
+        async def get(self, model, _id):
+            return rows[model]
+
+    with pytest.raises(HTTPException) as exc:
+        await _from_run(Session(), SimpleNamespace(run_id=7))
+    assert exc.value.status_code == 422
+    assert "/opt/moe.json" in exc.value.detail and "not supported" in exc.value.detail

@@ -3,7 +3,8 @@
     catalog   the recipe's values: everything a tuner changes and a catalog
               publishes
     site      what makes it run on this cluster: the weights' host path,
-              placement, the image mirror, cluster-wide plumbing
+              placement, the image mirror, the resource its cards are
+              requested as, cluster-wide plumbing
     autotune  what makes it a tuning run: its name and labels, the endpoint,
               production features off, and a teardown measured in seconds
 
@@ -25,7 +26,7 @@ import copy
 from dataclasses import dataclass, field
 from typing import Any
 
-from app.control.recipe.model import Recipe
+from app.control.recipe.model import ROLES, Recipe
 
 API_VERSION = "serving.modelsphere.dev/v1alpha1"
 KIND = "LLMService"
@@ -51,6 +52,12 @@ _FEATURES_OFF = (
 
 # Teardown: the engine is idle when a trial ends, so there is nothing to drain
 # and no reason to give it long to exit.
+# What the charts render `model.gpus` under when `model.gpuResource` is unset,
+# and the first version of each chart that takes the key (an older one refuses
+# it in its values schema). swiss's table, so a run and a deploy agree.
+DEFAULT_GPU_RESOURCE = "nvidia.com/gpu"
+GPU_RESOURCE_SINCE = {"vllm": "0.9.1", "sglang": "0.9.29"}
+
 RUN_GRACE_SECONDS = 60
 RUN_DRAIN_SECONDS = 5
 
@@ -94,6 +101,12 @@ class Site:
     tolerations: list[dict[str, Any]] = field(default_factory=list)
     scheduler_name: str = ""
     priority_class: str = ""
+    # The extended resource this cluster's cards are requested as (its
+    # "request cards as", else its GPU resource). A recipe names how many
+    # cards, never which resource: the same Ascend recipe asks for
+    # huawei.com/Ascend910B4-1 on one site and volcano.sh/Ascend910B4-1 on
+    # another.
+    gpu_resource: str = ""
     # Raw chart values the cluster needs on every engine (resources a quota
     # demands, shm, securityContext...). Merged last within the site layer.
     extra_values: dict[str, Any] = field(default_factory=dict)
@@ -113,6 +126,31 @@ class RunPlan:
     startup_minutes: int = 0
     labels: dict[str, str] = field(default_factory=dict)
     annotations: dict[str, str] = field(default_factory=dict)
+    # (1.9) Files mounted into the engine container: {container path: key in
+    # `files_configmap`}, which the driver creates next to the LLMService.
+    files: dict[str, str] = field(default_factory=dict)
+    files_configmap: str = ""
+
+
+FILES_VOLUME = "autotune-files"
+
+
+def files_keys(files: dict[str, Any]) -> dict[str, str]:
+    """{path: ConfigMap key}: `f0`, `f1`... in path order (a path is no key)."""
+    return {path: f"f{index}" for index, path in enumerate(sorted(files))}
+
+
+def files_layer(base: dict[str, Any], run: RunPlan) -> dict[str, Any]:
+    """The chart's volumes and mounts with the run's files added. Lists replace
+    in a layer merge, so the recipe's and the site's own are carried over."""
+    if not run.files:
+        return {}
+    volumes = list(base.get("volumes") or [])
+    mounts = list(base.get("volumeMounts") or [])
+    volumes.append({"name": FILES_VOLUME, "configMap": {"name": run.files_configmap}})
+    for path, key in sorted(run.files.items()):
+        mounts.append({"name": FILES_VOLUME, "mountPath": path, "subPath": key, "readOnly": True})
+    return {"volumes": volumes, "volumeMounts": mounts}
 
 
 def mirror_image(repository: str, mirror: str) -> str:
@@ -127,12 +165,58 @@ def mirror_image(repository: str, mirror: str) -> str:
     return f"{mirror.rstrip('/')}/{repository.rsplit('/', 1)[-1]}"
 
 
+def get_value(values: dict[str, Any], key: str) -> Any:
+    """The value at a dotted key (`a.b.c`, as helm --set spells it); None when
+    it is not set."""
+    node: Any = values
+    for part in key.split("."):
+        if not isinstance(node, dict) or part not in node:
+            return None
+        node = node[part]
+    return node
+
+
+def _set_value(values: dict[str, Any], key: str, value: Any) -> None:
+    node = values
+    *parents, leaf = key.split(".")
+    for part in parents:
+        child = node.get(part)
+        if not isinstance(child, dict):
+            child = node[part] = {}
+        node = child
+    node[leaf] = value
+
+
+def _requests_cards(recipe: Recipe) -> bool:
+    """Whether the chart renders a card request from this recipe: model.gpus,
+    or a pd role's own. A recipe that names its cards under `resources`
+    instead (model.gpus 0) asks the chart for none."""
+
+    def count(raw: Any) -> int:
+        try:
+            return int(str(raw).strip() or 0)
+        except ValueError:
+            return 0
+
+    return recipe.gpus > 0 or any(count(recipe.role(role).get("gpus")) > 0 for role in ROLES)
+
+
 def site_layer(recipe: Recipe, site: Site) -> dict[str, Any]:
     out: dict[str, Any] = {}
     if site.model_local_path:
         out["model"] = {"localPath": site.model_local_path}
         if site.model_host_path_type:
             out["model"]["hostPathType"] = site.model_host_path_type
+    if (
+        site.gpu_resource
+        and site.gpu_resource != DEFAULT_GPU_RESOURCE
+        and _requests_cards(recipe)
+        and not get_value(recipe.values, "model.gpuResource")
+    ):
+        # Only when it is not the charts' default, so a recipe on NVIDIA cards
+        # renders as it did before the key existed, on any chart version. A
+        # recipe that names the resource itself keeps its own.
+        out.setdefault("model", {})["gpuResource"] = site.gpu_resource
     repository = ((recipe.values.get("image") or {}).get("repository")) or ""
     mirrored = mirror_image(repository, site.image_mirror)
     if repository and mirrored != repository:
@@ -145,7 +229,26 @@ def site_layer(recipe: Recipe, site: Site) -> dict[str, Any]:
         out["schedulerName"] = site.scheduler_name
     if site.priority_class:
         out["priorityClassName"] = site.priority_class
+    for item in recipe.inputs:
+        # An input's answer is the site's (extra_values, merged below), else
+        # the input's own default, which goes over whatever base the recipe's
+        # values give the key. One with neither is left for unanswered_inputs.
+        key, default = str(item.get("key") or ""), item.get("default")
+        if key and default is not None and get_value(site.extra_values, key) is None:
+            _set_value(out, key, copy.deepcopy(default))
     return merge(out, site.extra_values)
+
+
+def unanswered_inputs(recipe: Recipe, values: dict[str, Any]) -> list[str]:
+    """The recipe's inputs the composed values leave unset, as `key (title)`.
+    An answer from any layer counts, the recipe's own values included."""
+    out = []
+    for item in recipe.inputs:
+        key = str(item.get("key") or "")
+        if key and get_value(values, key) is None:
+            title = str(item.get("title") or "").strip()
+            out.append(f"{key} ({title})" if title else key)
+    return out
 
 
 def run_layer(recipe: Recipe, site: Site, run: RunPlan) -> dict[str, Any]:
@@ -198,11 +301,12 @@ def run_layer(recipe: Recipe, site: Site, run: RunPlan) -> dict[str, Any]:
 
 
 def layers(recipe: Recipe, site: Site, run: RunPlan) -> list[tuple[str, dict[str, Any]]]:
-    return [
+    out = [
         ("catalog", copy.deepcopy(recipe.values)),
         ("site", site_layer(recipe, site)),
-        ("autotune", run_layer(recipe, site, run)),
     ]
+    files = files_layer(effective_values(out), run)
+    return [*out, ("autotune", merge(run_layer(recipe, site, run), files))]
 
 
 def llmservice(recipe: Recipe, site: Site, run: RunPlan, chart_version: str = "") -> dict[str, Any]:

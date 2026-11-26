@@ -11,6 +11,7 @@ import { useI18n } from '../i18n'
 import { absoluteTime, exactTime, relativeTime } from '../utils/time'
 import CampaignChips from './CampaignChips.vue'
 import InfoHint from './InfoHint.vue'
+import LoadReadingPanel from './LoadReadingPanel.vue'
 
 const props = defineProps<{
   dataset: ReplayDataset
@@ -167,6 +168,14 @@ function onCommand(command: string) {
           <div class="sub" :title="exactTime(d.current.built_at)">{{ t('datasets.card.taken', { ago: relativeTime(d.current.built_at) }) }}</div>
           <div v-if="d.current.window_start" class="sub tiny">
             {{ t('datasets.card.traffic') }} {{ absoluteTime(d.current.window_start) }} → {{ absoluteTime(d.current.window_end) }}</div>
+          <div v-if="d.current.timed" class="sub tiny timed">
+            <b>{{ t('datasets.card.timed') }}</b>
+            {{ t('datasets.card.timedLine', {
+              sessions: fmt(d.current.timed.sessions),
+              following: Math.round(d.current.timed.following_share * 100),
+              real: Math.round(d.current.timed.window_s / 60),
+              replay: Math.max(1, Math.round(d.current.timed.replay_s / 60)),
+            }) }}</div>
           <div v-if="cacheHit != null" class="cache">
             <svg viewBox="0 0 36 36" class="donut" aria-hidden="true">
               <circle cx="18" cy="18" r="15" class="track" />
@@ -227,6 +236,8 @@ function onCommand(command: string) {
         <div v-else class="sub tiny">{{ builds ? t('datasets.card.noneYet') : t('datasets.card.loading') }}</div>
       </section>
     </div>
+
+    <LoadReadingPanel v-if="d.current?.load" :reading="d.current.load" />
 
     <footer class="foot">
       <div class="used">
@@ -300,6 +311,8 @@ function onCommand(command: string) {
 .unit { font-size: 13px; font-weight: 400; color: var(--autotune-muted); margin-left: 6px; }
 .sub { font-size: 12.5px; color: var(--autotune-muted); margin-top: 2px; }
 .tiny { font-size: 11.5px; }
+.timed { margin-top: 6px; line-height: 1.4; }
+.timed b { color: var(--el-color-primary-dark-2); font-weight: 600; }
 .none { font-size: 13px; color: var(--el-text-color-placeholder); padding: 6px 0; }
 
 .cache { display: flex; align-items: center; gap: 10px; margin-top: 12px; }

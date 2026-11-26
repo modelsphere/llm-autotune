@@ -30,6 +30,13 @@ from app.metrics_catalog import DEFAULT_VERIFY_TARGET_METRIC
 
 SCREEN = "screen"
 VERIFY = "verify"
+# Not a stage: a benchmark a policy described itself and asked for on one of
+# its engines, to look at something the campaign's benchmark does not show (a
+# two-minute sweep before the long one, another concurrency, a quality
+# suite). A probe's result is stored under its own source, so everything that
+# judges, ranks or learns from a campaign's results, which all read
+# "llmbench" results, never sees it.
+PROBE = "probe"
 
 # What the expensive stage is worth waiting for, when a campaign turns it on
 # without saying how long. A full replay of the rolling 1000-request dataset
@@ -55,6 +62,16 @@ def stage_of(candidate: Candidate | None) -> str:
 
 def stage_of_run(run: Run) -> str:
     return stage_of(getattr(run, "candidate", None))
+
+
+def is_probe(run: Run) -> bool:
+    """Does this run measure with a benchmark of its own, not its campaign's?"""
+    return bool(getattr(run, "benchmark_slug", "") or "")
+
+
+def suite_of_run(run: Run) -> str:
+    """What a policy's benchmark answers as its suite."""
+    return PROBE if is_probe(run) else stage_of_run(run)
 
 
 def benchmark_slug(campaign: Campaign, stage: str) -> str:

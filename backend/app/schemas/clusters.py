@@ -35,6 +35,8 @@ class ClusterIn(BaseModel):
     endpoint: EndpointMode = "dns"
     image_mirror: str = Field("", max_length=255)
     site_values: str = ""
+    scheduler_name: str = Field("", max_length=253)
+    gpu_request_resource: str = Field("", max_length=253)
     node_host: str = ""
     gpu_resource: str = "nvidia.com/gpu"
     gpu_product_label: str = Field(default="nvidia.com/gpu.product", min_length=1, max_length=253)
@@ -129,6 +131,8 @@ class ClusterOut(BaseModel):
     endpoint: str = "dns"
     image_mirror: str = ""
     site_values: str = ""
+    scheduler_name: str = ""
+    gpu_request_resource: str = ""
     node_host: str
     gpu_resource: str
     gpu_product_label: str

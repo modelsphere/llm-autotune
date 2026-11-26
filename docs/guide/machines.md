@@ -37,11 +37,12 @@ settings most clusters do not need:
 |---|---|
 | **Workload kind** | `llmservice` (default) creates each run as an LLMService; `deployment` and `custom` are deprecated. |
 | **RuntimeClass** | The runtime class engine pods request, `nvidia` by default. |
-| **GPU resource** | The resource name GPUs are requested by, `nvidia.com/gpu` by default. |
+| **GPU resource** | The resource name GPUs are counted and requested by, `nvidia.com/gpu` by default. A recipe says how many cards and never which resource, so a catalog variant for another accelerator (`requires.vendor: ascend`) runs here as it is: its cards are requested under this name (the chart's `model.gpuResource`, vllm 0.9.1 / sglang 0.9.29 or newer). Where a device plugin hands its cards out under a different name than the one counted, set **Request cards as** below. |
 | **Extra tolerations** | For GPU nodes with taints other than the standard GPU taint, which is tolerated automatically. Comma-separated `key[=value][:effect]`. |
 | **Image pull secrets** | For engine images in a registry that requires credentials: names of secrets in the runs' namespace. |
 | **Default node selector**, **Policy node selector** | Where engine pods, and the pods of policies the platform runs for you, may go. |
 | **Chart repository**, **Image mirror** | LLMService only: where the operator pulls charts and images from. |
+| **Request cards as**, **Scheduler** | LLMService only, for a cluster whose device plugin has a scheduler of its own (volcano, HAMi). Such a plugin hands cards out under its own resource name, and only to pods its scheduler placed. **Request cards as** is the name engine pods ask for (`volcano.sh/Ascend910B4-1`), when it is not the **GPU resource** the nodes are counted by; **Scheduler** is the `schedulerName` they carry (`volcano`). Both empty: the GPU resource and the cluster's default scheduler. |
 
 After **Connect**, a row of checks shows what the platform can do there: reach
 the API, read nodes, find llm-operator. Then it lists the cluster's GPU nodes

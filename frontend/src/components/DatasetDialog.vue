@@ -42,7 +42,7 @@ function blank(): ReplayDatasetForm {
     display_name: '', name: '', source_url: '', statuses: ['200'],
     uris: ['/v1/chat/completions'], extra_logsql: '', max_model_len: 262144,
     min_records: 100, keep_builds: 7, subwindow_minutes: 60, max_carry_multiple: 4,
-    window_timezone: 'UTC',
+    window_timezone: 'UTC', layout: 'sampled', session_field: '', max_idle_gap_s: 5,
   }
 }
 
@@ -241,7 +241,35 @@ async function save() {
         </el-select>
       </el-form-item>
 
-      <el-form-item :label="t('datasets.dialog.sample')">
+      <el-form-item>
+        <template #label>
+          {{ t('datasets.dialog.layout') }}
+          <InfoHint :width="360">{{ t('datasets.dialog.layoutHint') }}</InfoHint>
+        </template>
+        <el-radio-group v-model="form.layout">
+          <el-radio-button value="sampled">{{ t('datasets.dialog.layoutSampled') }}</el-radio-button>
+          <el-radio-button value="timed">{{ t('datasets.dialog.layoutTimed') }}</el-radio-button>
+        </el-radio-group>
+      </el-form-item>
+
+      <div v-if="form.layout === 'timed'" class="grid-2">
+        <el-form-item>
+          <template #label>
+            {{ t('datasets.dialog.sessionField') }}
+            <InfoHint :width="320">{{ t('datasets.dialog.sessionFieldHint') }}</InfoHint>
+          </template>
+          <el-input v-model="form.session_field" placeholder="req_headers.x-session-id" class="mono" />
+        </el-form-item>
+        <el-form-item>
+          <template #label>
+            {{ t('datasets.dialog.idleGap') }}
+            <InfoHint :width="320">{{ t('datasets.dialog.idleGapHint') }}</InfoHint>
+          </template>
+          <el-input-number v-model="form.max_idle_gap_s" :min="0" :max="3600" controls-position="right" />
+        </el-form-item>
+      </div>
+
+      <el-form-item :label="form.layout === 'timed' ? t('datasets.dialog.sampleTimed') : t('datasets.dialog.sample')">
         <div class="inline">
           <el-input-number v-model="form.sample_size" :min="1" :max="1000000" :step="500"
             controls-position="right" class="num" />

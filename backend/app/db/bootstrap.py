@@ -91,6 +91,38 @@ BUILTIN_OBJECTIVES = [
         "direction": "maximize",
         "redlines": [{"metric": f"{REPLAY}.ttft_p99_ms", "op": "<=", "value": 10000}],
     },
+    # For a quiet backend, replayed on its recorded timing (a timed workload):
+    # rank by how fast users get their answers, never trading the tail for it.
+    {
+        "name": "1x replay: lowest latency",
+        "description": "For a backend whose traffic is light: replay it on its recorded "
+                       "timing and rank by median latency. A run whose client fell behind "
+                       "the schedule does not count.",
+        "target_metric": f"{REPLAY}.e2e_p50_ms",
+        "direction": "minimize",
+        "redlines": [
+            {"metric": f"{REPLAY}.fell_behind", "op": "<=", "value": 0},
+        ],
+    },
+    # For a busy backend, replayed on its recorded timing: rank by the traffic
+    # a config would carry behind the least-connections balancer production
+    # uses (LLMBench's docs/replay-datasets.md, "Equivalent throughput").
+    # Failed requests leave the latency curve, so a config that drops them
+    # must not look fast.
+    {
+        "name": "1x replay: equivalent throughput",
+        "description": "For a backend whose traffic is busy: replay it on its recorded "
+                       "timing and rank by the tokens per minute the config would serve "
+                       "behind a least-connections balancer at production's concurrency. "
+                       "A run whose client fell behind, or that failed more than 1% of "
+                       "requests, does not count.",
+        "target_metric": f"{REPLAY}.equivalent_tpm",
+        "direction": "maximize",
+        "redlines": [
+            {"metric": f"{REPLAY}.fell_behind", "op": "<=", "value": 0},
+            {"metric": f"{REPLAY}.uptime", "op": ">=", "value": 0.99},
+        ],
+    },
     {
         "name": "BFCL total TPM",
         "description": "Default BFCL ranking. Total input and output tokens per minute "
@@ -265,9 +297,23 @@ def _seed_objectives(engine) -> None:
             for spec in BUILTIN_OBJECTIVES:
                 if spec["name"] in added:
                     session.add(Objective(owner_id=None, is_builtin=True, **spec))
+            # A built-in nobody can edit follows its definition here: one whose
+            # redlines or wording changed is brought up to date. A campaign
+            # keeps the copy it was created with, so none already made moves.
+            updated = []
+            for row in session.query(Objective).filter(Objective.is_builtin.is_(True)):
+                spec = next((b for b in BUILTIN_OBJECTIVES if b["name"] == row.name), None)
+                if spec is None:
+                    continue
+                if any(getattr(row, k) != v for k, v in spec.items()):
+                    for k, v in spec.items():
+                        setattr(row, k, v)
+                    updated.append(row.name)
             session.commit()
         if added:
             logger.info("added built-in objectives: %s", ", ".join(added))
+        if updated:
+            logger.info("updated built-in objectives: %s", ", ".join(updated))
     except Exception:  # noqa: BLE001 — never block a deploy
         logger.exception("could not seed the built-in objectives")
 
@@ -380,6 +426,8 @@ def _register_local_cluster(engine) -> None:
                 endpoint=settings.k8s_endpoint or "dns",
                 image_mirror=settings.k8s_image_mirror,
                 site_values=settings.k8s_site_values,
+                scheduler_name=settings.k8s_scheduler_name,
+                gpu_request_resource=settings.k8s_gpu_request_resource,
                 gpu_resource=settings.k8s_gpu_resource,
                 gpu_product_label=settings.k8s_gpu_product_label,
                 runtime_class=settings.k8s_runtime_class,

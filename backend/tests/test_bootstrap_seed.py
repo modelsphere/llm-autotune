@@ -33,6 +33,23 @@ def test_builtin_objectives_are_seeded_once_and_include_the_default_metric():
     assert any(r.target_metric == DEFAULT_TARGET_METRIC for r in rows)
 
 
+def test_a_builtin_whose_definition_changed_is_brought_up_to_date():
+    engine = _engine()
+    bootstrap._seed_objectives(engine)
+    spec = next(b for b in bootstrap.BUILTIN_OBJECTIVES if b["name"] == "1x replay: lowest latency")
+    with Session(engine) as session:
+        row = session.query(Objective).filter_by(name=spec["name"]).one()
+        row.redlines = [{"metric": "replay.e2e_p90_ms", "op": "<=", "relative_to": "production",
+                         "factor": 1.02}, *spec["redlines"]]
+        row.description = "older wording"
+        session.commit()
+    bootstrap._seed_objectives(engine)
+    with Session(engine) as session:
+        row = session.query(Objective).filter_by(name=spec["name"]).one()
+        assert row.redlines == spec["redlines"] and row.description == spec["description"]
+        assert session.query(Objective).count() == len(bootstrap.BUILTIN_OBJECTIVES)
+
+
 def test_each_builtin_objective_fits_one_kind_of_benchmark():
     """A sweep objective ranks on the screen benchmark's module, a replay one
     on the replay module's; none mixes the two, which no benchmark reports."""
